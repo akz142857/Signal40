@@ -51,8 +51,17 @@ if (!endpoint) {
   process.stdout.write(`${JSON.stringify({ articles }, null, 2)}\n`);
   process.exit(0);
 }
+if (process.env.SIGNAL40_RIGHTS_CONFIRMED !== 'true') {
+  console.error('远程导入前必须设置 SIGNAL40_RIGHTS_CONFIRMED=true，以确认元数据使用授权。');
+  process.exit(1);
+}
 const response = await fetch(new URL('/api/topics', endpoint), {
-  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ articles }),
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'idempotency-key': process.env.SIGNAL40_IDEMPOTENCY_KEY || `weixin:${crypto.randomUUID()}`,
+  },
+  body: JSON.stringify({ articles, rightsConfirmed: true }),
 });
 const body = await response.text();
 if (!response.ok) {

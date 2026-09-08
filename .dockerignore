@@ -1,0 +1,10 @@
+.git
+.github
+.next
+.wrangler
+dist
+node_modules
+output
+public/generated
+backups
+npm-debug.log*

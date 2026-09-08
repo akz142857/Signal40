@@ -1,0 +1,52 @@
+name: Signal 40 CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev
+      - run: npm run lint
+      - run: npm test
+      - run: npm run test:evaluation
+      - run: npm run db:local:migrate
+      - run: npm run db:local:migrate
+      - run: npm run drill:restore
+      - run: npm run build
+      - run: npm run test:render
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: migration-and-build-logs
+          path: .wrangler/logs
+
+  render-worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: render-worker/Dockerfile
+          push: false
+          load: true
+          tags: signal40-render-worker:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker run --rm --shm-size=1g --entrypoint npm signal40-render-worker:ci run test:render

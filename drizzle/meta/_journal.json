@@ -8,6 +8,104 @@
       "when": 1788814945418,
       "tag": "0000_robust_domino",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788815810681,
+      "tag": "0001_sharp_shard",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788816259222,
+      "tag": "0002_giant_warhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788823585445,
+      "tag": "0003_equal_arclight",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788824775866,
+      "tag": "0004_sloppy_hardball",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788825233852,
+      "tag": "0005_ordinary_bedlam",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788825930575,
+      "tag": "0006_brave_black_crow",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788826111229,
+      "tag": "0007_clean_lizard",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788826187930,
+      "tag": "0008_rapid_morbius",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788826782845,
+      "tag": "0009_material_jack_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788827593619,
+      "tag": "0010_lumpy_darwin",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788827700266,
+      "tag": "0011_optimal_gunslinger",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1788828621935,
+      "tag": "0012_rainy_wasp",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1788830583293,
+      "tag": "0013_futuristic_quentin_quire",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1788831602985,
+      "tag": "0014_backfill_evidence_locator",
+      "breakpoints": true
     }
   ]
 }

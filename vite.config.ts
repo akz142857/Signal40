@@ -45,6 +45,8 @@ export default defineConfig(async () => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
+    // Remotion Player is intentionally isolated behind a lazy route chunk.
+    build: { chunkSizeWarningLimit: 800 },
     css: { postcss: { plugins: [tailwindcss()] } },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
