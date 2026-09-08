@@ -2,7 +2,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import os from 'node:os';
 import { computeRenderSnapshotHash, upgradeProjectV2Defaults, validateProjectV2, type VideoProjectV2 } from '../lib/project-v2.ts';
+import { resolveOutputPath } from './output-path.ts';
 
 function run(command: string, args: string[]) {
   return new Promise<void>((resolve, reject) => {
@@ -13,16 +15,18 @@ function run(command: string, args: string[]) {
 }
 
 const inputPath = process.argv[2];
-const outputPath = path.resolve(process.argv[3] || 'public/generated/signal40-voice.m4a');
-const updatedProjectPath = path.resolve(process.argv[4] || 'output/project.with-voice.json');
+const outputPath = resolveOutputPath(process.argv[3] || 'public/generated/signal40-voice.m4a');
+const updatedProjectPath = resolveOutputPath(process.argv[4] || 'output/project.with-voice.json');
 if (!inputPath) throw new Error('用法：npm run voice:local -- <project-v2.json> [public/generated/voice.m4a] [updated-project.json]');
 const project = upgradeProjectV2Defaults(JSON.parse(await fs.readFile(path.resolve(inputPath), 'utf8')) as VideoProjectV2);
 const text = project.script.lines.map((line) => line.text).join('。');
-const aiff = outputPath.replace(/\.[^.]+$/, '.aiff');
+// 中间 AIFF 放独立临时目录：按扩展名字符串替换在无扩展名的输出路径上会算出同一个文件。
+const stageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'signal40-voice-'));
+const aiff = path.join(stageDirectory, 'narration.aiff');
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 await run('/usr/bin/say', ['-v', process.env.SIGNAL40_LOCAL_VOICE || 'Tingting', '-r', '220', '-o', aiff, text]);
 await run('ffmpeg', ['-y', '-i', aiff, '-c:a', 'aac', '-b:a', '192k', outputPath]);
-await fs.unlink(aiff);
+await fs.rm(stageDirectory, { recursive: true, force: true });
 const audioSha256 = createHash('sha256').update(await fs.readFile(outputPath)).digest('hex');
 const probe = await new Promise<string>((resolve, reject) => {
   let output = '';

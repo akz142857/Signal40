@@ -7,15 +7,72 @@ Signal 40 是证据优先的财经短视频生产系统。它覆盖授权采集�
 ## 本地运行
 
 要求 Node.js 22+、FFmpeg、Chromium（Docker 镜像内已包含）和 Docker。
+控制面依赖 PostgreSQL 与 Cloudflare R2。
 
 ```bash
 npm install
-npm run db:local:migrate
-npm run contracts:rehash-local -- .wrangler/state/v3/d1/miniflare-D1DatabaseObject/<database>.sqlite
+cp .env.example .env          # 填 R2 端点与凭据；已有自己的 PostgreSQL 就只改 DATABASE_URL
+docker compose up -d          # 可选：本地 PostgreSQL（宿主端口 55432）
+npm run db:migrate            # 把 drizzle/ 下的迁移应用到 $DATABASE_URL
 npm run dev -- --host 127.0.0.1 --port 3001
 ```
 
-页面：`/` 选题雷达，`/sources` 来源与调度，`/projects/{id}` 全流程工作台，`/operations` SLO、成本和 DLQ，`/governance` 成员、实验和评分校准。
+R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com`，`S3_REGION=auto`，
+凭据用 R2 API Token）。本地开发不起对象存储替身——分片上传、用户元数据、校验和这几处
+行为差异用替身测不出真结论，所以开发和 CI 都对着真实 R2 桶跑。
+
+生产运行是 `npm run build && npm run start`（普通 Node 进程），或者用仓库根目录的 `Dockerfile`
+构建控制面镜像。迁移不会在启动时自动执行——部署流程要显式跑 `npm run db:migrate`，
+避免多副本同时启动时并发改 schema。
+
+### 配置放哪里
+
+所有配置只有一个文件：仓库根目录的 `.env`（已被 `.gitignore` 忽略，模板见 `.env.example`）。
+控制面、Render Worker 和各个脚本都读它——`vinext` 原生加载，node 脚本靠 `--env-file-if-exists=.env`，
+shell 脚本在 `scripts/lib-pg.sh` 里加载。已经导出到环境里的变量优先，`.env` 不会覆盖它们。
+
+| 变量 | 谁读 | 说明 |
+| --- | --- | --- |
+| `DATABASE_URL` | 控制面 + 脚本 | PostgreSQL 连接串 |
+| `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 控制面 | R2 的 S3 端点与 API Token；`S3_REGION` 固定 `auto` |
+| `BOOTSTRAP_ADMIN_EMAILS` / `MEDIA_SIGNING_SECRET` / `SCHEDULER_TOKEN` / `WEBHOOK_SECRET` | 控制面 | 鉴权与签名 |
+| `SIGNAL40_CONTROL_URL` / `SIGNAL40_WORKER_TOKEN` | Worker | 本机开发填 `local-development` |
+| `SIGNAL40_IDENTITY_HEADER_ID` / `SIGNAL40_IDENTITY_HEADER_EMAIL` | 控制面 | 认证反向代理注入的身份头名 |
+| `SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS` | 控制面 | 生产必须 `false`，否则本机请求可伪造角色 |
+| `SIGNAL40_AUTOMATION_ACTOR_ID` | 控制面 + 调度器 | 自动化服务账号；必须是 `team_members` 里 active 的 admin，不配则引擎不写入 |
+| `SIGNAL40_SCHEDULER_INTERVAL_MS` / `SIGNAL40_ATTENTION_WEBHOOK_URL` | 调度器 | tick 间隔与待办外部通知地址 |
+| `OPENAI_API_KEY` / `OPENAI_TTS_MODEL` / `OPENAI_TTS_VOICE` | **只有 Worker** | 云端配音与字幕对齐；不配只影响 voice 作业 |
+| `YOUTUBE_ACCESS_TOKEN` / `SIGNAL40_ALLOW_PUBLIC_PUBLISH` | **只有 Worker** | 不配就只能用 package 渠道产出发布包 |
+
+`OPENAI_API_KEY` 由 Render Worker 使用，不是控制面——控制面不直接调用任何模型服务。
+
+### 本地验证
+
+```bash
+npm run db:migrate      # schema
+npm test                # 59 项；填了 R2 凭据才会跑那 3 项对象存储契约测试
+npm run test:evaluation # 100 个门禁回归场景
+npm run drill:restore   # 备份 → 隔离库恢复 → 逐表比对行数 → 自动清理
+npm run test:render     # 三个模板 + 预览成片（需要 FFmpeg/Chromium）
+```
+
+三个进程分开跑：控制面 `npm run dev`（或 `npm run build && npm run start`）、
+Render Worker `npm run worker`、调度器 `npm run scheduler`。
+Worker 启动后会打印 `connected to <控制面地址>`，并在空闲轮询时上报心跳，
+界面据此判断「入队的作业有没有人会执行」。
+部署时这三个进程都由 `docker compose` 常驻拉起（`control-plane` / `render-worker` / `scheduler`，
+`restart: unless-stopped`），日常使用不需要手工启动它们。
+注意 `npm run dev` 只监听 IPv6 回环，`SIGNAL40_CONTROL_URL` 用 `http://localhost:3001`；
+`npm run start` 监听 `0.0.0.0`，两种写法都行。
+
+页面：`/` 选题雷达，`/sources` 来源与调度，`/projects/{id}` 全流程工作台，`/operations` SLO、成本和 DLQ，
+`/governance` 成员、实验和评分校准，`/automation` 自动化策略与近期自动动作，`/inbox` 待办箱，
+`/settings/diagnostics` 系统自检（数据库、迁移版本、对象存储读写、各类凭据、Worker 在线数、队列积压、调度器上次 tick）。
+
+日常流程全部在界面里完成，命令行只保留部署与排障：
+`db:migrate`、`drill:restore`、备份恢复属于运维流程；
+`walk`、`ingest:real`、`check:storage`、`project:migrate`、`voice:local`、`render`、`qc:media`
+是开发者与排障工具，不属于产品流程。
 
 手工 JSON/CSV 导入必须在界面明确勾选元数据授权确认。OpenCLI 只输出本地 JSON 时不需要该确认；直接提交到服务端时需要显式设置：
 
@@ -28,7 +85,72 @@ npm run ingest:weixin -- "财经主题" 20
 
 相同幂等键和相同请求会返回第一次的精确结果；相同键不得用于另一批数据。生产环境还会校验当前成员角色，客户端伪造的角色头无效。
 
-`contracts:rehash-local` 只在从旧的 8 位指纹升级本地开发库时执行；它会将已进入审批后的项目退回 `CHANGES_REQUESTED`，要求重新审批。生产环境使用管理员接口 `POST /api/v1/contracts/rehash`。
+`contracts:rehash-local`（读 `DATABASE_URL`）只在从旧的 8 位指纹升级开发库时执行；它会将已进入审批后的项目退回 `CHANGES_REQUESTED`，要求重新审批。生产环境使用管理员接口 `POST /api/v1/contracts/rehash`。
+
+## 端到端冒烟：从真实来源跑到成片
+
+系统初始化后库里是空的，没有任何示例数据。下面这条路径用真实公开 RSS 源把 G0–G8 走一遍。
+
+**先决条件**：`.env` 里 `DATABASE_URL`、`S3_*`（R2）、`OPENAI_API_KEY` 都已配置，
+`npm run check:storage` 显示「对象存储配置可用」。
+
+```bash
+npm run db:migrate                 # 建表
+npm run build && npm run start     # 控制面（渲染阶段必须用生产模式，见下方说明）
+```
+
+另开终端：
+
+```bash
+# 1) 采集真实文章并生成选题
+npm run ingest:real
+
+# 2) 在 / 页面核验一个 gate=通过 的选题，然后建项目（也可用 API）
+curl -X POST "$API/api/v1/projects" -H 'content-type: application/json' \
+  -H 'x-signal-role: editor' -H 'idempotency-key: <唯一键>' \
+  -d '{"topicId":"<选题 ID>"}'
+
+# 3) 推进到 SCRIPT_APPROVED（脚本要在这个状态入队配音）
+npm run walk -- <项目 ID> SCRIPT_APPROVED
+
+# 4) 入队配音 → 起 Worker → 推进到 ASSETS_READY
+#    5) 在 ASSETS_READY 入队渲染 → 转 RENDER_QUEUED → 起 Worker
+npm run worker
+```
+
+`npm run walk -- <项目 ID> [目标状态]` 会沿状态机往下推并逐个打印门禁结果，
+推不动时停下并说明原因，不会假装成功。
+
+### 三个必须注意的顺序
+
+作业要在**特定状态**入队，早了晚了都会被拒：
+
+| 作业 | 必须在这个状态入队 | 之后再转到 |
+| --- | --- | --- |
+| 配音 | `SCRIPT_APPROVED` | `ASSETS_READY` |
+| 渲染 | `ASSETS_READY` | `RENDER_QUEUED` |
+| 发布 | 先转到 `PUBLISH_SCHEDULED`，**再**建发布任务 | —— |
+
+`walk` 默认一路推到底，所以入队前要用目标状态参数停住。另外 `RENDER_QUEUED`
+没有回到 `ASSETS_READY` 的转换路径：误推进后可以直接退到 `CHANGES_REQUESTED`
+（编辑或管理员权限），也可以取消渲染作业或走 `FAILED` 重来。
+
+**这三个顺序约束在自动化模式下由编排引擎消化**：启用策略后，配音、渲染与发布任务
+都由 `lib/orchestrator.ts` 在正确状态下入队，人不需要记住顺序。
+
+### 旁白长度要匹配时间轴
+
+`G5` 要求旁白时长落在成片目标时长的 60%–110%，自动 QC 还会拒绝超过 3 秒的连续静音。
+中文 TTS 实测约 **3.86 字/秒**，45 秒时间轴对应约 **174 字**。
+默认从标题生成的脚本通常偏短，需要在 `SCRIPT_DRAFT` 状态补写到相应长度。
+脚本编辑器会实时显示「预计旁白 X 秒 / 目标 Y 秒」（`lib/script-duration.ts`），
+超出区间时标红并给出还差多少字，不必等配音生成后才在 G5 或自动 QC 上失败。
+**不要为了凑数缩短 `render.durationSeconds`** —— 那是发布阻断项，不是可以绕过的告警。
+
+### 渲染阶段必须用生产模式
+
+`npm run dev` 无法流式返回响应体，`/api/v1/media` 会返回 500，
+Worker 渲染前下载音轨会失败。渲染和发布阶段请用 `npm run build && npm run start`。
 
 ## 从导出项目生成视频
 
@@ -64,9 +186,41 @@ npm audit --omit=dev
 
 `evaluation/finance-events.ts` 是 100 场景的合约回归集，不是真实财经金标。算法上线仍需独立编辑完成历史事件标注和盲评。
 
+## 自动化
+
+系统默认全自动推进机械步骤（采集、聚类、建项目、配音、渲染、自动 QC、发布执行、指标回流），
+四道问责门禁（G3 研究、G4 脚本、G6 终审、G7 发布）默认仍需人确认。
+
+打开自动化的顺序：
+
+1. **起调度器**：`docker compose up -d scheduler`（或 `npm run scheduler`）。
+2. **配服务账号**：把 `SIGNAL40_AUTOMATION_ACTOR_ID` 指到 `team_members` 里一个 active 的 admin。
+   不配时引擎一步都不做，并在 `/inbox` 留一条说明——自动化不允许凭空构造身份。
+3. **建策略**：`/automation` 新建策略并启用。新策略默认机械步骤自动、四道审批人工、
+   自动建项目关闭。
+4. **（可选）开预先授权**：勾选要自动放行的审批，指定授权人和有效期。
+   研究/脚本/终审用一个授权人，发布用另一个——两者必须是**不同的真实成员**，
+   否则 G7 的职责分离形同虚设，保存时和每次自动放行时都会校验。
+   自动放行写入的是那个人的批准记录，note 注明依据哪条策略，审计里以 `trigger=automation` 区分。
+
+人工干预：
+
+- 项目页「暂停自动化」随时接管；任何人工编辑、审批或配置修改都会自动转人工，需显式「恢复自动」。
+- 项目一旦开了内容事件（勘误、下架、投诉），立即退出自动化，事件关闭前不会恢复。
+- 处理不了的事进 `/inbox`，配了 `SIGNAL40_ATTENTION_WEBHOOK_URL` 时还会带 HMAC 签名推到外部。
+
+自动化不做的事：不改写已批准的脚本内容、不放宽任何门禁阈值、
+不把 `SIGNAL40_ALLOW_PUBLIC_PUBLISH` 置为 true（公开发布始终是人的显式决定）、
+失败不静默重试到成功（同一阶段连续失败 3 次即熔断 15 分钟并进待办箱）。
+
+**自动建项目默认关闭**：`lib/topic-quality.ts` 度量簇内一致性、声明与证据的对应唯一性、
+语言与词表匹配度并写入 `topics.quality_json`；当前的聚类与证据绑定还达不到阈值，
+不达标的选题只进待办箱。要打开它，先让选题质量指标达标，再在策略里把「自动建项目」改成自动。
+
 ## 安全与边界
 
-- 非本地环境的角色只从 Sites 登录身份和 `team_members` 读取，忽略客户端角色头。
+- 非本地环境的角色只从反向代理注入的身份头（`SIGNAL40_IDENTITY_HEADER_*`）和 `team_members` 读取，忽略客户端角色头；界面用 `/api/v1/session` 返回的真实身份，不再硬编码角色。
+- 自动化不构造身份：机械步骤用注册在 `team_members` 的服务账号，自动放行写入策略里那个真人的 `actor_id`，审计里以 `trigger=automation` 与 `policyId` 区分「人做的」和「策略做的」。
 - 选题、来源、项目、资产、QC、发布和审计读取均要求有效团队成员；导入只允许研究员/管理员，核验只允许编辑/管理员。
 - 项目快照、审批和审计使用确定性 SHA-256；媒体使用字节级 SHA-256。
 - Worker、调度器、Webhook、OpenAI 和 YouTube 密钥只进入托管 Secret。

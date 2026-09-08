@@ -6,6 +6,7 @@ import {
   Activity,
   ArrowUpRight,
   BarChart3,
+  Bot,
   CheckCircle2,
   CircleAlert,
   Clock3,
@@ -14,10 +15,11 @@ import {
   ExternalLink,
   FileUp,
   Film,
+  Inbox,
   LoaderCircle,
   Radar,
-  RotateCw,
   ShieldCheck,
+  Stethoscope,
   UsersRound,
   XCircle,
 } from 'lucide-react';
@@ -39,6 +41,7 @@ import {
 } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { Label } from '@/components/ui/label';
 import type {
   ArticleInput,
@@ -112,6 +115,8 @@ export function RadarDashboard({
 }: {
   initialTopics: TopicCandidate[];
 }) {
+  // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关。
+  useSession();
   const [topics, setTopics] = useState(initialTopics);
   const [filter, setFilter] = useState<Filter>('all');
   const [selected, setSelected] = useState<TopicCandidate | null>(null);
@@ -138,16 +143,12 @@ export function RadarDashboard({
         : null,
     );
     setSourceLabel(
-      payload.source === 'preview'
-        ? '预览数据'
-        : payload.source === 'sample'
-          ? '已保存示例'
-          : '已导入数据',
+      payload.source === 'empty' ? '暂无数据' : '已导入数据',
     );
     setMessage(
       payload.runAt
         ? `最近运行：${new Date(payload.runAt).toLocaleString('zh-CN')}`
-        : '尚无已保存运行，可导入文章或运行示例。',
+        : '尚无已保存运行，请登记授权来源或导入文章。',
     );
   }, []);
 
@@ -161,11 +162,7 @@ export function RadarDashboard({
   }, [refreshTopics]);
 
   const runPipeline = useCallback(
-    async (
-      body:
-        | { mode: 'sample' }
-        | { articles: ArticleInput[]; rightsConfirmed: true },
-    ) => {
+    async (body: { articles: ArticleInput[]; rightsConfirmed: true }) => {
       setRunning(true);
       try {
         const response = await fetch('/api/topics', {
@@ -173,14 +170,14 @@ export function RadarDashboard({
           headers: {
             'content-type': 'application/json',
             'idempotency-key': `pipeline:${crypto.randomUUID()}`,
-            'x-signal-role': 'researcher',
+            ...devIdentityHeaders({ role: 'researcher', id: 'local-researcher' }),
           },
           body: JSON.stringify(body),
         });
         if (!response.ok) throw new Error(await readError(response));
         const payload = (await response.json()) as {
           topics: TopicCandidate[];
-          source: 'sample' | 'import';
+          source: 'import';
           runAt: string;
         };
         setTopics(payload.topics);
@@ -189,9 +186,7 @@ export function RadarDashboard({
             ? (payload.topics.find((topic) => topic.id === current.id) ?? null)
             : null,
         );
-        setSourceLabel(
-          payload.source === 'sample' ? '已保存示例' : '已导入数据',
-        );
+        setSourceLabel('已导入数据');
         setMessage(`已分析并保存 ${payload.topics.length} 个候选主题。`);
         return {
           topicCount: payload.topics.length,
@@ -204,14 +199,6 @@ export function RadarDashboard({
     [],
   );
 
-  const runSamplePipeline = useCallback(async () => {
-    try {
-      return await runPipeline({ mode: 'sample' });
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '示例管道运行失败。');
-      throw error;
-    }
-  }, [runPipeline]);
 
   const importArticles = useCallback(
     async (articles: ArticleInput[], rightsConfirmed: boolean) => {
@@ -244,7 +231,7 @@ export function RadarDashboard({
           headers: {
             'content-type': 'application/json',
             'idempotency-key': `verification:${topicId}:${crypto.randomUUID()}`,
-            'x-signal-role': 'editor',
+            ...devIdentityHeaders({ role: 'editor', id: 'local-editor' }),
           },
           body: JSON.stringify({ status, note }),
         },
@@ -347,21 +334,6 @@ export function RadarDashboard({
                 verificationStatus: topic.verificationStatus,
               }));
           },
-        },
-        { signal: lifecycle.signal },
-      );
-      await context.registerTool(
-        {
-          name: 'run_sample_topic_pipeline',
-          title: '运行示例选题管道',
-          description: '运行内置示例并把结果保存为当前工作台数据。',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            additionalProperties: false,
-          },
-          annotations: { readOnlyHint: false, untrustedContentHint: false },
-          execute: async () => runSamplePipeline(),
         },
         { signal: lifecycle.signal },
       );
@@ -488,7 +460,7 @@ export function RadarDashboard({
     };
     void register().catch(() => undefined);
     return () => lifecycle.abort();
-  }, [importArticles, reviewTopic, runSamplePipeline, topics]);
+  }, [importArticles, reviewTopic, topics]);
 
   const filteredTopics = useMemo(
     () =>
@@ -532,24 +504,15 @@ export function RadarDashboard({
             <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/sources"><DatabaseZap /> <span className="hidden md:inline">来源</span></Link>
             <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/operations"><Activity /> <span className="hidden md:inline">运行</span></Link>
             <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/governance"><UsersRound /> <span className="hidden md:inline">治理</span></Link>
+            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/automation"><Bot /> <span className="hidden md:inline">自动化</span></Link>
+            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/inbox"><Inbox /> <span className="hidden md:inline">待办</span></Link>
+            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/settings/diagnostics"><Stethoscope /> <span className="hidden md:inline">自检</span></Link>
             <Button
               variant="outline"
               size="lg"
               onClick={() => setImportOpen(true)}
             >
               <FileUp /> 导入文章
-            </Button>
-            <Button
-              size="lg"
-              onClick={() => void runSamplePipeline()}
-              disabled={running}
-            >
-              {running ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <RotateCw />
-              )}
-              <span className="hidden sm:inline">运行示例</span>
             </Button>
           </div>
         </div>

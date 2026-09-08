@@ -7,6 +7,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 
 type SourceRow = {
   id: string;
@@ -31,6 +32,8 @@ async function errorText(response: Response) {
 }
 
 export function SourceManager() {
+  // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关。
+  useSession();
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
@@ -92,7 +95,7 @@ export function SourceManager() {
       const enabled = !source.enabled;
       const response = await fetch(`/api/v1/source-configs/${encodeURIComponent(source.id)}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json', 'x-signal-role': 'admin', 'x-signal-actor-id': 'local-admin' },
+        headers: { 'content-type': 'application/json', ...devIdentityHeaders({ role: 'admin', id: 'local-admin' }) },
         body: JSON.stringify({
           expectedVersion: source.version,
           enabled,

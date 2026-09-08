@@ -1,3 +1,5 @@
+import type { SqlDatabase } from './sql.ts';
+
 export const ROLES = [
   'researcher',
   'editor',
@@ -57,7 +59,9 @@ const transitions: Record<ContentState, readonly ContentState[]> = {
   SCRIPT_DRAFT: ['SCRIPT_APPROVED', 'CHANGES_REQUESTED', 'REJECTED'],
   SCRIPT_APPROVED: ['ASSETS_READY', 'CHANGES_REQUESTED', 'CANCELLED'],
   ASSETS_READY: ['RENDER_QUEUED', 'CHANGES_REQUESTED', 'CANCELLED'],
-  RENDER_QUEUED: ['RENDERING', 'FAILED', 'CANCELLED'],
+  // CHANGES_REQUESTED 是误入 RENDER_QUEUED 后的人工回退路径：
+  // 没有它，点错「创建渲染任务」的项目只能靠取消渲染作业绕回去。
+  RENDER_QUEUED: ['RENDERING', 'CHANGES_REQUESTED', 'FAILED', 'CANCELLED'],
   RENDERING: ['QC_PENDING', 'FAILED', 'CANCELLED'],
   QC_PENDING: ['QC_APPROVED', 'CHANGES_REQUESTED', 'REJECTED'],
   QC_APPROVED: ['PUBLISH_SCHEDULED', 'CHANGES_REQUESTED', 'CANCELLED'],
@@ -161,12 +165,27 @@ function isLocalRequest(request: Request) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
 
+/**
+ * 身份解析选项。
+ *
+ * 头名可配是为了脱离 OpenAI Sites 后仍能用：自建部署在前面放一个认证反向代理，
+ * 让它注入自己的身份头即可，不用改代码。`allowLocalRoleHeaders` 是本机开发的后门——
+ * 生产必须关掉，否则「独立发布人」由前端说了算，G7 的职责分离就不成立。
+ */
+export type IdentityOptions = {
+  bootstrapAdminEmails?: string;
+  identityHeaders?: { id: string; email: string };
+  allowLocalRoleHeaders?: boolean;
+};
+
 export async function resolveActor(
   request: Request,
-  db: D1Database,
-  bootstrapAdminEmails = '',
+  db: SqlDatabase,
+  options: string | IdentityOptions = '',
 ): Promise<Actor | null> {
-  if (isLocalRequest(request)) {
+  const settings: IdentityOptions = typeof options === 'string' ? { bootstrapAdminEmails: options } : options;
+  const headerNames = settings.identityHeaders ?? { id: 'oai-authenticated-user-id', email: 'oai-authenticated-user-email' };
+  if (isLocalRequest(request) && (settings.allowLocalRoleHeaders ?? true)) {
     const requestedRole = request.headers.get('x-signal-role');
     const role = ROLES.includes(requestedRole as Role) ? (requestedRole as Role) : 'admin';
     return {
@@ -175,12 +194,12 @@ export async function resolveActor(
       role,
     };
   }
-  const id = request.headers.get('oai-authenticated-user-id');
-  const email = request.headers.get('oai-authenticated-user-email')?.trim().toLowerCase();
+  const id = request.headers.get(headerNames.id);
+  const email = request.headers.get(headerNames.email)?.trim().toLowerCase();
   if (!id || !email) return null;
   const member = await db.prepare('SELECT role, status FROM team_members WHERE user_id = ? OR email = ? LIMIT 1').bind(id, email).first<{ role: Role; status: string }>();
   if (member?.status === 'active' && ROLES.includes(member.role)) return { id, email, role: member.role };
-  const bootstrap = new Set(bootstrapAdminEmails.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean));
+  const bootstrap = new Set((settings.bootstrapAdminEmails ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean));
   if (!member && bootstrap.has(email)) {
     const now = new Date().toISOString();
     await db.prepare("INSERT INTO team_members (user_id, email, role, status, created_at, updated_at) VALUES (?, ?, 'admin', 'active', ?, ?)").bind(id, email, now, now).run();

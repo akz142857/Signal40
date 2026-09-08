@@ -1,11 +1,11 @@
-import { env } from 'cloudflare:workers';
+import { config, db, resolveRequestActor } from '@/lib/runtime';
 import { enqueueJob, loadContentProject } from '@/lib/control-plane';
-import { resolveActor, stableHash } from '@/lib/workflow';
+import { stableHash } from '@/lib/workflow';
 
 const kinds = ['voice', 'preview', 'render'] as const;
 
 export async function POST(request: Request) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   const idempotencyKey = request.headers.get('idempotency-key');
   if (!idempotencyKey) return Response.json({ error: 'Idempotency-Key 必填。' }, { status: 400 });
@@ -24,22 +24,22 @@ export async function POST(request: Request) {
   if (body.timeoutSeconds !== undefined && (!Number.isInteger(body.timeoutSeconds) || body.timeoutSeconds < 30 || body.timeoutSeconds > 1800)) return Response.json({ error: 'timeoutSeconds 必须是 30–1800 的整数。' }, { status: 422 });
   if (body.estimatedCostMicros !== undefined && (!Number.isInteger(body.estimatedCostMicros) || body.estimatedCostMicros < 0)) return Response.json({ error: 'estimatedCostMicros 必须是非负整数。' }, { status: 422 });
   if (!body.projectId) return Response.json({ error: 'projectId 必填。' }, { status: 422 });
-  const project = await loadContentProject(env.DB, body.projectId);
+  const project = await loadContentProject(db, body.projectId);
   if (!project) return Response.json({ error: '项目不存在。' }, { status: 404 });
   const payload = body.payload && typeof body.payload === 'object' ? body.payload as Record<string, unknown> : {};
   if (body.kind === 'voice' && (project.state !== 'SCRIPT_APPROVED' || payload.scriptHash !== stableHash(project.project.script) || payload.scriptVersion !== project.project.script.version)) return Response.json({ error: '配音作业必须绑定当前已批准脚本版本。' }, { status: 409 });
   if (body.kind === 'preview' && (project.state !== 'ASSETS_READY' || payload.snapshotHash !== project.project.render.snapshotHash)) return Response.json({ error: '预览作业必须绑定当前资产就绪快照。' }, { status: 409 });
   if (body.kind === 'render' && (project.state !== 'ASSETS_READY' || payload.snapshotHash !== project.project.render.snapshotHash)) return Response.json({ error: '渲染作业必须绑定当前资产就绪快照。' }, { status: 409 });
   if (body.kind === 'preview' || body.kind === 'render') {
-    const budget = Number(env.MONTHLY_RENDER_BUDGET_MICROS ?? 0);
+    const budget = Number(config.monthlyRenderBudgetMicros ?? 0);
     if (budget > 0) {
       const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
-      const used = await env.DB.prepare("SELECT COALESCE(SUM(CASE WHEN cost_micros > 0 THEN cost_micros ELSE estimated_cost_micros END), 0) AS total FROM jobs WHERE kind IN ('preview', 'render') AND created_at >= ? AND status != 'cancelled'").bind(monthStart.toISOString()).first<{ total: number }>();
+      const used = await db.prepare("SELECT COALESCE(SUM(CASE WHEN cost_micros > 0 THEN cost_micros ELSE estimated_cost_micros END), 0) AS total FROM jobs WHERE kind IN ('preview', 'render') AND created_at >= ? AND status != 'cancelled'").bind(monthStart.toISOString()).first<{ total: number }>();
       if (Number(used?.total ?? 0) + Number(body.estimatedCostMicros ?? 0) > budget) return Response.json({ error: '本月渲染成本预算不足。' }, { status: 409 });
     }
   }
   try {
-    const job = await enqueueJob(env.DB, {
+    const job = await enqueueJob(db, {
       kind: body.kind as (typeof kinds)[number],
       projectId: body.projectId,
       payload,
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
       actor,
     });
     if ((body.kind === 'preview' || body.kind === 'render') && job.created) {
-      await env.DB.prepare('INSERT OR IGNORE INTO render_snapshots (id, project_id, snapshot_json, snapshot_hash, template_id, template_version, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(`render_${crypto.randomUUID()}`, project.id, JSON.stringify(project.project), project.project.render.snapshotHash, project.project.render.templateId ?? 'signal40-editorial', project.project.render.templateVersion, actor.id, new Date().toISOString()).run();
+      await db.prepare('INSERT INTO render_snapshots (id, project_id, snapshot_json, snapshot_hash, template_id, template_version, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING').bind(`render_${crypto.randomUUID()}`, project.id, JSON.stringify(project.project), project.project.render.snapshotHash, project.project.render.templateId ?? 'signal40-editorial', project.project.render.templateVersion, actor.id, new Date().toISOString()).run();
     }
     return Response.json({ job }, { status: job.created ? 202 : 200 });
   } catch {

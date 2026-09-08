@@ -1,3 +1,5 @@
+import { sha256Hex } from './hash.ts';
+
 export const SOURCE_TYPES = [
   'social',
   'media',
@@ -72,7 +74,7 @@ const SOURCE_QUALITY: Record<SourceType, number> = {
   social: 48,
 };
 
-const FINANCE_TERMS = [
+export const FINANCE_TERMS = [
   'dram',
   'hbm',
   '存储',
@@ -114,20 +116,20 @@ const STOP_BIGRAMS = new Set([
   '数据',
 ]);
 
-function stableHash(value: string) {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36);
+/**
+ * 内容与话题 ID 使用的短哈希：SHA-256 截断到 64 位（16 个十六进制字符）。
+ * 不要换回 32 位 FNV——文章去重与话题聚类都按哈希相等判定，
+ * 32 位在数万条文章量级上必然发生生日碰撞，会把不同文章/话题合并成一个。
+ */
+function shortHash(value: string) {
+  return sha256Hex(value).slice(0, 16);
 }
 
 function clean(value: string) {
   return value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-function tokensFor(article: Pick<ArticleInput, 'title' | 'summary'>) {
+export function tokensFor(article: Pick<ArticleInput, 'title' | 'summary'>) {
   const text = clean(`${article.title} ${article.summary ?? ''}`);
   const tokens = new Set<string>();
 
@@ -147,7 +149,7 @@ function tokensFor(article: Pick<ArticleInput, 'title' | 'summary'>) {
   return tokens;
 }
 
-function similarity(left: Set<string>, right: Set<string>) {
+export function similarity(left: Set<string>, right: Set<string>) {
   if (!left.size || !right.size) return 0;
   let intersection = 0;
   for (const token of left) if (right.has(token)) intersection += 1;
@@ -175,7 +177,7 @@ export function normalizeArticles(inputs: ArticleInput[]) {
     if (!input.title?.trim() || !input.url?.trim() || !input.source?.trim())
       continue;
     const canonicalUrl = input.url.trim().replace(/#.*$/, '');
-    const contentHash = stableHash(`${canonicalUrl}|${clean(input.title)}`);
+    const contentHash = shortHash(`${canonicalUrl}|${clean(input.title)}`);
     if (byHash.has(contentHash)) continue;
     const publishedAt = new Date(input.publishedAt);
     if (Number.isNaN(publishedAt.valueOf())) continue;
@@ -337,7 +339,7 @@ export function runPipeline(
         .slice(0, 6);
       const scored = scoreCluster(cluster, now);
       return {
-        id: `topic_${stableHash(
+        id: `topic_${shortHash(
           cluster.articles
             .map((article) => article.contentHash)
             .sort()

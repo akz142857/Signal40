@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { runPipeline } from '../lib/domain.ts';
 import { computeRenderSnapshotHash, createProjectV2 } from '../lib/project-v2.ts';
-import { sampleArticles } from '../lib/sample-data.ts';
+import { sampleArticles } from '../test/fixtures/sample-articles.ts';
 import { VIDEO_TEMPLATES } from '../lib/templates.ts';
 import { renderProject } from '../render-worker/render.ts';
 

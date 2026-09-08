@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:workers';
+import { config, db } from '@/lib/runtime';
 import { normalizeArticles, runPipeline, validateArticleInput, type ArticleInput } from '@/lib/domain';
 import { loadRecentArticles, persistArticlesWithRevisions, persistPipeline } from '@/lib/persistence';
 import { authorizeWorker } from '@/lib/worker-auth';
@@ -7,7 +7,7 @@ const MAX_ARTICLES = 100;
 const MAX_BODY_BYTES = 1_000_000;
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await authorizeWorker(request, env.WORKER_TOKEN))) {
+  if (!(await authorizeWorker(request, config.workerToken))) {
     return Response.json({ error: 'Worker 未授权。' }, { status: 401 });
   }
   const raw = await request.text();
@@ -21,7 +21,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: `jobId 与 0–${MAX_ARTICLES} 条 articles 必填。` }, { status: 422 });
   }
   const { id } = await context.params;
-  const run = await env.DB.prepare(
+  const run = await db.prepare(
     `SELECT ir.id, ir.source_config_id, ir.status, ir.job_id, j.status AS job_status
      FROM ingestion_runs ir JOIN jobs j ON j.id = ir.job_id WHERE ir.id = ? LIMIT 1`,
   ).bind(id).first<{ id: string; source_config_id: string; status: string; job_id: string; job_status: string }>();
@@ -39,20 +39,20 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: '采集数据校验失败。', issues: issues.slice(0, 10) }, { status: 422 });
   }
   const articles = body.articles as ArticleInput[];
-  const normalized = await persistArticlesWithRevisions(env.DB, normalizeArticles(articles), now, body.rawObjectKey ?? null);
+  const normalized = await persistArticlesWithRevisions(db, normalizeArticles(articles), now, body.rawObjectKey ?? null);
   const rollingWindowStart = new Date(now.valueOf() - 72 * 60 * 60 * 1000);
-  const corpus = await loadRecentArticles(env.DB, rollingWindowStart);
+  const corpus = await loadRecentArticles(db, rollingWindowStart);
   const topics = runPipeline(corpus, now);
-  await env.DB.prepare("UPDATE ingestion_runs SET status = 'running', started_at = COALESCE(started_at, ?) WHERE id = ?").bind(now.toISOString(), id).run();
-  const pipelineRunId = await persistPipeline(env.DB, topics, 'import', corpus.length, now);
+  await db.prepare("UPDATE ingestion_runs SET status = 'running', started_at = COALESCE(started_at, ?) WHERE id = ?").bind(now.toISOString(), id).run();
+  const pipelineRunId = await persistPipeline(db, topics, 'import', corpus.length, now);
   const checkpoint = body.checkpoint ?? normalized[0]?.publishedAt ?? null;
   const finishedAt = new Date().toISOString();
   const fetchedCount = Math.max(normalized.length, body.fetchedCount ?? articles.length);
   const rejectedCount = Math.max(0, fetchedCount - normalized.length);
   const ingestionStatus = rejectedCount > 0 ? 'partial' : 'succeeded';
-  await env.DB.batch([
-    env.DB.prepare('UPDATE ingestion_runs SET status = ?, checkpoint_after = ?, fetched_count = ?, accepted_count = ?, rejected_count = ?, finished_at = ? WHERE id = ?').bind(ingestionStatus, checkpoint, fetchedCount, normalized.length, rejectedCount, finishedAt, id),
-    env.DB.prepare('UPDATE source_configs SET checkpoint = ?, last_success_at = ?, last_error = NULL, updated_at = ? WHERE id = ?').bind(checkpoint, finishedAt, finishedAt, run.source_config_id),
+  await db.batch([
+    db.prepare('UPDATE ingestion_runs SET status = ?, checkpoint_after = ?, fetched_count = ?, accepted_count = ?, rejected_count = ?, finished_at = ? WHERE id = ?').bind(ingestionStatus, checkpoint, fetchedCount, normalized.length, rejectedCount, finishedAt, id),
+    db.prepare('UPDATE source_configs SET checkpoint = ?, last_success_at = ?, last_error = NULL, updated_at = ? WHERE id = ?').bind(checkpoint, finishedAt, finishedAt, run.source_config_id),
   ]);
   return Response.json({ ingestionRunId: id, status: ingestionStatus, pipelineRunId, topicCount: topics.length, acceptedCount: normalized.length, rejectedCount, corpusCount: corpus.length, rollingWindowHours: 72, checkpoint });
 }

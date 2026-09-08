@@ -29,7 +29,7 @@ paths:
       responses: {'200': {description: Updated}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/ValidationError'}, '428': {$ref: '#/components/responses/PreconditionRequired'}}
   /projects/{projectId}/transitions:
     post:
-      summary: Apply one state-machine transition using server-computed gates
+      summary: Apply one state-machine transition using server-computed gates. RENDERING and QC_PENDING are worker-only; PUBLISHED is written by the channel callback, except for the package channel where a publisher confirms manual distribution (requires a completed package publish job and a note of at least 10 characters).
       parameters: [{$ref: '#/components/parameters/ProjectId'}, {$ref: '#/components/parameters/IfMatch'}]
       requestBody: {$ref: '#/components/requestBodies/JsonBody'}
       responses: {'200': {description: Transitioned}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '428': {$ref: '#/components/responses/PreconditionRequired'}}
@@ -98,8 +98,10 @@ paths:
       responses: {'202': {description: Queued}, '409': {$ref: '#/components/responses/Conflict'}}
   /jobs/lease:
     post: {summary: Lease an eligible job to an authenticated worker, security: [{workerToken: []}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Leased}, '204': {description: No work}}}
+  /jobs/{jobId}/heartbeat:
+    post: {summary: Renew the lease of a running job, security: [{workerToken: []}], parameters: [{name: jobId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Lease renewed}, '409': {$ref: '#/components/responses/Conflict'}}}
   /jobs/{jobId}/finish:
-    post: {summary: Complete or retry a leased job, security: [{workerToken: []}], parameters: [{name: jobId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated}}}
+    post: {summary: Complete or retry a leased job; terminal=true sends a non-retryable failure straight to the dead-letter queue, security: [{workerToken: []}], parameters: [{name: jobId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated}}}
   /jobs/{jobId}:
     get: {summary: Inspect one operational job, parameters: [{name: jobId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Job}}}
     patch: {summary: Cancel or replay a job with an audit note, parameters: [{name: jobId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated}, '409': {$ref: '#/components/responses/Conflict'}}}
@@ -136,7 +138,29 @@ paths:
     get: {summary: List ingestion runs, parameters: [{name: sourceId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Runs}}}
     post: {summary: Trigger ingestion, parameters: [{name: sourceId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], responses: {'202': {description: Queued}}}
   /scheduler/run:
-    post: {summary: Enqueue due authorized sources and purge expired raw payloads, security: [{schedulerToken: []}], responses: {'200': {description: Schedule and retention scan result}}}
+    post: {summary: Run one bounded orchestration tick manually (the resident scheduler process runs the same engine), security: [{schedulerToken: []}], responses: {'200': {description: Automation tick result}}}
+  /projects/{projectId}/automation:
+    post: {summary: Pause or resume automation for one project with an audited reason, parameters: [{$ref: '#/components/parameters/ProjectId'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated project}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/ValidationError'}}}
+  /automation/policies:
+    get: {summary: List automation policies and the default policy shape, responses: {'200': {description: Policies}}}
+    post: {summary: Create an automation policy (dual authorizers must be distinct active members), requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Policy}, '422': {$ref: '#/components/responses/ValidationError'}}}
+  /automation/policies/{policyId}:
+    get: {summary: Read one automation policy, parameters: [{name: policyId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Policy}, '404': {$ref: '#/components/responses/NotFound'}}}
+    patch: {summary: Update stages, pre-authorization, guardrails, or the enabled switch, parameters: [{name: policyId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Policy}, '422': {$ref: '#/components/responses/ValidationError'}}}
+    delete: {summary: Delete a policy and return its projects to manual, parameters: [{name: policyId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Deleted}, '404': {$ref: '#/components/responses/NotFound'}}}
+  /automation/runs:
+    get: {summary: List recent orchestration ticks with actions, errors, and breaker state, responses: {'200': {description: Runs}}}
+  /attention:
+    get: {summary: List inbox items that need a human, responses: {'200': {description: Attention items}}}
+  /attention/{attentionId}:
+    patch: {summary: Resolve one inbox item with an audited note, parameters: [{name: attentionId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Resolved}, '404': {$ref: '#/components/responses/NotFound'}}}
+  /workers:
+    get: {summary: List worker heartbeats, queue backlog, and jobs no online worker can execute, responses: {'200': {description: Worker and queue state}}}
+    post: {summary: Report a worker heartbeat (sent while idle too), security: [{workerToken: []}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Recorded}, '401': {description: Unauthorized}, '422': {$ref: '#/components/responses/ValidationError'}}}
+  /diagnostics:
+    get: {summary: Self-check database, migrations, object storage, credentials, workers, queue, and last scheduler tick without echoing secrets, responses: {'200': {description: Diagnostics}, '403': {$ref: '#/components/responses/Forbidden'}}}
+  /session:
+    get: {summary: Read the identity the server resolved for this request, responses: {'200': {description: Session actor}, '401': {description: No identity resolved}}}
   /operations:
     get: {summary: Read 30-day job, QC, ingestion, incident, latency, retry, DLQ, and cost indicators, responses: {'200': {description: Operational indicators}}}
   /health:

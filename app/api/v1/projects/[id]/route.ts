@@ -1,15 +1,15 @@
-import { env } from 'cloudflare:workers';
-import { loadContentProject } from '@/lib/control-plane';
+import { db, resolveRequestActor } from '@/lib/runtime';
+import { loadContentProject, pauseAutomationStatement } from '@/lib/control-plane';
 import { computeRenderSnapshotHash, validateProjectV2, type VideoProjectV2 } from '@/lib/project-v2';
 import { getVideoTemplate } from '@/lib/templates';
-import { parseIfMatch, quoteEtag, resolveActor, stableHash } from '@/lib/workflow';
+import { parseIfMatch, quoteEtag, stableHash } from '@/lib/workflow';
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   const { id } = await context.params;
   try {
-    const project = await loadContentProject(env.DB, id);
+    const project = await loadContentProject(db, id);
     if (!project) return Response.json({ error: '项目不存在。' }, { status: 404 });
     return Response.json({ project }, { headers: { ETag: quoteEtag(project.version) } });
   } catch {
@@ -18,7 +18,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   const expectedVersion = parseIfMatch(request.headers.get('if-match'));
   if (expectedVersion === null) return Response.json({ error: '必须提供格式为 "版本号" 的 If-Match。' }, { status: 428 });
@@ -36,7 +36,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (changesProduction && !['producer', 'admin'].includes(actor.role)) return Response.json({ error: '只有制作人可以修改模板、品牌或语言。' }, { status: 403 });
   if (changesDistribution && !['publisher', 'admin'].includes(actor.role)) return Response.json({ error: '只有发布者可以修改渠道配置。' }, { status: 403 });
   const { id } = await context.params;
-  const project = await loadContentProject(env.DB, id);
+  const project = await loadContentProject(db, id);
   if (!project) return Response.json({ error: '项目不存在。' }, { status: 404 });
   if (project.version !== expectedVersion) return Response.json({ error: `版本冲突：当前版本为 ${project.version}。` }, { status: 409 });
   if (['RENDER_QUEUED', 'RENDERING', 'PUBLISH_SCHEDULED', 'PUBLISHED', 'MEASURED', 'CANCELLED'].includes(project.state)) return Response.json({ error: `项目处于 ${project.state}，请先撤销、退回或创建更正版本。` }, { status: 409 });
@@ -63,7 +63,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if ((distribution.tags?.length ?? 0) > 30 || distribution.tags?.some((tag) => !tag.trim() || tag.length > 50)) return Response.json({ error: '最多 30 个标签，每个标签为 1–50 字。' }, { status: 422 });
     if (distribution.scheduledAt && Number.isNaN(new Date(distribution.scheduledAt).valueOf())) return Response.json({ error: 'scheduledAt 无效。' }, { status: 422 });
     if (distribution.coverAssetId) {
-      const cover = await env.DB.prepare("SELECT id FROM assets WHERE id = ? AND project_id = ? AND media_type LIKE 'image/%' AND rights_status = 'cleared'").bind(distribution.coverAssetId, id).first();
+      const cover = await db.prepare("SELECT id FROM assets WHERE id = ? AND project_id = ? AND media_type LIKE 'image/%' AND rights_status = 'cleared'").bind(distribution.coverAssetId, id).first();
       if (!cover) return Response.json({ error: '封面必须引用本项目版权已清除的图片资产。' }, { status: 422 });
     }
     nextProject.distribution = distribution;
@@ -78,17 +78,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     ? 'SCRIPT_APPROVED'
     : project.state;
   const now = new Date().toISOString();
-  const [updated] = await env.DB.batch([
-    env.DB.prepare('UPDATE content_projects SET brand = ?, locale = ?, project_json = ?, immutable_hash = ?, state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?').bind(nextProject.identity.brand, nextProject.identity.locale, JSON.stringify(nextProject), nextProjectHash, nextState, now, id, expectedVersion),
-    env.DB.prepare(`
+  const [updated] = await db.batch([
+    db.prepare('UPDATE content_projects SET brand = ?, locale = ?, project_json = ?, immutable_hash = ?, state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?').bind(nextProject.identity.brand, nextProject.identity.locale, JSON.stringify(nextProject), nextProjectHash, nextState, now, id, expectedVersion),
+    db.prepare(`
       INSERT INTO audit_events
         (id, project_id, actor_id, actor_role, action, entity_type, entity_id,
          before_hash, after_hash, metadata_json, request_id, created_at)
       SELECT ?, ?, ?, ?, 'project.configuration_updated', 'content_project', ?, ?, ?, ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM content_projects WHERE id = ? AND version = ? AND updated_at = ? AND immutable_hash = ?)
     `).bind(`audit_${crypto.randomUUID()}`, id, actor.id, actor.role, id, project.immutableHash, nextProjectHash, JSON.stringify({ templateId: nextProject.render.templateId, templateVersion: nextProject.render.templateVersion, brand: nextProject.identity.brand, locale: nextProject.identity.locale, distribution: nextProject.distribution, approvalsInvalidated: true }), crypto.randomUUID(), now, id, expectedVersion + 1, now, nextProjectHash),
+    // 人一改，自动就停：人工改了模板、品牌或渠道配置，项目转人工直到显式恢复。
+    pauseAutomationStatement(db, id, '人工修改了生产或渠道配置，自动化已暂停，需显式恢复。'),
   ]);
   if (!updated.meta.changes) return Response.json({ error: '项目已被其他用户修改。' }, { status: 409 });
-  const saved = await loadContentProject(env.DB, id);
+  const saved = await loadContentProject(db, id);
   return Response.json({ project: saved }, { headers: { ETag: quoteEtag(expectedVersion + 1) } });
 }

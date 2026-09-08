@@ -5,7 +5,7 @@ import {
   runPipeline,
   type ArticleInput,
 } from '../lib/domain.ts';
-import { sampleArticles } from '../lib/sample-data.ts';
+import { sampleArticles } from './fixtures/sample-articles.ts';
 import { createVideoProject } from '../lib/video-project.ts';
 import { parseArticleImport } from '../lib/import.ts';
 

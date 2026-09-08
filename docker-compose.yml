@@ -1,0 +1,59 @@
+# 本地开发依赖：只有 PostgreSQL。
+#
+# 对象存储用 Cloudflare R2（S3 兼容端点），不在本地跑替身——
+# 分片上传、元数据、校验和这些行为差异，用替身测出来的结论不作数。
+# 已经有自己的 PostgreSQL 就不用起这个服务，改 .env 里的 DATABASE_URL 即可。
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: signal40
+      POSTGRES_PASSWORD: signal40
+      POSTGRES_DB: signal40
+    # 用非默认宿主端口，避免和开发机上已有的 PostgreSQL 抢 5432。
+    ports: ['55432:5432']
+    volumes: ['signal40-pg:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U signal40 -d signal40']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # 控制面、Render Worker、调度器都是常驻服务：Worker 不再由人手动 `npm run worker`，
+  # 调度器也不是控制面里的 setInterval（vinext 没有 startup 钩子，见 lib/orchestrator.ts 注释）。
+  # 三个服务共用同一份 .env；数据库迁移仍然显式执行 `npm run db:migrate`，不在启动时自动跑。
+  control-plane:
+    build: .
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgres://signal40:signal40@postgres:5432/signal40
+    ports: ['3000:3000']
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+
+  render-worker:
+    build:
+      context: .
+      dockerfile: render-worker/Dockerfile
+    env_file: [.env]
+    environment:
+      SIGNAL40_CONTROL_URL: http://control-plane:3000
+    depends_on: [control-plane]
+    restart: unless-stopped
+    # Chromium 渲染很吃内存；不设上限时一次失控的渲染会把宿主拖垮。
+    mem_limit: 4g
+    shm_size: 1g
+
+  scheduler:
+    build: .
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgres://signal40:signal40@postgres:5432/signal40
+    command: ['npm', 'run', 'scheduler']
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+
+volumes:
+  signal40-pg:

@@ -1,4 +1,4 @@
-import type { TopicCandidate } from './domain';
+import type { TopicCandidate } from './domain.ts';
 
 export function createVideoProject(topic: TopicCandidate) {
   if (!topic.gate.passed)

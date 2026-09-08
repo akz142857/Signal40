@@ -1,4 +1,5 @@
 import type { ArticleInput, SourceType } from './domain.ts';
+import { isPrivateHostname } from './net-guard.ts';
 import { isValidCron } from './schedule.ts';
 
 export type SourceAdapterName = 'rss' | 'http' | 'opencli' | 'csv';
@@ -19,15 +20,21 @@ export function assertPublicHttpUrl(value: string) {
   let url: URL;
   try { url = new URL(value); } catch { throw new Error('来源 URL 无效。'); }
   if (!['https:', 'http:'].includes(url.protocol)) throw new Error('来源 URL 必须使用 HTTP(S)。');
-  const host = url.hostname.toLowerCase();
-  if (host === 'localhost' || host.endsWith('.local') || host === '0.0.0.0' || host === '::1' || host.startsWith('127.') || host.startsWith('10.') || host.startsWith('192.168.') || host.startsWith('169.254.') || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) throw new Error('来源 URL 不能指向本地或私有网络。');
+  if (isPrivateHostname(url.hostname)) throw new Error('来源 URL 不能指向本地或私有网络。');
   url.username = '';
   url.password = '';
   return url.toString();
 }
 
 function decodeXml(value: string) {
-  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return value
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    // 数字字符引用（&#8364; / &#x20AC;）在真实 RSS 里很常见，不解码会把
+    // "€6.7B" 变成 "&#x20AC;6.7B" 一路带进标题、脚本和配音文本。
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, digits: string) => String.fromCodePoint(Number(digits)))
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+    .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function element(block: string, names: string[]) {

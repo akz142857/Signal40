@@ -1,14 +1,14 @@
-import { env } from 'cloudflare:workers';
+import { config, db, resolveRequestActor } from '@/lib/runtime';
 import { validateSourceConfig, type SourceConfigInput } from '@/lib/source-adapters';
 import { authorizeWorker } from '@/lib/worker-auth';
-import { resolveActor, stableHash } from '@/lib/workflow';
+import { stableHash } from '@/lib/workflow';
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await authorizeWorker(request, env.WORKER_TOKEN))) {
+  if (!(await authorizeWorker(request, config.workerToken))) {
     return Response.json({ error: 'Worker 未授权。' }, { status: 401 });
   }
   const { id } = await context.params;
-  const source = await env.DB.prepare(
+  const source = await db.prepare(
     'SELECT id, name, adapter, config_json, rights_status, rate_limit_per_minute, retention_mode, retention_days, enabled, version, schedule_cron, checkpoint FROM source_configs WHERE id = ? LIMIT 1',
   ).bind(id).first<Record<string, unknown>>();
   if (!source) return Response.json({ error: '来源不存在。' }, { status: 404 });
@@ -22,7 +22,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor || actor.role !== 'admin') return Response.json({ error: '只有管理员可以修改来源授权与调度。' }, { status: 403 });
   let body: SourceConfigInput & { expectedVersion?: number; enabled?: boolean };
   try { body = (await request.json()) as typeof body; }
@@ -32,7 +32,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (!validation.valid) return Response.json({ error: '来源配置无效。', issues: validation.errors }, { status: 422 });
   if (body.enabled && body.rightsStatus !== 'approved') return Response.json({ error: '受限或禁止来源不能启用。' }, { status: 422 });
   const { id } = await context.params;
-  const existing = await env.DB.prepare('SELECT version, config_json, rights_status, rate_limit_per_minute, retention_mode, retention_days, enabled FROM source_configs WHERE id = ? LIMIT 1').bind(id).first<{ version: number; config_json: string; rights_status: string; rate_limit_per_minute: number; retention_mode: string; retention_days: number; enabled: number }>();
+  const existing = await db.prepare('SELECT version, config_json, rights_status, rate_limit_per_minute, retention_mode, retention_days, enabled FROM source_configs WHERE id = ? LIMIT 1').bind(id).first<{ version: number; config_json: string; rights_status: string; rate_limit_per_minute: number; retention_mode: string; retention_days: number; enabled: number }>();
   if (!existing) return Response.json({ error: '来源不存在。' }, { status: 404 });
   if (existing.version !== body.expectedVersion) return Response.json({ error: `版本冲突：当前版本为 ${existing.version}。` }, { status: 409 });
   const config = { sourceType: body.sourceType, url: body.url, mapping: body.mapping ?? {} };
@@ -40,15 +40,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const retention = body.retention ?? { mode: existing.retention_mode as 'metadata' | 'raw', days: existing.retention_days };
   const now = new Date().toISOString();
   const nextHash = stableHash({ ...body, expectedVersion: undefined });
-  const [updated] = await env.DB.batch([
-    env.DB.prepare(`
+  const [updated] = await db.batch([
+    db.prepare(`
       UPDATE source_configs
       SET name = ?, adapter = ?, config_json = ?, rights_status = ?, enabled = ?,
           rate_limit_per_minute = ?, retention_mode = ?, retention_days = ?,
           schedule_cron = ?, version = version + 1, last_error = NULL, updated_at = ?
       WHERE id = ? AND version = ?
     `).bind(body.name.trim(), body.adapter, JSON.stringify(config), body.rightsStatus, body.enabled ? 1 : 0, rateLimitPerMinute, retention.mode, retention.days, body.scheduleCron ?? null, now, id, body.expectedVersion),
-    env.DB.prepare(`
+    db.prepare(`
       INSERT INTO audit_events
         (id, actor_id, actor_role, action, entity_type, entity_id, before_hash,
          after_hash, metadata_json, request_id, created_at)

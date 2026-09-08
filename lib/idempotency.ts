@@ -1,3 +1,4 @@
+import type { SqlDatabase } from './sql.ts';
 import { stableHash } from './hash.ts';
 
 export const IDEMPOTENCY_KEY_MAX_LENGTH = 160;
@@ -39,7 +40,7 @@ function decodeStoredBody(value: string) {
 }
 
 export async function beginIdempotentRequest(
-  db: D1Database,
+  db: SqlDatabase,
   input: {
     scope: string;
     key: string;
@@ -77,9 +78,10 @@ export async function beginIdempotentRequest(
   ).toISOString();
   await db
     .prepare(
-      `INSERT OR IGNORE INTO idempotency_records
+      `INSERT INTO idempotency_records
        (key, scope, request_hash, response_status, response_json, expires_at, created_at)
-       VALUES (?, ?, ?, 425, ?, ?, ?)`,
+       VALUES (?, ?, ?, 425, ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
     )
     .bind(
       storageKey,
@@ -113,7 +115,7 @@ export async function beginIdempotentRequest(
 }
 
 export function completeIdempotencyStatement(
-  db: D1Database,
+  db: SqlDatabase,
   reservation: IdempotencyReservation,
   status: number,
   body: unknown,
@@ -136,7 +138,7 @@ export function completeIdempotencyStatement(
 }
 
 export async function abandonIdempotentRequest(
-  db: D1Database,
+  db: SqlDatabase,
   reservation: IdempotencyReservation,
 ) {
   await db

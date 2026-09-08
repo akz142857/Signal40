@@ -1,4 +1,5 @@
-import type { Article, TopicCandidate, VerificationStatus } from './domain';
+import type { SqlDatabase, SqlStatement } from './sql.ts';
+import type { Article, TopicCandidate, VerificationStatus } from './domain.ts';
 
 type TopicRow = {
   id: string;
@@ -52,7 +53,7 @@ function valueSlots(rowCount: number, columnCount: number) {
 }
 
 export async function persistArticlesWithRevisions(
-  db: D1Database,
+  db: SqlDatabase,
   incoming: Article[],
   now = new Date(),
   rawObjectKey: string | null = null,
@@ -79,7 +80,7 @@ export async function persistArticlesWithRevisions(
       ]);
       continue;
     }
-    const statements: D1PreparedStatement[] = [
+    const statements: SqlStatement[] = [
       db.prepare(`
         UPDATE articles SET source = ?, source_type = ?, author = ?, title = ?, summary = ?,
           url = ?, published_at = ?, metrics_json = ?, content_hash = ? WHERE id = ?
@@ -98,7 +99,7 @@ export async function persistArticlesWithRevisions(
 }
 
 export async function loadRecentArticles(
-  db: D1Database,
+  db: SqlDatabase,
   since: Date,
   limit = 1_000,
 ) {
@@ -121,14 +122,16 @@ export async function loadRecentArticles(
 }
 
 export async function persistPipeline(
-  db: D1Database,
+  db: SqlDatabase,
   topics: TopicCandidate[],
+  // 'sample' 是历史值：示例数据模式已移除，新运行一律是 'import'，
+  // 但已存库的旧行仍可能是 'sample'，读取路径必须继续接受它。
   mode: 'sample' | 'import',
   articleCount: number,
   now = new Date(),
   options: {
     runId?: string;
-    additionalStatements?: D1PreparedStatement[];
+    additionalStatements?: SqlStatement[];
   } = {},
 ) {
   const id = options.runId ?? createPipelineRunId(now);
@@ -137,7 +140,7 @@ export async function persistPipeline(
       .flatMap((topic) => topic.articles)
       .map((article) => [article.id, article]),
   );
-  const statements: D1PreparedStatement[] = [
+  const statements: SqlStatement[] = [
     db
       .prepare(
         'INSERT INTO pipeline_runs (id, mode, article_count, topic_count, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -221,7 +224,7 @@ export async function persistPipeline(
     statements.push(
       db
         .prepare(
-          `INSERT OR IGNORE INTO topic_articles (topic_id, article_id) VALUES ${valueSlots(linkChunk.length, 2)}`,
+          `INSERT INTO topic_articles (topic_id, article_id) VALUES ${valueSlots(linkChunk.length, 2)} ON CONFLICT DO NOTHING`,
         )
         .bind(...linkChunk.flat()),
     );
@@ -251,7 +254,7 @@ export async function persistPipeline(
 }
 
 async function hydrateTopics(
-  db: D1Database,
+  db: SqlDatabase,
   rows: TopicRow[],
 ): Promise<TopicCandidate[]> {
   if (!rows.length) return [];
@@ -272,10 +275,10 @@ async function hydrateTopics(
     .prepare(`
     SELECT topic_id, status, note FROM (
       SELECT topic_id, status, note,
-             ROW_NUMBER() OVER (PARTITION BY topic_id ORDER BY created_at DESC, rowid DESC) AS position
+             ROW_NUMBER() OVER (PARTITION BY topic_id ORDER BY created_at DESC, seq DESC) AS rn
       FROM verification_events
       WHERE topic_id IN (${placeholders})
-    ) WHERE position = 1
+    ) AS latest WHERE rn = 1
   `)
     .bind(...ids)
     .all<{ topic_id: string; status: VerificationStatus; note: string }>();
@@ -347,7 +350,7 @@ async function hydrateTopics(
   });
 }
 
-export async function loadLatestTopics(db: D1Database) {
+export async function loadLatestTopics(db: SqlDatabase) {
   const latestRun = await db
     .prepare(
       'SELECT id, mode, created_at FROM pipeline_runs ORDER BY created_at DESC LIMIT 1',
@@ -366,7 +369,7 @@ export async function loadLatestTopics(db: D1Database) {
   return { topics: await hydrateTopics(db, result.results), run: latestRun };
 }
 
-export async function loadTopic(db: D1Database, id: string) {
+export async function loadTopic(db: SqlDatabase, id: string) {
   const row = await db
     .prepare(`
     SELECT id, title, keywords_json, score, heat_change, score_breakdown_json, source_count, status, gate_json, updated_at
@@ -379,7 +382,7 @@ export async function loadTopic(db: D1Database, id: string) {
 }
 
 export async function recordVerification(
-  db: D1Database,
+  db: SqlDatabase,
   topicId: string,
   status: VerificationStatus,
   note: string,
@@ -387,7 +390,7 @@ export async function recordVerification(
   options: {
     additionalStatements?: (
       topic: TopicCandidate,
-    ) => D1PreparedStatement[];
+    ) => SqlStatement[];
   } = {},
 ) {
   const topic = await loadTopic(db, topicId);

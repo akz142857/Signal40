@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 import type { ProjectRecord } from '@/lib/control-plane';
+import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { VIDEO_TEMPLATES } from '@/lib/templates';
 
 type AssetRow = {
@@ -27,6 +28,8 @@ async function responseError(response: Response) {
 }
 
 export function ProductionConfig({ project, onSaved, onMessage }: { project: ProjectRecord; onSaved: () => Promise<void>; onMessage: (message: string) => void }) {
+  // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关。
+  useSession();
   const contract = project.project;
   const [templateId, setTemplateId] = useState(contract.render.templateId ?? 'signal40-editorial');
   const [brand, setBrand] = useState(contract.identity.brand);
@@ -66,7 +69,7 @@ export function ProductionConfig({ project, onSaved, onMessage }: { project: Pro
     try {
       const response = await fetch(`/api/v1/projects/${project.id}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, 'x-signal-role': 'producer', 'x-signal-actor-id': 'local-producer' },
+        headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, ...devIdentityHeaders({ role: 'producer', id: 'local-producer' }) },
         body: JSON.stringify({ templateId, brand, locale }),
       });
       if (!response.ok) throw new Error(await responseError(response));
@@ -82,7 +85,7 @@ export function ProductionConfig({ project, onSaved, onMessage }: { project: Pro
       const normalizedTags = tags.split(',').map((tag) => tag.trim()).filter(Boolean);
       const response = await fetch(`/api/v1/projects/${project.id}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, 'x-signal-role': 'publisher', 'x-signal-actor-id': 'local-publisher' },
+        headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, ...devIdentityHeaders({ role: 'publisher', id: 'local-publisher' }) },
         body: JSON.stringify({ distribution: { channelPreset, accountId: accountId.trim() || null, title, description, tags: normalizedTags, coverAssetId: coverAssetId || null, scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : null } }),
       });
       if (!response.ok) throw new Error(await responseError(response));
@@ -104,8 +107,7 @@ export function ProductionConfig({ project, onSaved, onMessage }: { project: Pro
           'x-rights-status': rightsStatus,
           'x-rights-note': encodeURIComponent(rightsNote),
           'x-asset-role': 'input',
-          'x-signal-role': 'producer',
-          'x-signal-actor-id': 'local-producer',
+          ...devIdentityHeaders({ role: 'producer', id: 'local-producer' }),
           ...(assetPurpose === 'music' ? { 'x-audio-purpose': 'music', 'x-music-volume': musicVolume } : {}),
         },
         body: file,

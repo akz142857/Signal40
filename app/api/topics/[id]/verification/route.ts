@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:workers';
+import { config, db } from '@/lib/runtime';
 import { recordVerification } from '@/lib/persistence';
 import type { VerificationStatus } from '@/lib/domain';
 import {
@@ -17,8 +17,8 @@ export async function POST(
 ) {
   const actor = await resolveActor(
     request,
-    env.DB,
-    env.BOOTSTRAP_ADMIN_EMAILS,
+    db,
+    config.bootstrapAdminEmails,
   );
   if (!actor)
     return Response.json(
@@ -61,7 +61,7 @@ export async function POST(
   }
   const { id } = await context.params;
   const now = new Date();
-  const started = await beginIdempotentRequest(env.DB, {
+  const started = await beginIdempotentRequest(db, {
     scope: `topics.verification:${actor.id}:${id}`,
     key: idempotencyKey!,
     request: { status: body.status, note },
@@ -85,7 +85,7 @@ export async function POST(
   const reservation = started.reservation;
   try {
     const result = await recordVerification(
-      env.DB,
+      db,
       id,
       body.status as VerificationStatus,
       note,
@@ -95,12 +95,12 @@ export async function POST(
           const responseBody = { topic };
           return [
             completeIdempotencyStatement(
-              env.DB,
+              db,
               reservation,
               200,
               responseBody,
             ),
-            env.DB
+            db
               .prepare(
                 `INSERT INTO audit_events
                  (id, actor_id, actor_role, action, entity_type, entity_id,
@@ -126,12 +126,12 @@ export async function POST(
       },
     );
     if ('error' in result) {
-      await abandonIdempotentRequest(env.DB, reservation);
+      await abandonIdempotentRequest(db, reservation);
       return Response.json({ error: result.error }, { status: result.status });
     }
     return Response.json({ topic: result.topic });
   } catch {
-    await abandonIdempotentRequest(env.DB, reservation).catch(() => undefined);
+    await abandonIdempotentRequest(db, reservation).catch(() => undefined);
     return Response.json(
       { error: '核验记录保存失败，请稍后重试。' },
       { status: 503 },

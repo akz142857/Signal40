@@ -10,12 +10,15 @@ import { ResearchEditor } from '@/components/workspace/research-editor';
 import { MetricsPanel } from '@/components/workspace/metrics-panel';
 import { ProductionConfig } from '@/components/workspace/production-config';
 import type { ProjectRecord } from '@/lib/control-plane';
-import type { ContentState, GateResult } from '@/lib/workflow';
+import type { ContentState, GateResult, Role } from '@/lib/workflow';
 import { stableHash } from '@/lib/workflow';
+import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 
 const VideoPreview = lazy(() => import('@/components/workspace/video-preview').then((module) => ({ default: module.VideoPreview })));
 
 type AuditEvent = { id: string; action: string; actor_id: string; actor_role: string; created_at: string; metadata: Record<string, unknown> };
+
+type OrphanedJob = { id: string; kind: string; projectId: string | null; createdAt: string };
 
 const phases = [
   { label: '研究', states: ['DRAFT', 'RESEARCHING', 'EVIDENCE_READY', 'EDITOR_APPROVED'], icon: ShieldCheck },
@@ -54,12 +57,21 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   const [note, setNote] = useState('已核对当前版本、证据与发布风险。');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [orphaned, setOrphaned] = useState<OrphanedJob[]>([]);
+  const session = useSession();
+  // 生产环境返回空对象，服务端用反向代理注入的真实身份；
+  // 只有本机开发且服务端明确允许时，才带上伪造角色头。
+  const actorHeaders = useCallback(
+    (role: Role, actorId?: string) => devIdentityHeaders({ role, id: actorId }),
+    [],
+  );
 
   const refresh = useCallback(async () => {
-    const [projectResponse, gateResponse, auditResponse] = await Promise.all([
+    const [projectResponse, gateResponse, auditResponse, workerResponse] = await Promise.all([
       fetch(`/api/v1/projects/${project.id}`, { cache: 'no-store' }),
       fetch(`/api/v1/projects/${project.id}/gates`, { cache: 'no-store' }),
       fetch(`/api/v1/projects/${project.id}/audit`, { cache: 'no-store' }),
+      fetch('/api/v1/workers', { cache: 'no-store' }),
     ]);
     if (!projectResponse.ok) throw new Error(await readError(projectResponse));
     const projectPayload = (await projectResponse.json()) as { project: ProjectRecord };
@@ -68,6 +80,10 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     setProject(projectPayload.project);
     setGates(gatePayload.gates);
     setAudit(auditPayload.events);
+    if (workerResponse.ok) {
+      const workerPayload = (await workerResponse.json()) as { orphanedJobs: OrphanedJob[] };
+      setOrphaned(workerPayload.orphanedJobs.filter((job) => job.projectId === project.id));
+    }
   }, [project.id]);
 
   useEffect(() => {
@@ -89,7 +105,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
       const actorId = kind === 'publish' ? 'local-publisher' : kind === 'qc' ? 'local-producer' : 'local-editor';
       const response = await fetch(`/api/v1/projects/${project.id}/approvals`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-signal-role': role, 'x-signal-actor-id': actorId },
+        headers: { 'content-type': 'application/json', ...actorHeaders(role as Role, actorId) },
         body: JSON.stringify({ kind, decision: 'approved', subjectHash, note }),
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -107,7 +123,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
       const actorId = role === 'publisher' ? 'local-publisher' : role === 'producer' ? 'local-producer' : 'local-editor';
       const response = await fetch(`/api/v1/projects/${project.id}/transitions`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, 'x-signal-role': role, 'x-signal-actor-id': actorId },
+        headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, ...actorHeaders(role as Role, actorId) },
         body: JSON.stringify({ to, note }),
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -123,7 +139,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     try {
       const response = await fetch('/api/v1/jobs', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': `render:${project.id}:${project.project.render.snapshotHash}`, 'x-signal-role': 'producer' },
+        headers: { 'content-type': 'application/json', 'idempotency-key': `render:${project.id}:${project.project.render.snapshotHash}`, ...actorHeaders('producer') },
         body: JSON.stringify({ kind: 'render', projectId: project.id, payload: { projectId: project.id, snapshotHash: project.project.render.snapshotHash, compositionId: project.project.render.compositionId } }),
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -140,7 +156,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     try {
       const response = await fetch('/api/v1/jobs', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': `preview:${project.id}:${project.project.render.snapshotHash}`, 'x-signal-role': 'producer' },
+        headers: { 'content-type': 'application/json', 'idempotency-key': `preview:${project.id}:${project.project.render.snapshotHash}`, ...actorHeaders('producer') },
         body: JSON.stringify({ kind: 'preview', projectId: project.id, priority: 60, payload: { projectId: project.id, snapshotHash: project.project.render.snapshotHash, compositionId: project.project.render.compositionId } }),
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -149,7 +165,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '预览任务创建失败。');
     } finally { setBusy(false); }
-  }, [project.id, project.project.render.compositionId, project.project.render.snapshotHash, refresh]);
+  }, [actorHeaders, project.id, project.project.render.compositionId, project.project.render.snapshotHash, refresh]);
 
   const enqueueVoice = async () => {
     setBusy(true);
@@ -157,7 +173,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
       const scriptHash = stableHash(project.project.script);
       const response = await fetch('/api/v1/jobs', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': `voice:${project.id}:${scriptHash}`, 'x-signal-role': 'producer' },
+        headers: { 'content-type': 'application/json', 'idempotency-key': `voice:${project.id}:${scriptHash}`, ...actorHeaders('producer') },
         body: JSON.stringify({ kind: 'voice', projectId: project.id, payload: { projectId: project.id, scriptVersion: project.project.script.version, scriptHash } }),
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -172,13 +188,28 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     try {
       const response = await fetch(`/api/v1/projects/${project.id}/publish-jobs`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': `${channel}:${project.id}:${project.project.render.snapshotHash}`, 'x-signal-role': 'publisher', 'x-signal-actor-id': 'local-publisher' },
+        headers: { 'content-type': 'application/json', 'idempotency-key': `${channel}:${project.id}:${project.project.render.snapshotHash}`, ...actorHeaders('publisher', 'local-publisher') },
         body: JSON.stringify({ channel, accountId: project.project.distribution.accountId, title: project.project.distribution.title, description: project.project.distribution.description, tags: project.project.distribution.tags, coverAssetId: project.project.distribution.coverAssetId, scheduledAt: project.project.distribution.scheduledAt, privacyStatus: 'private' }),
       });
       if (!response.ok) throw new Error(await readError(response));
       setMessage(channel === 'youtube' ? 'YouTube 私密上传已入队；只有显式开启公开发布开关后才可改变可见性。' : '可下载发布包已入队。');
       await refresh();
     } catch (error) { setMessage(error instanceof Error ? error.message : '发布任务创建失败。'); }
+    finally { setBusy(false); }
+  };
+
+  const setAutomation = async (action: 'pause' | 'resume') => {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/v1/projects/${project.id}/automation`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...actorHeaders('editor', 'local-editor') },
+        body: JSON.stringify({ action, reason: action === 'pause' ? (note.trim().length >= 5 ? note.trim() : '人工接管本项目。') : undefined }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      await refresh();
+      setMessage(action === 'pause' ? '本项目已转人工，编排引擎不会再推进它。' : '本项目已恢复自动推进。');
+    } catch (error) { setMessage(error instanceof Error ? error.message : '自动化状态更新失败。'); }
     finally { setBusy(false); }
   };
 
@@ -203,7 +234,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
         annotations: { readOnlyHint: false, untrustedContentHint: false },
         execute: async (input) => {
           const templateId = input && typeof input === 'object' && 'templateId' in input ? String((input as { templateId: unknown }).templateId) : '';
-          const response = await fetch(`/api/v1/projects/${project.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, 'x-signal-role': 'producer', 'x-signal-actor-id': 'webmcp-producer' }, body: JSON.stringify({ templateId }) });
+          const response = await fetch(`/api/v1/projects/${project.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, ...actorHeaders('producer', 'webmcp-producer') }, body: JSON.stringify({ templateId }) });
           if (!response.ok) throw new Error(await readError(response));
           const payload = await response.json() as { project: ProjectRecord };
           await refresh();
@@ -230,7 +261,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
           if (!next) throw new Error(`项目处于 ${project.state}，没有可由人工直接推进的下一状态。`);
           if (nextNote.trim().length < 10) throw new Error('推进原因至少需要 10 个字符。');
           const role = ['PUBLISH_SCHEDULED', 'PUBLISHED', 'MEASURED'].includes(next) ? 'publisher' : ['ASSETS_READY', 'RENDER_QUEUED'].includes(next) ? 'producer' : 'editor';
-          const response = await fetch(`/api/v1/projects/${project.id}/transitions`, { method: 'POST', headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, 'x-signal-role': role, 'x-signal-actor-id': `webmcp-${role}` }, body: JSON.stringify({ to: next, note: nextNote }) });
+          const response = await fetch(`/api/v1/projects/${project.id}/transitions`, { method: 'POST', headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, ...actorHeaders(role as Role, `webmcp-${role}`) }, body: JSON.stringify({ to: next, note: nextNote }) });
           if (!response.ok) throw new Error(await readError(response));
           await refresh();
           return { projectId: project.id, from: project.state, to: next };
@@ -239,7 +270,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     };
     void register().catch(() => undefined);
     return () => lifecycle.abort();
-  }, [enqueuePreview, gates, project, refresh]);
+  }, [actorHeaders, enqueuePreview, gates, project, refresh]);
 
   const activePhase = Math.max(0, phases.findIndex((phase) => (phase.states as readonly string[]).includes(project.state)));
   const currentNext = nextState[project.state];
@@ -255,7 +286,11 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
             <Link href="/" className="grid size-10 place-items-center rounded-xl border border-border" aria-label="返回选题雷达"><ArrowLeft className="size-5" /></Link>
             <div><p className="font-mono text-xs uppercase tracking-[0.16em] text-chart-1">Production workspace · v{project.version}</p><h1 className="mt-1 text-xl font-semibold tracking-tight">{project.title}</h1></div>
           </div>
-          <div className="flex items-center gap-3"><span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-semibold">{stateLabels[project.state]}</span><span className="font-mono text-xs text-muted-foreground">Gates {gateSummary.passed}/{gateSummary.total}</span></div>
+          <div className="flex items-center gap-3">
+            <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-semibold">{stateLabels[project.state]}</span>
+            <span className="font-mono text-xs text-muted-foreground">Gates {gateSummary.passed}/{gateSummary.total}</span>
+            <span className="text-xs text-muted-foreground">{session.actor ? `${session.actor.email} · ${session.actor.role}` : session.loading ? '读取身份…' : '未识别身份'}{session.localRoleHeadersAllowed && '（本机开发身份）'}</span>
+          </div>
         </div>
       </header>
 
@@ -266,6 +301,17 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
 
         <div className="space-y-5">
           {message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 px-4 py-3 text-sm">{message}</output>}
+          {orphaned.length > 0 && <div className="rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+            <p className="font-semibold">入队的作业没有人会执行</p>
+            <p className="mt-1 leading-6">{orphaned.map((job) => job.kind).join('、')} 作业已排队超过 60 秒，但没有任何在线 Worker 声明能处理这些类型。请确认 render-worker 服务是否在运行（<span className="font-mono">docker compose up -d render-worker</span>），或到 <Link className="underline" href="/settings/diagnostics">系统自检</Link> 查看原因。</p>
+          </div>}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm">
+            <div>
+              <p className="font-medium">自动化：{project.automationMode === 'auto' ? '自动推进中' : '已转人工'}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{project.automationMode === 'auto' ? '门禁通过且在策略范围内的步骤会由编排引擎推进；任何人工编辑都会立刻转人工。' : project.automationPausedReason || '需要显式恢复后才会继续自动推进。'}</p>
+            </div>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void setAutomation(project.automationMode === 'auto' ? 'pause' : 'resume')}>{project.automationMode === 'auto' ? '暂停自动化' : '恢复自动'}</Button>
+          </div>
           <section className="grid items-center gap-5 rounded-2xl border border-border bg-card p-5 md:grid-cols-[minmax(0,1fr)_300px]">
             <div><p className="font-mono text-xs uppercase tracking-[0.15em] text-chart-1">Remotion player</p><h2 className="mt-2 text-2xl font-semibold tracking-tight">实时成片预览</h2><p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">预览和正式渲染使用同一个 React Composition 与同一份不可变快照。当前模板为竖屏 1080 × 1920、30fps、45 秒。</p><div className="mt-5 grid grid-cols-2 gap-3 text-sm"><div className="rounded-xl bg-secondary/60 p-3"><p className="text-xs text-muted-foreground">Composition</p><p className="mt-1 font-mono">{project.project.render.compositionId}</p></div><div className="rounded-xl bg-secondary/60 p-3"><p className="text-xs text-muted-foreground">Snapshot</p><p className="mt-1 font-mono">{project.project.render.snapshotHash}</p></div></div></div>
             <Suspense fallback={<div className="mx-auto grid aspect-[9/16] w-full max-w-[300px] place-items-center rounded-2xl bg-black text-xs text-white/60">加载成片预览…</div>}><VideoPreview project={project.project} /></Suspense>

@@ -1,9 +1,8 @@
-import { env } from 'cloudflare:workers';
+import { resolveRequestActor } from '@/lib/runtime';
 import { migrateProjectV1, validateProjectV2 } from '@/lib/project-v2';
-import { resolveActor } from '@/lib/workflow';
 
 export async function POST(request: Request) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   if (!['researcher', 'editor', 'producer', 'admin'].includes(actor.role)) return Response.json({ error: '当前角色无权迁移项目协议。' }, { status: 403 });
   try {
