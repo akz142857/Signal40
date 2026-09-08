@@ -1,14 +1,14 @@
-import { env } from 'cloudflare:workers';
+import { db, resolveRequestActor } from '@/lib/runtime';
 import { createContentProject, listContentProjects } from '@/lib/control-plane';
 import { loadTopic } from '@/lib/persistence';
 import { createProjectV2, validateProjectV2, type VideoProjectV2 } from '@/lib/project-v2';
-import { quoteEtag, resolveActor } from '@/lib/workflow';
+import { quoteEtag } from '@/lib/workflow';
 
 export async function GET(request: Request) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   try {
-    const projects = await listContentProjects(env.DB);
+    const projects = await listContentProjects(db);
     return Response.json({ projects });
   } catch {
     return Response.json({ error: '项目列表读取失败。' }, { status: 503 });
@@ -16,7 +16,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   if (!['researcher', 'editor', 'admin'].includes(actor.role)) return Response.json({ error: '当前角色无权创建项目。' }, { status: 403 });
   const idempotencyKey = request.headers.get('idempotency-key');
@@ -37,11 +37,11 @@ export async function POST(request: Request) {
       project = body.project;
     } else {
       if (!body.topicId) return Response.json({ error: 'topicId 必填。' }, { status: 422 });
-      const topic = await loadTopic(env.DB, body.topicId);
+      const topic = await loadTopic(db, body.topicId);
       if (!topic) return Response.json({ error: '选题不存在。' }, { status: 404 });
       project = createProjectV2(topic);
     }
-    const result = await createContentProject(env.DB, project, actor);
+    const result = await createContentProject(db, project, actor);
     return Response.json(result, {
       status: result.created ? 201 : 200,
       headers: { ETag: quoteEtag(result.project.version), 'Idempotency-Key': idempotencyKey },

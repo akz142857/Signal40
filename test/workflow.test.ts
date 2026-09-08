@@ -1,10 +1,11 @@
+import type { SqlDatabase } from '../lib/sql.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runPipeline } from '../lib/domain.ts';
 import { createVideoProject } from '../lib/video-project.ts';
 import { computeRenderSnapshotHash, createProjectV2, migrateProjectV1, validateProjectV2, type VideoProjectV2 } from '../lib/project-v2.ts';
 import { VIDEO_TEMPLATES } from '../lib/templates.ts';
-import { sampleArticles } from '../lib/sample-data.ts';
+import { sampleArticles } from './fixtures/sample-articles.ts';
 import { assertTransition, parseIfMatch, resolveActor, stableHash, WorkflowError } from '../lib/workflow.ts';
 import { sha256Hex } from '../lib/hash.ts';
 
@@ -71,7 +72,7 @@ void test('ETag parsing and hashes are deterministic', () => {
 });
 
 void test('local role simulation is scoped to loopback and production ignores role headers', async () => {
-  const unusedDb = {} as D1Database;
+  const unusedDb = {} as SqlDatabase;
   const local = await resolveActor(new Request('http://127.0.0.1/api', { headers: { 'x-signal-role': 'publisher', 'x-signal-actor-id': 'local-publisher' } }), unusedDb);
   assert.deepEqual(local, { id: 'local-publisher', email: 'local@signal40.test', role: 'publisher' });
   const production = await resolveActor(new Request('https://signal40.example/api', { headers: { 'x-signal-role': 'admin' } }), unusedDb);

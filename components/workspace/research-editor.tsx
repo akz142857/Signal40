@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 import type { ProjectRecord } from '@/lib/control-plane';
+import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import type { VideoProjectV2 } from '@/lib/project-v2';
 
 async function readError(response: Response) {
@@ -16,6 +17,8 @@ async function readError(response: Response) {
 }
 
 export function ResearchEditor({ project, onSaved, onMessage }: { project: ProjectRecord; onSaved: () => Promise<void>; onMessage: (message: string) => void }) {
+  // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关。
+  useSession();
   const [research, setResearch] = useState<VideoProjectV2['research']>(() => structuredClone(project.project.research));
   const [busy, setBusy] = useState(false);
   const editable = ['RESEARCHING', 'CHANGES_REQUESTED'].includes(project.state);
@@ -34,7 +37,7 @@ export function ResearchEditor({ project, onSaved, onMessage }: { project: Proje
     try {
       const response = await fetch(`/api/v1/projects/${encodeURIComponent(project.id)}/research`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, 'x-signal-role': 'researcher' },
+        headers: { 'content-type': 'application/json', 'if-match': `"${project.version}"`, ...devIdentityHeaders({ role: 'researcher', id: 'local-researcher' }) },
         body: JSON.stringify({ research }),
       });
       if (!response.ok) throw new Error(await readError(response));

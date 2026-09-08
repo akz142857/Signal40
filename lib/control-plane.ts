@@ -1,8 +1,16 @@
-import { computeRenderSnapshotHash, validateProjectV2, type VideoProjectV2 } from './project-v2';
-import type { ContentState, GateResult, Role } from './workflow';
-import { assertTransition, stableHash, WorkflowError } from './workflow';
+import type { SqlDatabase, SqlStatement } from './sql.ts';
+import { computeRenderSnapshotHash, validateProjectV2, type VideoProjectV2 } from './project-v2.ts';
+import type { ContentState, GateResult, Role } from './workflow.ts';
+import { assertTransition, stableHash, WorkflowError } from './workflow.ts';
 
 export type Actor = { id: string; email: string; role: Role };
+
+/**
+ * 一次写入是人做的还是策略做的。审计读取方必须能一眼区分这两者，
+ * 所以它进 metadata；同时它决定要不要把项目踢出自动化——
+ * 人一改，自动就停，直到有人显式恢复。
+ */
+export type AutomationTrigger = 'human' | 'automation';
 
 type ProjectRow = {
   id: string;
@@ -15,6 +23,9 @@ type ProjectRow = {
   locale: string;
   project_json: string;
   immutable_hash: string;
+  automation_mode: 'auto' | 'manual';
+  automation_paused_reason: string | null;
+  automation_policy_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -30,11 +41,33 @@ export type ProjectRecord = {
   locale: string;
   project: VideoProjectV2;
   immutableHash: string;
+  automationMode: 'auto' | 'manual';
+  automationPausedReason: string | null;
+  automationPolicyId: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
+/**
+ * 读取存储行里的 JSON 列；无法当成对象使用时返回 null，由调用方决定隔离还是报错。
+ *
+ * jsonb 列由驱动解析好后直接是对象，text 列拿到的是字符串，两种都要接。
+ * JSON 标量（`null`、数字、字符串）不是合法的 payload/metadata，按损坏处理。
+ */
+function parseJsonColumn<T>(value: unknown): T | null {
+  if (value && typeof value === 'object') return value as T;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? (parsed as T) : null;
+  } catch {
+    return null;
+  }
+}
+
 function parseProject(row: ProjectRow): ProjectRecord {
+  const project = parseJsonColumn<VideoProjectV2>(row.project_json);
+  if (!project) throw new Error(`项目 ${row.id} 的 project_json 已损坏，无法解析。`);
   return {
     id: row.id,
     topicId: row.topic_id,
@@ -44,15 +77,18 @@ function parseProject(row: ProjectRow): ProjectRecord {
     ownerId: row.owner_id,
     brand: row.brand,
     locale: row.locale,
-    project: JSON.parse(row.project_json) as VideoProjectV2,
+    project,
     immutableHash: row.immutable_hash,
+    automationMode: row.automation_mode ?? 'auto',
+    automationPausedReason: row.automation_paused_reason ?? null,
+    automationPolicyId: row.automation_policy_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 function auditStatement(
-  db: D1Database,
+  db: SqlDatabase,
   input: {
     projectId?: string | null;
     actor: Actor;
@@ -64,36 +100,14 @@ function auditStatement(
     metadata?: unknown;
     requestId?: string;
     now: string;
-    projectGuard?: {
-      projectId: string;
-      version: number;
-      updatedAt: string;
-      state?: ContentState;
-      immutableHash?: string;
-    };
   },
 ) {
-  const guardClauses = ['id = ?', 'version = ?', 'updated_at = ?'];
-  const guardBindings: unknown[] = input.projectGuard
-    ? [input.projectGuard.projectId, input.projectGuard.version, input.projectGuard.updatedAt]
-    : [];
-  if (input.projectGuard?.state) {
-    guardClauses.push('state = ?');
-    guardBindings.push(input.projectGuard.state);
-  }
-  if (input.projectGuard?.immutableHash) {
-    guardClauses.push('immutable_hash = ?');
-    guardBindings.push(input.projectGuard.immutableHash);
-  }
-  const guardSql = input.projectGuard
-    ? ` WHERE EXISTS (SELECT 1 FROM content_projects WHERE ${guardClauses.join(' AND ')})`
-    : '';
   return db
     .prepare(`
       INSERT INTO audit_events
         (id, project_id, actor_id, actor_role, action, entity_type, entity_id,
          before_hash, after_hash, metadata_json, request_id, created_at)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${guardSql}
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .bind(
       `audit_${crypto.randomUUID()}`,
@@ -108,12 +122,35 @@ function auditStatement(
       JSON.stringify(input.metadata ?? {}),
       input.requestId ?? crypto.randomUUID(),
       input.now,
-      ...guardBindings,
     );
 }
 
+/**
+ * 把项目踢出自动化并记下原因。不 bump version：自动化模式不属于内容快照，
+ * 顺手加一的话会让调用方手上的 ETag 平白失效。
+ */
+export function pauseAutomationStatement(db: SqlDatabase, projectId: string, reason: string) {
+  return db
+    .prepare("UPDATE content_projects SET automation_mode = 'manual', automation_paused_reason = ? WHERE id = ? AND automation_mode = 'auto'")
+    .bind(reason.slice(0, 500), projectId);
+}
+
+export async function pauseProjectAutomation(db: SqlDatabase, projectId: string, reason: string) {
+  const updated = await pauseAutomationStatement(db, projectId, reason).run();
+  return { paused: Number(updated.meta.changes ?? 0) > 0 };
+}
+
+/** 恢复自动化。必须是人显式做的动作，编排引擎自己不会调用它。 */
+export async function resumeProjectAutomation(db: SqlDatabase, projectId: string, policyId: string | null = null) {
+  const updated = await db
+    .prepare("UPDATE content_projects SET automation_mode = 'auto', automation_paused_reason = NULL, automation_policy_id = ? WHERE id = ?")
+    .bind(policyId, projectId)
+    .run();
+  return { resumed: Number(updated.meta.changes ?? 0) > 0 };
+}
+
 export async function createContentProject(
-  db: D1Database,
+  db: SqlDatabase,
   project: VideoProjectV2,
   actor: Actor,
   now = new Date(),
@@ -123,7 +160,7 @@ export async function createContentProject(
   if (existing) return { project: existing, created: false };
   const createdAt = now.toISOString();
   const hash = stableHash(project);
-  const statements: D1PreparedStatement[] = [
+  const statements: SqlStatement[] = [
     db
       .prepare(`
         INSERT INTO content_projects
@@ -222,22 +259,24 @@ export async function createContentProject(
   return { project: (await loadContentProject(db, id))!, created: true };
 }
 
-export async function listContentProjects(db: D1Database) {
+export async function listContentProjects(db: SqlDatabase) {
   const result = await db
     .prepare(`
       SELECT id, topic_id, title, state, version, owner_id, brand, locale, project_json,
-             immutable_hash, created_at, updated_at
+             immutable_hash, automation_mode, automation_paused_reason, automation_policy_id,
+             created_at, updated_at
       FROM content_projects ORDER BY updated_at DESC LIMIT 100
     `)
     .all<ProjectRow>();
   return result.results.map(parseProject);
 }
 
-export async function loadContentProject(db: D1Database, id: string) {
+export async function loadContentProject(db: SqlDatabase, id: string) {
   const row = await db
     .prepare(`
       SELECT id, topic_id, title, state, version, owner_id, brand, locale, project_json,
-             immutable_hash, created_at, updated_at
+             immutable_hash, automation_mode, automation_paused_reason, automation_policy_id,
+             created_at, updated_at
       FROM content_projects WHERE id = ? LIMIT 1
     `)
     .bind(id)
@@ -246,7 +285,7 @@ export async function loadContentProject(db: D1Database, id: string) {
 }
 
 export async function transitionContentProject(
-  db: D1Database,
+  db: SqlDatabase,
   input: {
     projectId: string;
     expectedVersion: number;
@@ -254,6 +293,8 @@ export async function transitionContentProject(
     gates: GateResult[];
     note: string;
     actor: Actor;
+    trigger?: AutomationTrigger;
+    policyId?: string | null;
   },
   now = new Date(),
 ) {
@@ -264,14 +305,18 @@ export async function transitionContentProject(
   }
   assertTransition({ from: project.state, to: input.to, role: input.actor.role, gates: input.gates });
   const updatedAt = now.toISOString();
-  const [result] = await db.batch([
-    db
+  // 在事务里先写后判：更新没命中就抛错回滚，审计事件自然不会留下。
+  // 这比让审计语句自己带一份 `WHERE EXISTS` 守卫更直接，也不用把版本条件写两遍。
+  return db.transaction(async (tx) => {
+    const updated = await tx
       .prepare(`
         UPDATE content_projects SET state = ?, version = version + 1, updated_at = ?
         WHERE id = ? AND version = ?
       `)
-      .bind(input.to, updatedAt, input.projectId, input.expectedVersion),
-    auditStatement(db, {
+      .bind(input.to, updatedAt, input.projectId, input.expectedVersion)
+      .run();
+    if (!updated.meta.changes) throw new WorkflowError('项目已被其他用户修改。', 'VERSION_CONFLICT');
+    await auditStatement(tx, {
       projectId: input.projectId,
       actor: input.actor,
       action: 'project.transitioned',
@@ -279,28 +324,25 @@ export async function transitionContentProject(
       entityId: input.projectId,
       beforeHash: stableHash({ state: project.state, version: project.version }),
       afterHash: stableHash({ state: input.to, version: project.version + 1 }),
-      metadata: { from: project.state, to: input.to, gates: input.gates, note: input.note },
+      metadata: { from: project.state, to: input.to, gates: input.gates, note: input.note, trigger: input.trigger ?? 'human', policyId: input.policyId ?? null },
       now: updatedAt,
-      projectGuard: {
-        projectId: input.projectId,
-        version: input.expectedVersion + 1,
-        updatedAt,
-        state: input.to,
-      },
-    }),
-  ]);
-  if (!result.meta.changes) throw new WorkflowError('项目已被其他用户修改。', 'VERSION_CONFLICT');
-  return { project: (await loadContentProject(db, input.projectId))!, status: 200 as const };
+    }).run();
+    if ((input.trigger ?? 'human') === 'human') {
+      await pauseAutomationStatement(tx, input.projectId, `人工把状态推进到 ${input.to}，自动化已暂停，需显式恢复。`).run();
+    }
+    return { project: (await loadContentProject(tx, input.projectId))!, status: 200 as const };
+  });
 }
 
 export async function saveProjectSection(
-  db: D1Database,
+  db: SqlDatabase,
   input: {
     projectId: string;
     expectedVersion: number;
     section: 'script' | 'storyboard';
     value: VideoProjectV2['script'] | VideoProjectV2['timeline'];
     actor: Actor;
+    trigger?: AutomationTrigger;
   },
   now = new Date(),
 ) {
@@ -350,30 +392,30 @@ export async function saveProjectSection(
   const table = input.section === 'script' ? 'script_versions' : 'storyboard_versions';
   const jsonColumn = input.section === 'script' ? 'script_json' : 'storyboard_json';
   const nextProjectHash = stableHash(nextProject);
-  const [updated] = await db.batch([
-    db.prepare(`UPDATE content_projects SET project_json = ?, immutable_hash = ?, state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`).bind(JSON.stringify(nextProject), nextProjectHash, nextState, timestamp, input.projectId, input.expectedVersion),
-    db.prepare(`
-      INSERT INTO ${table} (id, project_id, version, ${jsonColumn}, content_hash, created_by, created_at)
-      SELECT ?, ?, ?, ?, ?, ?, ?
-      WHERE EXISTS (
-        SELECT 1 FROM content_projects
-        WHERE id = ? AND version = ? AND updated_at = ? AND state = ? AND immutable_hash = ?
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .prepare('UPDATE content_projects SET project_json = ?, immutable_hash = ?, state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?')
+      .bind(JSON.stringify(nextProject), nextProjectHash, nextState, timestamp, input.projectId, input.expectedVersion)
+      .run();
+    if (!updated.meta.changes) throw new WorkflowError('项目已被其他用户修改。', 'VERSION_CONFLICT');
+
+    await tx
+      .prepare(`
+        INSERT INTO ${table} (id, project_id, version, ${jsonColumn}, content_hash, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .bind(
+        `${input.section}_${crypto.randomUUID()}`,
+        input.projectId,
+        sectionVersion,
+        JSON.stringify(sectionValue),
+        stableHash(sectionValue),
+        input.actor.id,
+        timestamp,
       )
-    `).bind(
-      `${input.section}_${crypto.randomUUID()}`,
-      input.projectId,
-      sectionVersion,
-      JSON.stringify(sectionValue),
-      stableHash(sectionValue),
-      input.actor.id,
-      timestamp,
-      input.projectId,
-      input.expectedVersion + 1,
-      timestamp,
-      nextState,
-      nextProjectHash,
-    ),
-    auditStatement(db, {
+      .run();
+
+    await auditStatement(tx, {
       projectId: input.projectId,
       actor: input.actor,
       action: `${input.section}.version_created`,
@@ -381,28 +423,25 @@ export async function saveProjectSection(
       entityId: input.projectId,
       beforeHash: project.immutableHash,
       afterHash: immutableHash,
-      metadata: { version: sectionVersion, approvalsInvalidated: true },
+      metadata: { version: sectionVersion, approvalsInvalidated: true, trigger: input.trigger ?? 'human' },
       now: timestamp,
-      projectGuard: {
-        projectId: input.projectId,
-        version: input.expectedVersion + 1,
-        updatedAt: timestamp,
-        state: nextState,
-        immutableHash: nextProjectHash,
-      },
-    }),
-  ]);
-  if (!updated.meta.changes) throw new WorkflowError('项目已被其他用户修改。', 'VERSION_CONFLICT');
-  return { project: (await loadContentProject(db, input.projectId))!, status: 200 as const };
+    }).run();
+    if ((input.trigger ?? 'human') === 'human') {
+      await pauseAutomationStatement(tx, input.projectId, `人工编辑了${input.section === 'script' ? '脚本' : '分镜'}，自动化已暂停，需显式恢复。`).run();
+    }
+
+    return { project: (await loadContentProject(tx, input.projectId))!, status: 200 as const };
+  });
 }
 
 export async function saveResearchSnapshot(
-  db: D1Database,
+  db: SqlDatabase,
   input: {
     projectId: string;
     expectedVersion: number;
     research: VideoProjectV2['research'];
     actor: Actor;
+    trigger?: AutomationTrigger;
   },
   now = new Date(),
 ) {
@@ -451,77 +490,88 @@ export async function saveResearchSnapshot(
   const timestamp = now.toISOString();
   const nextVersion = Number((await db.prepare('SELECT MAX(version) AS version FROM research_snapshots WHERE project_id = ?').bind(input.projectId).first<{ version: number | null }>())?.version ?? 0) + 1;
   const nextProjectHash = stableHash(nextProject);
-  const projectGuardSql = `EXISTS (
-    SELECT 1 FROM content_projects
-    WHERE id = ? AND version = ? AND updated_at = ? AND state = 'RESEARCHING' AND immutable_hash = ?
-  )`;
-  const projectGuardBindings = [input.projectId, input.expectedVersion + 1, timestamp, nextProjectHash] as const;
-  const statements: D1PreparedStatement[] = [
-    db.prepare("UPDATE content_projects SET project_json = ?, immutable_hash = ?, state = 'RESEARCHING', version = version + 1, updated_at = ? WHERE id = ? AND version = ?").bind(JSON.stringify(nextProject), nextProjectHash, timestamp, input.projectId, input.expectedVersion),
-    db.prepare(`DELETE FROM evidence_links WHERE claim_id IN (SELECT id FROM claims WHERE project_id = ?) AND ${projectGuardSql}`).bind(input.projectId, ...projectGuardBindings),
-    db.prepare(`DELETE FROM claims WHERE project_id = ? AND ${projectGuardSql}`).bind(input.projectId, ...projectGuardBindings),
-    db.prepare(`
-      INSERT INTO research_snapshots (id, project_id, version, snapshot_json, snapshot_hash, created_at)
-      SELECT ?, ?, ?, ?, ?, ? WHERE ${projectGuardSql}
-    `).bind(research.snapshotId, input.projectId, nextVersion, JSON.stringify(research), research.approvedHash, timestamp, ...projectGuardBindings),
-  ];
-  for (const claim of claims) {
-    const databaseClaimId = `${input.projectId}_${claim.id}`;
-    const hasRefutation = claim.evidence.some((evidence) => evidence.stance === 'refutes');
-    const conflict = research.conflicts.find((item) => item.claimId === claim.id);
-    const verifiable = !['opinion', 'disclaimer'].includes(claim.kind);
-    const status = hasRefutation && !conflict?.resolution ? 'conflicted' : verifiable && claim.evidence.some((evidence) => evidence.stance === 'supports') ? 'supported' : 'draft';
-    statements.push(db.prepare(`
-      INSERT INTO claims (id, project_id, logical_id, text, kind, quantity_json, status, version, created_at, updated_at)
-      SELECT ?, ?, ?, ?, ?, ?, ?, 1, ?, ? WHERE ${projectGuardSql}
-    `).bind(databaseClaimId, input.projectId, claim.id, claim.text.trim(), claim.kind, claim.quantity ? JSON.stringify(claim.quantity) : null, status, timestamp, timestamp, ...projectGuardBindings));
-    for (const evidence of claim.evidence) {
-      statements.push(db.prepare(`
-        INSERT INTO evidence_links (id, claim_id, article_id, article_revision_id, source_url, stance, excerpt, locator_json, source_hash, observed_at, created_at)
-        SELECT ?, ?, (SELECT id FROM articles WHERE id = ? LIMIT 1), (SELECT id FROM article_revisions WHERE id = ? LIMIT 1), ?, ?, ?, ?, ?, ?, ? WHERE ${projectGuardSql}
-      `).bind(`evidence_${crypto.randomUUID()}`, databaseClaimId, evidence.sourceId, evidence.articleRevisionId, evidence.url, evidence.stance, evidence.quote.trim(), JSON.stringify(evidence.locator), stableHash(evidence), evidence.observedAt, timestamp, ...projectGuardBindings));
+  // 先写项目行并判定命中，再写其余内容；没命中就抛错回滚。
+  // 之前每条语句都要挂一份 `WHERE EXISTS (...)` 守卫、多带 4 个绑定参数，
+  // 那是 D1 没有交互式事务时的绕法，现在不需要了。
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .prepare("UPDATE content_projects SET project_json = ?, immutable_hash = ?, state = 'RESEARCHING', version = version + 1, updated_at = ? WHERE id = ? AND version = ?")
+      .bind(JSON.stringify(nextProject), nextProjectHash, timestamp, input.projectId, input.expectedVersion)
+      .run();
+    if (!updated.meta.changes) throw new WorkflowError('项目已被其他用户修改。', 'VERSION_CONFLICT');
+
+    await tx.prepare('DELETE FROM evidence_links WHERE claim_id IN (SELECT id FROM claims WHERE project_id = ?)').bind(input.projectId).run();
+    await tx.prepare('DELETE FROM claims WHERE project_id = ?').bind(input.projectId).run();
+    await tx
+      .prepare(`
+        INSERT INTO research_snapshots (id, project_id, version, snapshot_json, snapshot_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .bind(research.snapshotId, input.projectId, nextVersion, JSON.stringify(research), research.approvedHash, timestamp)
+      .run();
+
+    for (const claim of claims) {
+      const databaseClaimId = `${input.projectId}_${claim.id}`;
+      const hasRefutation = claim.evidence.some((evidence) => evidence.stance === 'refutes');
+      const conflict = research.conflicts.find((item) => item.claimId === claim.id);
+      const verifiable = !['opinion', 'disclaimer'].includes(claim.kind);
+      const status = hasRefutation && !conflict?.resolution ? 'conflicted' : verifiable && claim.evidence.some((evidence) => evidence.stance === 'supports') ? 'supported' : 'draft';
+      await tx
+        .prepare(`
+          INSERT INTO claims (id, project_id, logical_id, text, kind, quantity_json, status, version, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        `)
+        .bind(databaseClaimId, input.projectId, claim.id, claim.text.trim(), claim.kind, claim.quantity ? JSON.stringify(claim.quantity) : null, status, timestamp, timestamp)
+        .run();
+      for (const evidence of claim.evidence) {
+        // article_id / article_revision_id 用子查询取：引用的文章可能已经被留存策略清掉，
+        // 取不到就写 NULL，而不是让整条快照写入失败。
+        await tx
+          .prepare(`
+            INSERT INTO evidence_links (id, claim_id, article_id, article_revision_id, source_url, stance, excerpt, locator_json, source_hash, observed_at, created_at)
+            VALUES (?, ?, (SELECT id FROM articles WHERE id = ? LIMIT 1), (SELECT id FROM article_revisions WHERE id = ? LIMIT 1), ?, ?, ?, ?, ?, ?, ?)
+          `)
+          .bind(`evidence_${crypto.randomUUID()}`, databaseClaimId, evidence.sourceId, evidence.articleRevisionId, evidence.url, evidence.stance, evidence.quote.trim(), JSON.stringify(evidence.locator), stableHash(evidence), evidence.observedAt, timestamp)
+          .run();
+      }
     }
-  }
-  statements.push(auditStatement(db, {
-    projectId: input.projectId,
-    actor: input.actor,
-    action: 'research.version_created',
-    entityType: 'research',
-    entityId: research.snapshotId,
-    beforeHash: project.project.research.approvedHash,
-    afterHash: research.approvedHash,
-    metadata: { version: nextVersion, approvalsInvalidated: true },
-    now: timestamp,
-    projectGuard: {
+
+    await auditStatement(tx, {
       projectId: input.projectId,
-      version: input.expectedVersion + 1,
-      updatedAt: timestamp,
-      state: 'RESEARCHING',
-      immutableHash: nextProjectHash,
-    },
-  }));
-  const [updated] = await db.batch(statements);
-  if (!updated.meta.changes) throw new WorkflowError('项目已被其他用户修改。', 'VERSION_CONFLICT');
-  return { project: (await loadContentProject(db, input.projectId))!, status: 200 as const };
+      actor: input.actor,
+      action: 'research.version_created',
+      entityType: 'research',
+      entityId: research.snapshotId,
+      beforeHash: project.project.research.approvedHash,
+      afterHash: research.approvedHash,
+      metadata: { version: nextVersion, approvalsInvalidated: true, trigger: input.trigger ?? 'human' },
+      now: timestamp,
+    }).run();
+    if ((input.trigger ?? 'human') === 'human') {
+      await pauseAutomationStatement(tx, input.projectId, '人工编辑了研究快照，自动化已暂停，需显式恢复。').run();
+    }
+
+    return { project: (await loadContentProject(tx, input.projectId))!, status: 200 as const };
+  });
 }
 
-export async function listProjectAudit(db: D1Database, projectId: string) {
+export async function listProjectAudit(db: SqlDatabase, projectId: string) {
   const result = await db
     .prepare(`
       SELECT id, actor_id, actor_role, action, entity_type, entity_id, before_hash,
              after_hash, metadata_json, request_id, created_at
-      FROM audit_events WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 200
+      FROM audit_events WHERE project_id = ? ORDER BY created_at DESC, seq DESC LIMIT 200
     `)
     .bind(projectId)
     .all();
-  return result.results.map((row) => ({
-    ...row,
-    metadata: JSON.parse(typeof row.metadata_json === 'string' ? row.metadata_json : '{}'),
-    metadata_json: undefined,
-  }));
+  return result.results.map((row) => {
+    const metadata = parseJsonColumn<unknown>(row.metadata_json);
+    if (metadata === null) console.warn(`审计事件 ${String(row.id)} 的 metadata_json 无法解析，已回退为空对象。`);
+    return { ...row, metadata: metadata ?? {}, metadata_json: undefined };
+  });
 }
 
-export async function evaluateProjectGates(db: D1Database, projectId: string): Promise<GateResult[]> {
+export async function evaluateProjectGates(db: SqlDatabase, projectId: string): Promise<GateResult[]> {
   const project = await loadContentProject(db, projectId);
   if (!project) return [];
   const [evidence, assetsResult, approvalsResult, qc, metrics] = await Promise.all([
@@ -533,8 +583,8 @@ export async function evaluateProjectGates(db: D1Database, projectId: string): P
       WHERE c.project_id = ? GROUP BY c.id, c.kind
     `).bind(projectId).all<{ id: string; kind: string; supports: number; refutes: number }>(),
     db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN rights_status != 'cleared' THEN 1 ELSE 0 END) AS uncleared FROM assets WHERE project_id = ?`).bind(projectId).first<{ total: number; uncleared: number | null }>(),
-    db.prepare(`SELECT kind, decision, subject_hash, actor_id, created_at FROM approvals WHERE project_id = ? ORDER BY created_at DESC, rowid DESC`).bind(projectId).all<{ kind: string; decision: string; subject_hash: string; actor_id: string; created_at: string }>(),
-    db.prepare(`SELECT status FROM qc_reports WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(projectId).first<{ status: string }>(),
+    db.prepare(`SELECT kind, decision, subject_hash, actor_id, created_at FROM approvals WHERE project_id = ? ORDER BY created_at DESC, seq DESC`).bind(projectId).all<{ kind: string; decision: string; subject_hash: string; actor_id: string; created_at: string }>(),
+    db.prepare(`SELECT status FROM qc_reports WHERE project_id = ? ORDER BY created_at DESC, seq DESC LIMIT 1`).bind(projectId).first<{ status: string }>(),
     db.prepare('SELECT COUNT(*) AS total FROM metric_snapshots WHERE project_id = ?').bind(projectId).first<{ total: number }>(),
   ]);
   const latestApproval = new Map<string, (typeof approvalsResult.results)[number]>();
@@ -575,7 +625,7 @@ export async function evaluateProjectGates(db: D1Database, projectId: string): P
 }
 
 export async function recordApproval(
-  db: D1Database,
+  db: SqlDatabase,
   input: {
     projectId: string;
     kind: 'research' | 'script' | 'qc' | 'publish';
@@ -583,6 +633,8 @@ export async function recordApproval(
     subjectHash: string;
     note: string;
     actor: Actor;
+    trigger?: AutomationTrigger;
+    policyId?: string | null;
   },
   now = new Date(),
 ) {
@@ -604,6 +656,7 @@ export async function recordApproval(
     return { error: '批准对象哈希已过期，请刷新后重试。', status: 409 as const };
   const timestamp = now.toISOString();
   const id = `approval_${crypto.randomUUID()}`;
+  const trigger = input.trigger ?? 'human';
   await db.batch([
     db.prepare(`
       INSERT INTO approvals (id, project_id, kind, decision, subject_hash, actor_id, actor_role, note, created_at)
@@ -616,15 +669,17 @@ export async function recordApproval(
       entityType: input.kind,
       entityId: input.projectId,
       afterHash: input.subjectHash,
-      metadata: { kind: input.kind, note: input.note },
+      metadata: { kind: input.kind, note: input.note, trigger, policyId: input.policyId ?? null },
       now: timestamp,
     }),
+    // 人工审批意味着有人接管了这个项目；自动化让位，直到有人显式恢复。
+    ...(trigger === 'human' ? [pauseAutomationStatement(db, input.projectId, `人工完成了 ${input.kind} 审批，自动化已暂停，需显式恢复。`)] : []),
   ]);
   return { approval: { id, ...input, actor: undefined }, status: 201 as const };
 }
 
 export async function enqueueJob(
-  db: D1Database,
+  db: SqlDatabase,
   input: {
     kind: 'ingestion' | 'voice' | 'preview' | 'render' | 'qc' | 'publish' | 'metrics';
     projectId?: string | null;
@@ -636,91 +691,116 @@ export async function enqueueJob(
     estimatedCostMicros?: number;
     availableAt?: string;
     actor: Actor;
+    trigger?: AutomationTrigger;
+    policyId?: string | null;
   },
   now = new Date(),
 ) {
-  const existing = await db
-    .prepare('SELECT id, status FROM jobs WHERE kind = ? AND idempotency_key = ? LIMIT 1')
-    .bind(input.kind, input.idempotencyKey)
-    .first<{ id: string; status: string }>();
-  if (existing) return { ...existing, created: false };
   const id = `job_${crypto.randomUUID()}`;
   const timestamp = now.toISOString();
   const availableAt = input.availableAt && !Number.isNaN(new Date(input.availableAt).valueOf()) ? input.availableAt : timestamp;
-  await db.batch([
-    db
+  return db.transaction(async (tx) => {
+    // ON CONFLICT DO NOTHING + RETURNING：插入成功就拿到行，撞上唯一索引就拿到空结果，
+    // 幂等判定和写入是同一条语句，中间没有别的请求能插进来。
+    const inserted = await tx
       .prepare(`
         INSERT INTO jobs
           (id, kind, project_id, payload_json, status, idempotency_key, attempt,
            max_attempts, priority, timeout_seconds, estimated_cost_micros, available_at, created_at, updated_at)
         VALUES (?, ?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (kind, idempotency_key) DO NOTHING
+        RETURNING id, status
       `)
-      .bind(id, input.kind, input.projectId ?? null, JSON.stringify(input.payload), input.idempotencyKey, input.maxAttempts ?? 5, input.priority ?? 50, input.timeoutSeconds ?? 900, input.estimatedCostMicros ?? 0, availableAt, timestamp, timestamp),
-    auditStatement(db, {
+      .bind(id, input.kind, input.projectId ?? null, JSON.stringify(input.payload), input.idempotencyKey, input.maxAttempts ?? 5, input.priority ?? 50, input.timeoutSeconds ?? 900, input.estimatedCostMicros ?? 0, availableAt, timestamp, timestamp)
+      .first<{ id: string; status: string }>();
+    if (!inserted) {
+      const existing = await tx
+        .prepare('SELECT id, status FROM jobs WHERE kind = ? AND idempotency_key = ? LIMIT 1')
+        .bind(input.kind, input.idempotencyKey)
+        .first<{ id: string; status: string }>();
+      if (!existing) throw new Error(`作业 ${input.kind}/${input.idempotencyKey} 入队冲突但回读不到既有行。`);
+      return { ...existing, created: false };
+    }
+    await auditStatement(tx, {
       projectId: input.projectId,
       actor: input.actor,
       action: 'job.enqueued',
       entityType: 'job',
       entityId: id,
       afterHash: stableHash(input.payload),
-      metadata: { kind: input.kind, idempotencyKey: input.idempotencyKey },
+      metadata: { kind: input.kind, idempotencyKey: input.idempotencyKey, trigger: input.trigger ?? 'human', policyId: input.policyId ?? null },
       now: timestamp,
-    }),
-  ]);
-  return { id, status: 'queued', created: true };
+    }).run();
+    return { id: inserted.id, status: inserted.status, created: true };
+  });
 }
 
 export async function enqueueIngestionRun(
-  db: D1Database,
+  db: SqlDatabase,
   input: {
     sourceConfigId: string;
     checkpoint?: string | null;
     idempotencyKey: string;
     actor: Actor;
+    trigger?: AutomationTrigger;
+    policyId?: string | null;
   },
   now = new Date(),
 ) {
-  const existing = await db
-    .prepare("SELECT j.id, j.status, ir.id AS ingestion_run_id FROM jobs j LEFT JOIN ingestion_runs ir ON ir.job_id = j.id WHERE j.kind = 'ingestion' AND j.idempotency_key = ? LIMIT 1")
-    .bind(input.idempotencyKey)
-    .first<{ id: string; status: string; ingestion_run_id: string | null }>();
-  if (existing) return { id: existing.id, status: existing.status, ingestionRunId: existing.ingestion_run_id, created: false };
   const id = `job_${crypto.randomUUID()}`;
   const ingestionRunId = `ingestion_${crypto.randomUUID()}`;
   const timestamp = now.toISOString();
   const payload = { sourceConfigId: input.sourceConfigId, ingestionRunId, checkpoint: input.checkpoint ?? null };
-  await db.batch([
-    db.prepare(`
+  return db.transaction(async (tx) => {
+    const inserted = await tx
+      .prepare(`
       INSERT INTO jobs (id, kind, payload_json, status, idempotency_key, attempt, max_attempts, available_at, created_at, updated_at)
       VALUES (?, 'ingestion', ?, 'queued', ?, 0, 5, ?, ?, ?)
-    `).bind(id, JSON.stringify(payload), input.idempotencyKey, timestamp, timestamp, timestamp),
-    db.prepare(`
+      ON CONFLICT (kind, idempotency_key) DO NOTHING
+      RETURNING id, status
+    `)
+      .bind(id, JSON.stringify(payload), input.idempotencyKey, timestamp, timestamp, timestamp)
+      .first<{ id: string; status: string }>();
+    if (!inserted) {
+      const existing = await tx
+        .prepare("SELECT j.id, j.status, ir.id AS ingestion_run_id FROM jobs j LEFT JOIN ingestion_runs ir ON ir.job_id = j.id WHERE j.kind = 'ingestion' AND j.idempotency_key = ? LIMIT 1")
+        .bind(input.idempotencyKey)
+        .first<{ id: string; status: string; ingestion_run_id: string | null }>();
+      if (!existing) throw new Error(`采集作业 ${input.idempotencyKey} 入队冲突但回读不到既有行。`);
+      return { id: existing.id, status: existing.status, ingestionRunId: existing.ingestion_run_id, created: false };
+    }
+    await tx.prepare(`
       INSERT INTO ingestion_runs (id, source_config_id, job_id, status, checkpoint_before, created_at)
       VALUES (?, ?, ?, 'queued', ?, ?)
-    `).bind(ingestionRunId, input.sourceConfigId, id, input.checkpoint ?? null, timestamp),
-    auditStatement(db, {
+    `).bind(ingestionRunId, input.sourceConfigId, id, input.checkpoint ?? null, timestamp).run();
+    await auditStatement(tx, {
       actor: input.actor,
       action: 'job.enqueued',
       entityType: 'job',
       entityId: id,
       afterHash: stableHash(payload),
-      metadata: { kind: 'ingestion', idempotencyKey: input.idempotencyKey, ingestionRunId },
+      metadata: { kind: 'ingestion', idempotencyKey: input.idempotencyKey, ingestionRunId, trigger: input.trigger ?? 'human', policyId: input.policyId ?? null },
       now: timestamp,
-    }),
-  ]);
-  return { id, status: 'queued', ingestionRunId, created: true };
+    }).run();
+    return { id, status: 'queued', ingestionRunId: ingestionRunId as string | null, created: true };
+  });
 }
 
 export async function leaseNextJob(
-  db: D1Database,
+  db: SqlDatabase,
   input: { workerId: string; kinds: string[]; leaseSeconds?: number; renderConcurrencyLimit?: number },
   now = new Date(),
 ) {
   if (!input.kinds.length) return null;
   const placeholders = input.kinds.map(() => '?').join(', ');
   const timestamp = now.toISOString();
-  const row = await db
-    .prepare(`
+  const concurrencyLimit = input.renderConcurrencyLimit ?? 2;
+
+  // 整个领取过程在一个事务里：FOR UPDATE SKIP LOCKED 直接锁住选中的那一行，
+  // 并发的其他 Worker 会跳过它去看下一条，不会撞在同一行上再靠守卫 UPDATE 淘汰。
+  return db.transaction(async (tx) => {
+    const row = await tx
+      .prepare(`
       SELECT id, timeout_seconds, kind, project_id, payload_json FROM jobs
       WHERE kind IN (${placeholders})
         AND ((status IN ('queued', 'retrying') AND available_at <= ?)
@@ -728,61 +808,92 @@ export async function leaseNextJob(
         AND (kind != 'voice' OR EXISTS (SELECT 1 FROM content_projects cp WHERE cp.id = jobs.project_id AND cp.state = 'SCRIPT_APPROVED'))
         AND (kind != 'preview' OR EXISTS (SELECT 1 FROM content_projects cp WHERE cp.id = jobs.project_id AND cp.state = 'ASSETS_READY'))
         AND (kind != 'render' OR EXISTS (SELECT 1 FROM content_projects cp WHERE cp.id = jobs.project_id AND cp.state = 'RENDER_QUEUED'))
-        AND (kind != 'publish' OR json_extract(payload_json, '$.operation') = 'withdraw' OR (
+        AND (kind != 'publish' OR payload_json ->> 'operation' = 'withdraw' OR (
           EXISTS (SELECT 1 FROM content_projects cp WHERE cp.id = jobs.project_id AND cp.state = 'PUBLISH_SCHEDULED')
-          AND EXISTS (SELECT 1 FROM publish_jobs pj WHERE pj.id = json_extract(jobs.payload_json, '$.publishJobId') AND pj.status = 'scheduled')
+          AND EXISTS (SELECT 1 FROM publish_jobs pj WHERE pj.id = jobs.payload_json ->> 'publishJobId' AND pj.status = 'scheduled')
         ))
         AND (kind NOT IN ('preview', 'render') OR (SELECT COUNT(*) FROM jobs active WHERE active.kind IN ('preview', 'render') AND active.status = 'leased' AND active.lease_expires_at > ?) < ?)
-      ORDER BY priority DESC, available_at ASC, created_at ASC LIMIT 1
+      ORDER BY priority DESC, available_at ASC, created_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
     `)
-    .bind(...input.kinds, timestamp, timestamp, timestamp, input.renderConcurrencyLimit ?? 2)
-    .first<{ id: string; timeout_seconds: number; kind: string; project_id: string | null; payload_json: string }>();
-  if (!row) return null;
-  const leaseExpiresAt = new Date(now.valueOf() + Math.min(input.leaseSeconds ?? 300, row.timeout_seconds) * 1000).toISOString();
-  const statements: D1PreparedStatement[] = [db
-    .prepare(`
-      UPDATE jobs SET status = 'leased', lease_owner = ?, lease_expires_at = ?,
-        attempt = attempt + 1, updated_at = ?
-      WHERE id = ? AND ((status IN ('queued', 'retrying') AND available_at <= ?)
-        OR (status = 'leased' AND lease_expires_at <= ?))
-        AND (kind != 'preview' OR EXISTS (SELECT 1 FROM content_projects cp WHERE cp.id = jobs.project_id AND cp.state = 'ASSETS_READY'))
-        AND (kind != 'render' OR EXISTS (SELECT 1 FROM content_projects cp WHERE cp.id = jobs.project_id AND cp.state = 'RENDER_QUEUED'))
-        AND (kind != 'publish' OR json_extract(payload_json, '$.operation') = 'withdraw' OR (
-          EXISTS (SELECT 1 FROM content_projects cp WHERE cp.id = jobs.project_id AND cp.state = 'PUBLISH_SCHEDULED')
-          AND EXISTS (SELECT 1 FROM publish_jobs pj WHERE pj.id = json_extract(jobs.payload_json, '$.publishJobId') AND pj.status = 'scheduled')
-        ))
-        AND (kind NOT IN ('preview', 'render') OR (SELECT COUNT(*) FROM jobs active WHERE active.id != jobs.id AND active.kind IN ('preview', 'render') AND active.status = 'leased' AND active.lease_expires_at > ?) < ?)
-    `)
-    .bind(input.workerId, leaseExpiresAt, timestamp, row.id, timestamp, timestamp, timestamp, input.renderConcurrencyLimit ?? 2)];
-  if (row.kind === 'render' && row.project_id) {
-    statements.push(db.prepare(`
-      UPDATE content_projects SET state = 'RENDERING', version = version + 1, updated_at = ?
-      WHERE id = ? AND state = 'RENDER_QUEUED'
-        AND EXISTS (SELECT 1 FROM jobs WHERE id = ? AND status = 'leased' AND lease_owner = ?)
-    `).bind(timestamp, row.project_id, row.id, input.workerId));
-  }
-  if (row.kind === 'publish') {
-    const payload = JSON.parse(row.payload_json) as { publishJobId?: string; operation?: string };
-    if (payload.publishJobId && payload.operation !== 'withdraw') {
-      statements.push(db.prepare(`
-        UPDATE publish_jobs SET status = 'publishing', updated_at = ?
-        WHERE id = ? AND status = 'scheduled'
-          AND EXISTS (SELECT 1 FROM jobs WHERE id = ? AND status = 'leased' AND lease_owner = ?)
-      `).bind(timestamp, payload.publishJobId, row.id, input.workerId));
+      .bind(...input.kinds, timestamp, timestamp, timestamp, concurrencyLimit)
+      .first<{ id: string; timeout_seconds: number; kind: string; project_id: string | null; payload_json: unknown }>();
+    if (!row) return null;
+
+    const rowPayload = parseJsonColumn<Record<string, unknown>>(row.payload_json);
+    if (!rowPayload) {
+      // 隔离读不出 payload 的作业：进 DLQ 并返回 null，否则一条坏行会让租约接口反复失败、整个队列卡死。
+      await tx
+        .prepare("UPDATE jobs SET status = 'dead_letter', last_error = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?")
+        .bind('payload_json 无法解析，作业已隔离到死信队列。', timestamp, row.id)
+        .run();
+      console.error(`作业 ${row.id} 的 payload_json 已损坏，已标记 dead_letter。`);
+      return null;
     }
-  }
-  const [updated] = await db.batch(statements);
-  if (!updated.meta.changes) return null;
-  const job = await db
-    .prepare('SELECT * FROM jobs WHERE id = ?')
-    .bind(row.id)
-    .first<Record<string, unknown>>();
-  return job ? { ...job, payload: JSON.parse(String(job.payload_json)), payload_json: undefined } : null;
+
+    const leaseExpiresAt = new Date(now.valueOf() + Math.min(input.leaseSeconds ?? 300, row.timeout_seconds) * 1000).toISOString();
+    // 行已被锁住，这里不需要把上面的条件再抄一遍做守卫。
+    await tx
+      .prepare(`
+        UPDATE jobs SET status = 'leased', lease_owner = ?, lease_expires_at = ?,
+          attempt = attempt + 1, updated_at = ?
+        WHERE id = ?
+      `)
+      .bind(input.workerId, leaseExpiresAt, timestamp, row.id)
+      .run();
+
+    if (row.kind === 'render' && row.project_id) {
+      await tx
+        .prepare("UPDATE content_projects SET state = 'RENDERING', version = version + 1, updated_at = ? WHERE id = ? AND state = 'RENDER_QUEUED'")
+        .bind(timestamp, row.project_id)
+        .run();
+    }
+    if (row.kind === 'publish') {
+      const payload = rowPayload as { publishJobId?: string; operation?: string };
+      if (payload.publishJobId && payload.operation !== 'withdraw') {
+        await tx
+          .prepare("UPDATE publish_jobs SET status = 'publishing', updated_at = ? WHERE id = ? AND status = 'scheduled'")
+          .bind(timestamp, payload.publishJobId)
+          .run();
+      }
+    }
+
+    const job = await tx.prepare('SELECT * FROM jobs WHERE id = ?').bind(row.id).first<Record<string, unknown>>();
+    return job ? { ...job, payload: rowPayload, payload_json: undefined } : null;
+  });
+}
+
+/**
+ * 续约：长任务（尤其是成片渲染）在执行期间周期性调用，避免租约到期后被另一个 Worker 重复领取。
+ * 续约时长仍受作业自身 timeout_seconds 约束。
+ */
+export async function renewJobLease(
+  db: SqlDatabase,
+  input: { id: string; workerId: string; leaseSeconds?: number },
+  now = new Date(),
+) {
+  const row = await db
+    .prepare("SELECT timeout_seconds FROM jobs WHERE id = ? AND status = 'leased' AND lease_owner = ? AND lease_expires_at > ?")
+    .bind(input.id, input.workerId, now.toISOString())
+    .first<{ timeout_seconds: number }>();
+  if (!row) return { error: '作业不存在、未租约、租约已过期或不属于该 Worker。', status: 409 as const };
+  const leaseExpiresAt = new Date(now.valueOf() + Math.min(input.leaseSeconds ?? 300, row.timeout_seconds) * 1000).toISOString();
+  const updated = await db
+    .prepare("UPDATE jobs SET lease_expires_at = ?, updated_at = ? WHERE id = ? AND status = 'leased' AND lease_owner = ?")
+    .bind(leaseExpiresAt, now.toISOString(), input.id, input.workerId)
+    .run();
+  if (!updated.meta.changes) return { error: '作业租约已过期或已由其他 Worker 接管。', status: 409 as const };
+  return { id: input.id, leaseExpiresAt, status: 200 as const };
 }
 
 export async function finishJob(
-  db: D1Database,
-  input: { id: string; workerId: string; succeeded: boolean; result?: unknown; error?: string; retryDelaySeconds?: number },
+  db: SqlDatabase,
+  /**
+   * terminal=true 表示失败不可重试（例如自动 QC 未通过）：直接进 DLQ，
+   * 不要再烧一轮渲染成本去复现同一个确定性失败。
+   */
+  input: { id: string; workerId: string; succeeded: boolean; result?: unknown; error?: string; retryDelaySeconds?: number; terminal?: boolean },
   now = new Date(),
 ) {
   const row = await db
@@ -791,7 +902,7 @@ export async function finishJob(
     .first<{ attempt: number; max_attempts: number; kind: string; payload_json: string; project_id: string | null }>();
   if (!row) return { error: '作业不存在、未租约或租约不属于该 Worker。', status: 409 as const };
   const timestamp = now.toISOString();
-  const status = input.succeeded ? 'succeeded' : row.attempt >= row.max_attempts ? 'dead_letter' : 'retrying';
+  const status = input.succeeded ? 'succeeded' : input.terminal || row.attempt >= row.max_attempts ? 'dead_letter' : 'retrying';
   const availableAt = new Date(now.valueOf() + (input.retryDelaySeconds ?? Math.min(900, 2 ** row.attempt * 15)) * 1000).toISOString();
   const costMicros = input.result && typeof input.result === 'object' && Number.isInteger((input.result as { costMicros?: unknown }).costMicros)
     ? Math.max(0, Number((input.result as { costMicros: number }).costMicros))
@@ -813,7 +924,7 @@ export async function finishJob(
     `)
     .bind(status, input.result === undefined ? null : JSON.stringify(input.result), outputObjectKey, logObjectKey, durationMs, input.error ?? null, costMicros, availableAt, timestamp, input.id, input.workerId)];
   if (row.kind === 'ingestion') {
-    const payload = JSON.parse(row.payload_json) as { ingestionRunId?: string; sourceConfigId?: string };
+    const payload = parseJsonColumn<{ ingestionRunId?: string; sourceConfigId?: string }>(row.payload_json) ?? {};
     if (payload.ingestionRunId && !input.succeeded) {
       statements.push(db.prepare(`UPDATE ingestion_runs SET status = ?, error_json = ?, finished_at = ? WHERE id = ? AND ${jobGuardSql}`).bind(
         status === 'dead_letter' ? 'failed' : 'queued',
@@ -831,10 +942,95 @@ export async function finishJob(
     statements.push(db.prepare(`UPDATE content_projects SET state = ?, version = version + 1, updated_at = ? WHERE id = ? AND state = 'RENDERING' AND ${jobGuardSql}`).bind(input.succeeded ? 'QC_PENDING' : status === 'dead_letter' ? 'FAILED' : 'RENDER_QUEUED', timestamp, row.project_id, ...jobGuardBindings));
   }
   if (row.kind === 'publish' && !input.succeeded) {
-    const payload = JSON.parse(row.payload_json) as { publishJobId?: string; operation?: string };
+    const payload = parseJsonColumn<{ publishJobId?: string; operation?: string }>(row.payload_json) ?? {};
     if (payload.publishJobId && payload.operation !== 'withdraw') statements.push(db.prepare(`UPDATE publish_jobs SET status = ?, updated_at = ? WHERE id = ? AND ${jobGuardSql}`).bind(status === 'dead_letter' ? 'failed' : 'scheduled', timestamp, payload.publishJobId, ...jobGuardBindings));
   }
   const [updated] = await db.batch(statements);
   if (!updated.meta.changes) return { error: '作业租约已过期或已由其他 Worker 完成。', status: 409 as const };
   return { id: input.id, status, attempt: row.attempt, maxAttempts: row.max_attempts };
+}
+
+/**
+ * 创建发布任务：校验状态与 G7、绑定成片资产、写 publish_jobs 与 publish 作业。
+ *
+ * 路由和编排引擎共用这一份实现——发布是最不能有两套判定的地方，
+ * 复制一份到引擎里迟早会和路由这边走偏。
+ */
+export async function schedulePublishJob(
+  db: SqlDatabase,
+  input: {
+    projectId: string;
+    channel: 'package' | 'youtube';
+    title: string;
+    description?: string;
+    tags?: string[];
+    coverAssetId?: string | null;
+    accountId?: string | null;
+    scheduledAt?: string | null;
+    privacyStatus?: string;
+    correctionOfId?: string | null;
+    requestIdempotencyKey?: string;
+    actor: Actor;
+    trigger?: AutomationTrigger;
+    policyId?: string | null;
+  },
+  now = new Date(),
+) {
+  const project = await loadContentProject(db, input.projectId);
+  if (!project) return { error: '项目不存在。', status: 404 as const };
+  if (project.state !== 'PUBLISH_SCHEDULED') return { error: '项目必须先完成独立发布批准并进入 PUBLISH_SCHEDULED。', status: 409 as const };
+  const gates = await evaluateProjectGates(db, input.projectId);
+  if (!gates.find((gate) => gate.code === 'G7_PUBLISH_APPROVAL')?.passed) return { error: '独立发布批准未通过或已过期。', status: 409 as const };
+  const asset = await db
+    .prepare("SELECT id, object_key, byte_size, sha256 FROM assets WHERE project_id = ? AND media_type = 'video/mp4' AND asset_role = 'render-output' AND rights_status = 'cleared' ORDER BY created_at DESC LIMIT 1")
+    .bind(input.projectId)
+    .first<{ id: string; object_key: string; byte_size: number; sha256: string }>();
+  if (!asset) return { error: '没有通过版权检查的 MP4 成片。', status: 409 as const };
+  const accountId = input.accountId?.trim() || project.project.distribution.accountId || 'default';
+  const scheduledAt = input.scheduledAt ?? project.project.distribution.scheduledAt ?? null;
+  const tags = input.tags ?? project.project.distribution.tags ?? [];
+  const coverAssetId = input.coverAssetId ?? project.project.distribution.coverAssetId ?? null;
+  const coverAsset = coverAssetId
+    ? await db.prepare("SELECT id, object_key, media_type, byte_size, sha256 FROM assets WHERE id = ? AND project_id = ? AND media_type LIKE 'image/%' AND rights_status = 'cleared'").bind(coverAssetId, input.projectId).first<{ id: string; object_key: string; media_type: string; byte_size: number; sha256: string }>()
+    : null;
+  if (coverAssetId && !coverAsset) return { error: '封面资产不存在、不是图片或版权未清除。', status: 422 as const };
+  const logicalKey = stableHash({ projectVersion: project.version, channel: input.channel, accountId, scheduledAt });
+  const existing = await db.prepare('SELECT id, status FROM publish_jobs WHERE channel = ? AND logical_key = ? LIMIT 1').bind(input.channel, logicalKey).first<{ id: string; status: string }>();
+  if (existing) return { publishJob: existing, replayed: true as const, status: 200 as const };
+  if (input.correctionOfId) {
+    const corrected = await db.prepare("SELECT id FROM publish_jobs WHERE id = ? AND project_id = ? AND status IN ('published', 'withdrawn') LIMIT 1").bind(input.correctionOfId, input.projectId).first();
+    if (!corrected) return { error: 'correctionOfId 必须指向本项目已发布或已撤回的版本。', status: 422 as const };
+  }
+  const publishJobId = `publish_${crypto.randomUUID()}`;
+  const workerJobId = `job_${crypto.randomUUID()}`;
+  const timestamp = now.toISOString();
+  const title = input.title.trim();
+  const description = input.description?.trim() ?? '';
+  // 作业 payload 是跨进程契约，统一用驼峰：直接塞数据库行会把 object_key/byte_size
+  // 这种列名泄进 payload 和发布包清单，Worker 侧读的却是 objectKey。
+  const assetPayload = { id: asset.id, objectKey: asset.object_key, byteSize: asset.byte_size, sha256: asset.sha256 };
+  const coverAssetPayload = coverAsset
+    ? { id: coverAsset.id, objectKey: coverAsset.object_key, mediaType: coverAsset.media_type, byteSize: coverAsset.byte_size, sha256: coverAsset.sha256 }
+    : null;
+  const payload = { publishJobId, projectId: input.projectId, operation: 'publish', channel: input.channel, accountId, asset: assetPayload, coverAsset: coverAssetPayload, title, description, tags, scheduledAt, privacyStatus: input.privacyStatus ?? 'private', correctionOfId: input.correctionOfId ?? null, snapshotHash: project.project.render.snapshotHash, sources: project.project.research.claims.flatMap((claim) => claim.evidence.map((evidence) => evidence.url)) };
+  const trigger = input.trigger ?? 'human';
+  try {
+    await db.batch([
+      db.prepare("INSERT INTO publish_jobs (id, project_id, channel, logical_key, status, account_id, title, description, tags_json, cover_asset_id, scheduled_at, correction_of_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(publishJobId, input.projectId, input.channel, logicalKey, accountId, title, description, JSON.stringify(tags), coverAssetId, scheduledAt, input.correctionOfId ?? null, timestamp, timestamp),
+      db.prepare(`
+        INSERT INTO jobs
+          (id, kind, project_id, payload_json, status, idempotency_key, attempt,
+           max_attempts, priority, timeout_seconds, estimated_cost_micros, available_at, created_at, updated_at)
+        VALUES (?, 'publish', ?, ?, 'queued', ?, 0, 5, 50, 900, 0, ?, ?, ?)
+      `).bind(workerJobId, input.projectId, JSON.stringify(payload), `publish:${input.channel}:${logicalKey}`, scheduledAt ?? timestamp, timestamp, timestamp),
+      auditStatement(db, { projectId: input.projectId, actor: input.actor, action: 'job.enqueued', entityType: 'job', entityId: workerJobId, afterHash: stableHash(payload), metadata: { kind: 'publish', idempotencyKey: `publish:${input.channel}:${logicalKey}`, requestIdempotencyKey: input.requestIdempotencyKey ?? null, trigger, policyId: input.policyId ?? null }, now: timestamp }),
+      auditStatement(db, { projectId: input.projectId, actor: input.actor, action: 'publish.scheduled', entityType: 'publish_job', entityId: publishJobId, afterHash: stableHash(payload), metadata: { channel: input.channel, accountId, scheduledAt, coverAssetId, correctionOfId: input.correctionOfId ?? null, trigger, policyId: input.policyId ?? null }, now: timestamp }),
+      ...(trigger === 'human' ? [pauseAutomationStatement(db, input.projectId, '人工创建了发布任务，自动化已暂停，需显式恢复。')] : []),
+    ]);
+    return { publishJob: { id: publishJobId, status: 'scheduled', channel: input.channel }, job: { id: workerJobId, status: 'queued', created: true }, status: 202 as const };
+  } catch {
+    const replay = await db.prepare('SELECT id, status FROM publish_jobs WHERE channel = ? AND logical_key = ? LIMIT 1').bind(input.channel, logicalKey).first<{ id: string; status: string }>();
+    if (replay) return { publishJob: replay, replayed: true as const, status: 200 as const };
+    return { error: '发布任务入队失败。', status: 503 as const };
+  }
 }

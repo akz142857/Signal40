@@ -6,11 +6,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { ProjectRecord } from '@/lib/control-plane';
+import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 
 type Snapshot = { id: string; capturedAt: string; metrics: { views?: number; averageViewDurationSeconds?: number; completionRate?: number; likes?: number; comments?: number; shares?: number } };
 type PublishJob = { id: string; channel: string; status: string };
 
 export function MetricsPanel({ project, onSaved, onMessage }: { project: ProjectRecord; onSaved: () => Promise<void>; onMessage: (message: string) => void }) {
+  // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关。
+  useSession();
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
   const [views, setViews] = useState('');
@@ -36,7 +39,7 @@ export function MetricsPanel({ project, onSaved, onMessage }: { project: Project
     try {
       const response = await fetch(`/api/v1/projects/${project.id}/metrics`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': `manual:${publishJob.id}:${snapshots.length + 1}`, 'x-signal-role': 'auditor', 'x-signal-actor-id': 'local-auditor' },
+        headers: { 'content-type': 'application/json', 'idempotency-key': `manual:${publishJob.id}:${snapshots.length + 1}`, ...devIdentityHeaders({ role: 'auditor', id: 'local-auditor' }) },
         body: JSON.stringify({ publishJobId: publishJob.id, metrics: { views: Number(views), completionRate: Number(completionRate) / 100, averageViewDurationSeconds: Number(averageViewDuration) }, attribution: { source: 'manual', window: snapshots.length === 0 ? '2h' : snapshots.length === 1 ? '24h' : '7d' } }),
       });
       const payload = (await response.json()) as { error?: string; snapshot?: Snapshot };

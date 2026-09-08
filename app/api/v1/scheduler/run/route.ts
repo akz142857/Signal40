@@ -1,33 +1,21 @@
-import { env } from 'cloudflare:workers';
-import { enqueueIngestionRun, type Actor } from '@/lib/control-plane';
-import { scheduledMinuteSince } from '@/lib/schedule';
-import { purgeExpiredSourcePayloads } from '@/lib/source-retention';
+import { config, db, storage } from '@/lib/runtime';
+import { runAutomationTick } from '@/lib/orchestrator';
 import { authorizeWorker } from '@/lib/worker-auth';
 
+/**
+ * 手动触发一轮编排。常规运行由 `scripts/scheduler.ts` 常驻进程负责，
+ * 这里只是同一份逻辑的薄封装：工作量收得更紧，避免 HTTP 超时。
+ */
 export async function POST(request: Request) {
-  if (!(await authorizeWorker(request, env.SCHEDULER_TOKEN))) return Response.json({ error: '调度器未授权。' }, { status: 401 });
-  const now = new Date();
-  const retention = await purgeExpiredSourcePayloads(env.DB, env.MEDIA, now);
-  const rows = await env.DB.prepare(`
-    SELECT sc.id, sc.checkpoint, sc.schedule_cron, sc.created_at,
-      COALESCE(MAX(ir.created_at), sc.created_at) AS last_run_at
-    FROM source_configs sc LEFT JOIN ingestion_runs ir ON ir.source_config_id = sc.id
-    WHERE sc.enabled = 1 AND sc.rights_status = 'approved' AND sc.schedule_cron IS NOT NULL
-    GROUP BY sc.id, sc.checkpoint, sc.schedule_cron, sc.created_at
-    LIMIT 500
-  `).all<{ id: string; checkpoint: string | null; schedule_cron: string; created_at: string; last_run_at: string }>();
-  const actor: Actor = { id: 'source-scheduler', email: 'scheduler@signal40.internal', role: 'admin' };
-  const queued = [];
-  for (const source of rows.results) {
-    const scheduledMinute = scheduledMinuteSince(source.schedule_cron, source.last_run_at, now);
-    if (!scheduledMinute) continue;
-    const job = await enqueueIngestionRun(env.DB, {
-      sourceConfigId: source.id,
-      checkpoint: source.checkpoint,
-      idempotencyKey: `schedule:${source.id}:${scheduledMinute}`,
-      actor,
-    }, now);
-    queued.push({ sourceConfigId: source.id, scheduledMinute, jobId: job.id, ingestionRunId: job.ingestionRunId, created: job.created });
-  }
-  return Response.json({ checked: rows.results.length, queued, retention });
+  if (!(await authorizeWorker(request, config.schedulerToken))) return Response.json({ error: '调度器未授权。' }, { status: 401 });
+  const result = await runAutomationTick({
+    db,
+    storage,
+    trigger: 'manual',
+    automationActorId: config.automationActorId,
+    monthlyRenderBudgetMicros: Number(config.monthlyRenderBudgetMicros ?? 0),
+    notify: { url: config.attentionWebhookUrl, secret: config.webhookSecret },
+    limits: { projects: 5, projectCreations: 1, publishes: 1, notifications: 5 },
+  });
+  return Response.json(result);
 }

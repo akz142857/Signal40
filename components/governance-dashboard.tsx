@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Beaker, Check, FlaskConical, Plus, Shield, UsersRound, X } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
@@ -20,6 +21,8 @@ async function readJson<T>(response: Response) {
 }
 
 export function GovernanceDashboard() {
+  // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关。
+  useSession();
   const [members, setMembers] = useState<Member[]>([]);
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [calibrations, setCalibrations] = useState<Calibration[]>([]);
@@ -32,7 +35,7 @@ export function GovernanceDashboard() {
     const [memberPayload, experimentPayload, calibrationPayload] = await Promise.all([
       readJson<{ members: Member[] }>(await fetch('/api/v1/team-members', { cache: 'no-store' })),
       readJson<{ experiments: Experiment[] }>(await fetch('/api/v1/experiments', { cache: 'no-store' })),
-      readJson<{ runs: Calibration[] }>(await fetch('/api/v1/calibration-runs', { cache: 'no-store', headers: { 'x-signal-role': 'researcher', 'x-signal-actor-id': 'local-researcher' } })),
+      readJson<{ runs: Calibration[] }>(await fetch('/api/v1/calibration-runs', { cache: 'no-store', headers: devIdentityHeaders({ role: 'researcher', id: 'local-researcher' }) })),
     ]);
     setMembers(memberPayload.members);
     setExperiments(experimentPayload.experiments);
@@ -78,7 +81,7 @@ export function GovernanceDashboard() {
 
   const createCalibration = async () => {
     try {
-      await readJson(await fetch('/api/v1/calibration-runs', { method: 'POST', headers: { 'content-type': 'application/json', 'x-signal-role': 'researcher', 'x-signal-actor-id': 'local-researcher' }, body: JSON.stringify({ algorithmVersion: calibrationForm.algorithmVersion, datasetLabel: calibrationForm.datasetLabel, caseCount: Number(calibrationForm.caseCount), metrics: { gateAccuracy: Number(calibrationForm.gateAccuracy) }, note: '候选算法离线评估，等待独立编辑审批。' }) }));
+      await readJson(await fetch('/api/v1/calibration-runs', { method: 'POST', headers: { 'content-type': 'application/json', ...devIdentityHeaders({ role: 'researcher', id: 'local-researcher' }) }, body: JSON.stringify({ algorithmVersion: calibrationForm.algorithmVersion, datasetLabel: calibrationForm.datasetLabel, caseCount: Number(calibrationForm.caseCount), metrics: { gateAccuracy: Number(calibrationForm.gateAccuracy) }, note: '候选算法离线评估，等待独立编辑审批。' }) }));
       setCalibrationForm((current) => ({ ...current, datasetLabel: '' }));
       setMessage('校准候选已登记；提交者不能审批自己的结果。');
       await refresh();
@@ -87,7 +90,7 @@ export function GovernanceDashboard() {
 
   const decideCalibration = async (run: Calibration, decision: 'approved' | 'rejected') => {
     try {
-      await readJson(await fetch(`/api/v1/calibration-runs/${run.id}/decision`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-signal-role': 'editor', 'x-signal-actor-id': 'local-calibration-editor' }, body: JSON.stringify({ decision, note: decision === 'approved' ? '已独立核对样本量、数据口径与离线指标。' : '离线证据不足，拒绝进入线上评分候选。' }) }));
+      await readJson(await fetch(`/api/v1/calibration-runs/${run.id}/decision`, { method: 'POST', headers: { 'content-type': 'application/json', ...devIdentityHeaders({ role: 'editor', id: 'local-calibration-editor' }) }, body: JSON.stringify({ decision, note: decision === 'approved' ? '已独立核对样本量、数据口径与离线指标。' : '离线证据不足，拒绝进入线上评分候选。' }) }));
       await refresh();
     } catch (error) { setMessage(error instanceof Error ? error.message : '校准审批失败。'); }
   };

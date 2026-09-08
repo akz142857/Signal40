@@ -1,12 +1,11 @@
-import { env } from 'cloudflare:workers';
+import { db, resolveRequestActor } from '@/lib/runtime';
 import { recordApproval } from '@/lib/control-plane';
-import { resolveActor } from '@/lib/workflow';
 
 const kinds = ['research', 'script', 'qc', 'publish'] as const;
 const decisions = ['approved', 'changes_requested', 'rejected'] as const;
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   let body: { kind?: string; decision?: string; subjectHash?: string; note?: string };
   try {
@@ -19,7 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!body.subjectHash || !body.note || body.note.trim().length < 10)
     return Response.json({ error: 'subjectHash 必填，备注至少 10 个字符。' }, { status: 422 });
   const { id } = await context.params;
-  const result = await recordApproval(env.DB, {
+  const result = await recordApproval(db, {
     projectId: id,
     kind: body.kind as (typeof kinds)[number],
     decision: body.decision as (typeof decisions)[number],

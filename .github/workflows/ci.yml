@@ -11,7 +11,28 @@ permissions:
 jobs:
   application:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: signal40
+          POSTGRES_PASSWORD: signal40
+          POSTGRES_DB: signal40
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U signal40 -d signal40"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgres://signal40:signal40@127.0.0.1:5432/signal40
+      # 对象存储契约测试对着真实的 R2 测试桶跑。仓库没配这组 secret 时
+      # S3_ENDPOINT 为空，那三个用例自动跳过，其余流水线照常。
+      # 不用本地替身：分片、元数据、校验和的行为差异，替身测出来的结论不作数。
+      S3_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      S3_REGION: auto
+      S3_BUCKET: ${{ secrets.R2_TEST_BUCKET }}
+      S3_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      S3_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,18 +42,15 @@ jobs:
       - run: npm ci
       - run: npm audit --omit=dev
       - run: npm run lint
+      # 存储契约测试靠上面的 R2 secret 启用；没配就自动跳过。
       - run: npm test
       - run: npm run test:evaluation
-      - run: npm run db:local:migrate
-      - run: npm run db:local:migrate
+      - run: npm run db:migrate
+      # 再跑一次验证迁移是幂等的。
+      - run: npm run db:migrate
       - run: npm run drill:restore
       - run: npm run build
       - run: npm run test:render
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: migration-and-build-logs
-          path: .wrangler/logs
 
   render-worker-image:
     runs-on: ubuntu-latest
@@ -50,3 +68,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: docker run --rm --shm-size=1g --entrypoint npm signal40-render-worker:ci run test:render
+
+  control-plane-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: signal40-control-plane:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -6,6 +6,21 @@
 
 定位：从财经信号发现到视频发布与效果回流的完整生产系统
 
+> **架构变更说明（2026-09-08）**
+>
+> 本文档是 1.0 版设计记录，正文中的平台选型描述（Cloudflare Workers、D1、R2）已经不再是当前实现。
+> 控制面现在是普通 Node 进程（`vinext start`），数据库是 PostgreSQL，对象存储是 S3 兼容服务；
+> 作业队列仍是数据库租约，但改用 `SELECT ... FOR UPDATE SKIP LOCKED`。
+> 业务流程、门禁 G0–G8、状态机与数据模型未变。当前架构以 `CLAUDE.md` 和 `docs/IMPLEMENTATION_STATUS.md` 为准。
+> 下文保留原始平台描述作为历史记录，不再逐处改写。
+>
+> **自动化补充（2026-09-08）**：本文默认每一步由人在界面里点。之后新增了常驻调度器
+> （`scripts/scheduler.ts`）与编排引擎（`lib/orchestrator.ts`），机械步骤默认自动推进，
+> 四道问责门禁（G3/G4/G6/G7）默认仍需人确认。设计与边界见
+> [docs/UI_AND_AUTOMATION_PLAN.md](UI_AND_AUTOMATION_PLAN.md)——门禁判定本身没有变，
+> 引擎只是替人按按钮。
+
+
 ## 1. 结论与建设原则
 
 Signal 40 的最终形态不是“选题榜 + `project.json` 导出器”，而是一套可持续运行、可审计、可恢复的财经视频生产系统：

@@ -1,27 +1,32 @@
 #!/usr/bin/env bash
+# 恢复演练：备份 → 恢复到隔离库 → 逐表比对行数 → 清理隔离库。
+# 全程不触碰源库。
 set -euo pipefail
 
-drill_root="$(mktemp -d /private/tmp/signal40-restore-drill.XXXXXX)"
-cleanup() { rm -rf "$drill_root"; }
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib-pg.sh
+source "$script_dir/lib-pg.sh"
+require_database_url
+
+drill_root="$(mktemp -d "${TMPDIR:-/tmp}/signal40-restore-drill.XXXXXX")"
+target_db="signal40_restore_drill_$(date -u +%Y%m%d%H%M%S)"
+maintenance_url="${DATABASE_URL%/*}/postgres"
+
+cleanup() {
+  PG_WORK_DIR="$drill_root" pg_run psql \
+    --dbname="$(pg_url_for_tool psql "$maintenance_url")" \
+    -c "DROP DATABASE IF EXISTS \"$target_db\"" >/dev/null 2>&1 || true
+  rm -rf "$drill_root"
+}
 trap cleanup EXIT
 
 backup_dir="$drill_root/backup"
-restore_state="$drill_root/restored-state"
-./scripts/backup-local.sh "$backup_dir"
+"$script_dir/backup-local.sh" "$backup_dir"
 (cd "$backup_dir" && shasum -a 256 -c SHA256SUMS)
 
-CONFIRM_RESTORE=isolated RESTORE_PERSIST_TO="$restore_state" ./scripts/restore-local.sh "$backup_dir"
+CONFIRM_RESTORE=isolated RESTORE_TARGET_DB="$target_db" "$script_dir/restore-local.sh" "$backup_dir"
 
-source_db="$(find .wrangler/state/v3/d1 -name '*.sqlite' ! -name 'metadata.sqlite' -print -quit)"
-restored_db="$(find "$restore_state/v3/d1" -name '*.sqlite' ! -name 'metadata.sqlite' -print -quit)"
-if [[ -z "$source_db" || -z "$restored_db" ]]; then
-  printf 'Restore drill could not locate source or restored D1 database.\n' >&2
-  exit 4
-fi
+node --experimental-strip-types "$script_dir/verify-restored-pg.ts" \
+  "$DATABASE_URL" "${DATABASE_URL%/*}/$target_db"
 
-node --experimental-strip-types scripts/verify-restored-d1.ts "$source_db" "$restored_db"
-if [[ -f "$backup_dir/local-r2-state.tar.gz" ]]; then
-  mkdir -p "$drill_root/restored-r2"
-  tar -xzf "$backup_dir/local-r2-state.tar.gz" -C "$drill_root/restored-r2"
-fi
-printf 'Isolated D1/R2 restore drill passed; production state was not modified.\n'
+printf '隔离恢复演练通过；源库未被修改。\n'

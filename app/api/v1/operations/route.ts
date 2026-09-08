@@ -1,5 +1,4 @@
-import { env } from 'cloudflare:workers';
-import { resolveActor } from '@/lib/workflow';
+import { db, resolveRequestActor } from '@/lib/runtime';
 
 function percentile(values: number[], quantile: number) {
   if (!values.length) return null;
@@ -8,15 +7,15 @@ function percentile(values: number[], quantile: number) {
 }
 
 export async function GET(request: Request) {
-  const actor = await resolveActor(request, env.DB, env.BOOTSTRAP_ADMIN_EMAILS);
+  const actor = await resolveRequestActor(request);
   if (!actor || !['admin', 'auditor'].includes(actor.role)) return Response.json({ error: '当前角色无权查看运行数据。' }, { status: 403 });
   const since = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString();
   const [jobs, ingestion, qc, incidents, attention] = await Promise.all([
-    env.DB.prepare('SELECT kind, status, attempt, cost_micros, created_at, updated_at FROM jobs WHERE created_at >= ? ORDER BY created_at DESC LIMIT 5000').bind(since).all<{ kind: string; status: string; attempt: number; cost_micros: number; created_at: string; updated_at: string }>(),
-    env.DB.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed FROM ingestion_runs WHERE created_at >= ?").bind(since).first<Record<string, number | null>>(),
-    env.DB.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) AS passed, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed FROM qc_reports WHERE created_at >= ?").bind(since).first<Record<string, number | null>>(),
-    env.DB.prepare("SELECT COUNT(*) AS open FROM content_incidents WHERE status = 'open'").first<{ open: number }>(),
-    env.DB.prepare("SELECT id, kind, project_id, status, attempt, max_attempts, last_error, updated_at FROM jobs WHERE status IN ('dead_letter', 'failed', 'retrying') ORDER BY updated_at DESC LIMIT 50").all(),
+    db.prepare('SELECT kind, status, attempt, cost_micros, created_at, updated_at FROM jobs WHERE created_at >= ? ORDER BY created_at DESC LIMIT 5000').bind(since).all<{ kind: string; status: string; attempt: number; cost_micros: number; created_at: string; updated_at: string }>(),
+    db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed FROM ingestion_runs WHERE created_at >= ?").bind(since).first<Record<string, number | null>>(),
+    db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) AS passed, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed FROM qc_reports WHERE created_at >= ?").bind(since).first<Record<string, number | null>>(),
+    db.prepare("SELECT COUNT(*) AS open FROM content_incidents WHERE status = 'open'").first<{ open: number }>(),
+    db.prepare("SELECT id, kind, project_id, status, attempt, max_attempts, last_error, updated_at FROM jobs WHERE status IN ('dead_letter', 'failed', 'retrying') ORDER BY updated_at DESC LIMIT 50").all(),
   ]);
   const byKind: Record<string, { total: number; succeeded: number; failed: number; deadLetter: number; retries: number; p50Ms: number | null; p95Ms: number | null; costMicros: number }> = {};
   for (const row of jobs.results) {

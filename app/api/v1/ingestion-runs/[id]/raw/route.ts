@@ -1,13 +1,13 @@
-import { env } from 'cloudflare:workers';
+import { config, db, storage } from '@/lib/runtime';
 import { authorizeWorker } from '@/lib/worker-auth';
 
 const MAX_RAW_BYTES = 5_000_000;
 
 export async function PUT(request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await authorizeWorker(request, env.WORKER_TOKEN))) return Response.json({ error: 'Worker 未授权。' }, { status: 401 });
+  if (!(await authorizeWorker(request, config.workerToken))) return Response.json({ error: 'Worker 未授权。' }, { status: 401 });
   const { id } = await context.params;
   const jobId = request.headers.get('x-job-id');
-  const run = await env.DB.prepare(`
+  const run = await db.prepare(`
     SELECT ir.source_config_id, ir.job_id, j.status AS job_status, sc.retention_mode, sc.retention_days
     FROM ingestion_runs ir JOIN jobs j ON j.id = ir.job_id JOIN source_configs sc ON sc.id = ir.source_config_id
     WHERE ir.id = ? LIMIT 1
@@ -18,8 +18,8 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
   if (!data.byteLength || data.byteLength > MAX_RAW_BYTES) return Response.json({ error: '原始载荷必须为 1 字节到 5 MB。' }, { status: 413 });
   const objectKey = `sources/${run.source_config_id}/raw/${id}/payload`;
   const deleteAfter = new Date(Date.now() + run.retention_days * 86_400_000).toISOString();
-  await env.MEDIA.put(objectKey, data, {
-    httpMetadata: { contentType: request.headers.get('content-type') || 'application/octet-stream' },
+  await storage.put(objectKey, data, {
+    contentType: request.headers.get('content-type') || 'application/octet-stream',
     customMetadata: { sourceConfigId: run.source_config_id, ingestionRunId: id, deleteAfter },
   });
   return Response.json({ objectKey, deleteAfter }, { status: 201 });
