@@ -49,6 +49,24 @@ void test('adding an independent source increases resonance', () => {
   );
 });
 
+void test('evidence gate requires both distinct evidence families and distinct publisher groups', () => {
+  const base: ArticleInput[] = [
+    {
+      source: 'Company IR', sourceType: 'filing', title: 'DRAM 存储价格上涨 12%',
+      summary: '公司披露本季度 DRAM 价格上涨。', url: 'https://example.com/a', publishedAt: now.toISOString(),
+      evidenceFamilyId: 'family-a', publisherEntityId: 'publisher-a', publisherOwnershipGroup: 'group-a',
+    },
+    {
+      source: 'Business News', sourceType: 'media', title: 'DRAM 存储价格上涨约 12%',
+      summary: '报道称 DRAM 价格上涨。', url: 'https://example.com/b', publishedAt: now.toISOString(),
+      evidenceFamilyId: 'family-b', publisherEntityId: 'publisher-b', publisherOwnershipGroup: 'group-b',
+    },
+  ];
+  assert.equal(runPipeline(base, now)[0].gate.independentSourceCount, 2);
+  assert.equal(runPipeline([base[0], { ...base[1], publisherOwnershipGroup: 'group-a' }], now)[0].gate.independentSourceCount, 1);
+  assert.equal(runPipeline([base[0], { ...base[1], evidenceFamilyId: 'family-a' }], now)[0].gate.independentSourceCount, 1);
+});
+
 void test('a social-only candidate cannot enter video production', () => {
   const input: ArticleInput[] = [
     {

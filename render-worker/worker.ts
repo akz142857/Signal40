@@ -3,19 +3,41 @@ import dns from 'node:dns/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { Agent, fetch as undiciFetch } from 'undici';
 import type { ProjectRecord } from '../lib/control-plane.ts';
 import { isPrivateIpAddress } from '../lib/net-guard.ts';
-import { mapHttpJson, parseRssFeed, assertPublicHttpUrl, type SourceConfigInput } from '../lib/source-adapters.ts';
+import { mapHttpJsonPage, parseRssFeed, assertPublicHttpUrl, type HttpJsonPaginationConfig, type SourceConfigInput, type SourceItemRejection } from '../lib/source-adapters.ts';
 import { validateArticleInput, type ArticleInput } from '../lib/domain.ts';
-import { renderProject } from './render.ts';
+import { sha256Hex } from '../lib/hash.ts';
+import { sourceItemEventAt, type NormalizedSourceItem } from '../lib/source-normalized-item.ts';
+import {
+  advanceHttpJsonPagination,
+  buildHttpJsonPageUrl,
+  filterIncrementalSourceItems,
+  filterPagedIncrementalSourceItems,
+  initialHttpJsonPageState,
+  normalizeHttpJsonPagination,
+  parseRetryAfterSeconds,
+} from '../lib/source-pagination.ts';
+import { resolveWorkerEnvironment } from '../lib/workload-env.ts';
 
 // 控制面地址：优先 SIGNAL40_CONTROL_URL，否则按本机 PORT 推导。
 // Worker 与控制面通常同机开发，端口只在 .env 里配一次。
-const controlUrl = (process.env.SIGNAL40_CONTROL_URL || (process.env.PORT ? `http://localhost:${process.env.PORT}` : ''))?.replace(/\/$/, '');
-const workerToken = process.env.SIGNAL40_WORKER_TOKEN;
+const resolvedWorkerEnvironment = resolveWorkerEnvironment({
+  ...process.env,
+  SIGNAL40_CONTROL_URL: process.env.SIGNAL40_CONTROL_URL || (process.env.PORT ? `http://localhost:${process.env.PORT}` : ''),
+});
+const controlUrl = resolvedWorkerEnvironment.controlUrl;
+const credentialBrokerUrl = (process.env.SIGNAL40_CREDENTIAL_BROKER_URL || controlUrl).replace(/\/$/, '');
 const openAiApiKey = process.env.OPENAI_API_KEY;
-const workerId = process.env.SIGNAL40_WORKER_ID || `render-${os.hostname()}`;
-if (!controlUrl || !workerToken) throw new Error('SIGNAL40_CONTROL_URL 与 SIGNAL40_WORKER_TOKEN 必填。');
+const workerProfile = resolvedWorkerEnvironment.profile;
+const workerToken = resolvedWorkerEnvironment.token;
+const profileWorkerId = workerProfile === 'source'
+  ? process.env.SIGNAL40_SOURCE_WORKER_ID
+  : workerProfile === 'render'
+    ? process.env.SIGNAL40_RENDER_WORKER_ID
+    : process.env.SIGNAL40_WORKER_ID;
+const workerId = profileWorkerId || `${workerProfile}-${os.hostname()}`;
 const requiredWorkerToken = workerToken;
 
 const workerHeaders = { 'content-type': 'application/json', 'x-worker-token': requiredWorkerToken };
@@ -25,8 +47,37 @@ async function json<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function ingestionCommitJson<T>(response: Response): Promise<T> {
+  if (response.ok) return response.json() as Promise<T>;
+  const text = await response.text();
+  let payload: { error?: unknown; errorCode?: unknown } = {};
+  try { payload = JSON.parse(text) as typeof payload; }
+  catch { /* Fall through to a bounded generic error. */ }
+  const message = typeof payload.error === 'string' ? payload.error.slice(0, 500) : `采集提交失败：HTTP ${response.status}`;
+  if (payload.errorCode === 'RIGHTS_BLOCKED') throw new TerminalJobError(message, 'RIGHTS_BLOCKED');
+  if (payload.errorCode === 'CONNECTOR_DISABLED') throw new TerminalJobError(message, 'CONNECTOR_DISABLED');
+  if (payload.errorCode === 'AUTH_REQUIRED') throw new TerminalJobError(message, 'AUTH_REQUIRED');
+  throw new Error(`${response.status} ${message}`);
+}
+
 /** 不可重试的失败（例如自动 QC 未通过）：重试只会重复烧掉同样的渲染成本。 */
-class TerminalJobError extends Error {}
+class TerminalJobError extends Error {
+  readonly errorCode: string;
+  constructor(message: string, errorCode = 'SCHEMA_CHANGED') {
+    super(message);
+    this.errorCode = errorCode;
+  }
+}
+
+class RetryableJobError extends Error {
+  readonly errorCode: string;
+  readonly retryDelaySeconds?: number;
+  constructor(message: string, errorCode = 'NETWORK', retryDelaySeconds?: number) {
+    super(message);
+    this.errorCode = errorCode;
+    this.retryDelaySeconds = retryDelaySeconds;
+  }
+}
 
 /**
  * 上游（OpenAI / YouTube）错误只保留状态码和截断后的消息，
@@ -73,7 +124,7 @@ async function runCommand(command: string, args: string[]) {
   });
 }
 
-type WorkerJob = { id: string; kind: string; project_id: string | null; payload: Record<string, unknown> };
+type WorkerJob = { id: string; kind: string; project_id: string | null; lease_epoch: number; payload: Record<string, unknown> };
 
 type AlignmentWord = { word: string; start: number; end: number };
 
@@ -117,73 +168,725 @@ function buildCaptions(lines: ProjectRecord['project']['script']['lines'], durat
   });
 }
 
-async function fetchPublicSource(initialUrl: string) {
-  let url = assertPublicHttpUrl(initialUrl);
+type SourceCheckpoint = {
+  schemaVersion?: unknown;
+  connector?: unknown;
+  connectorVersion?: unknown;
+  paginationMode?: unknown;
+  etag?: unknown;
+  lastModified?: unknown;
+  lastFetchOutcome?: unknown;
+  watermark?: unknown;
+  tieBreakerIds?: unknown;
+  cursor?: unknown;
+  pageNumber?: unknown;
+  sinceWatermark?: unknown;
+  runWatermark?: unknown;
+  runTieBreakerIds?: unknown;
+  mode?: unknown;
+  range?: unknown;
+  maxItems?: unknown;
+  completed?: unknown;
+  acceptedThrough?: unknown;
+};
+
+type RuntimeSource = {
+  id: string;
+  name: string;
+  adapter: string;
+  platform: string;
+  enabled: boolean;
+  rights_status: string;
+  config_hash: string;
+  credential_ref: string | null;
+  credential_version: number;
+  rate_limit_per_minute: number;
+  retention_mode: 'metadata' | 'raw';
+  retention_days: number;
+  config: {
+    sourceType: SourceConfigInput['sourceType'];
+    url?: string;
+    mapping?: Record<string, string>;
+    pagination?: HttpJsonPaginationConfig;
+  };
+};
+
+async function fetchPublicSource(initialUrl: string, checkpoint: SourceCheckpoint = {}) {
+  let url: string;
+  try { url = assertPublicHttpUrl(initialUrl); }
+  catch (error) { throw new TerminalJobError(error instanceof Error ? error.message : '来源 URL 不安全。', 'SSRF_BLOCKED'); }
+  let requestCount = 0;
   for (let redirects = 0; redirects <= 3; redirects += 1) {
     const hostname = new URL(url).hostname;
     const addresses = await dns.lookup(hostname, { all: true, order: 'verbatim' });
-    if (!addresses.length || addresses.some(({ address }) => isPrivateIpAddress(address))) throw new Error('来源 DNS 解析到私有或保留网络。');
-    const response = await fetch(url, {
-      redirect: 'manual',
-      headers: { accept: 'application/rss+xml, application/atom+xml, application/json, text/xml;q=0.9, */*;q=0.1', 'user-agent': 'Signal40-Ingestion/1.0' },
-      signal: AbortSignal.timeout(20_000),
+    if (!addresses.length || addresses.some(({ address }) => isPrivateIpAddress(address))) throw new TerminalJobError('来源 DNS 解析到私有或保留网络。', 'SSRF_BLOCKED');
+    const pinned = addresses[0];
+    // DNS 校验结果直接注入实际 socket lookup；Host 与 TLS SNI 仍使用原始域名，
+    // 避免“先校验、fetch 再解析”留下 DNS rebinding/TOCTOU 窗口。
+    const dispatcher = new Agent({
+      connect: {
+        lookup: (_hostname, _options, callback) => callback(null, pinned.address, pinned.family),
+      },
     });
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const location = response.headers.get('location');
-      if (!location) throw new Error('来源重定向缺少 Location。');
-      url = assertPublicHttpUrl(new URL(location, url).toString());
-      continue;
+    const headers: Record<string, string> = {
+      accept: 'application/rss+xml, application/atom+xml, application/json, text/xml;q=0.9, */*;q=0.1',
+      'user-agent': 'Signal40-Ingestion/1.0',
+    };
+    if (typeof checkpoint.etag === 'string' && checkpoint.etag) headers['if-none-match'] = checkpoint.etag;
+    if (typeof checkpoint.lastModified === 'string' && checkpoint.lastModified) headers['if-modified-since'] = checkpoint.lastModified;
+    try {
+      const response = await undiciFetch(url, {
+        redirect: 'manual',
+        headers,
+        signal: AbortSignal.timeout(20_000),
+        dispatcher,
+      });
+      requestCount += 1;
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        if (!location) throw new TerminalJobError('来源重定向缺少 Location。', 'SCHEMA_CHANGED');
+        try { url = assertPublicHttpUrl(new URL(location, url).toString()); }
+        catch (error) { throw new TerminalJobError(error instanceof Error ? error.message : '来源重定向目标不安全。', 'SSRF_BLOCKED'); }
+        continue;
+      }
+      if (response.status === 304) {
+        return {
+          url,
+          contentType: response.headers.get('content-type') ?? '',
+          text: '',
+          byteCount: 0,
+          requestCount,
+          notModified: true,
+          etag: response.headers.get('etag') ?? (typeof checkpoint.etag === 'string' ? checkpoint.etag : null),
+          lastModified: response.headers.get('last-modified') ?? (typeof checkpoint.lastModified === 'string' ? checkpoint.lastModified : null),
+        };
+      }
+      if (response.status === 429) {
+        const retryAfter = parseRetryAfterSeconds(response.headers.get('retry-after'));
+        throw new RetryableJobError(
+          retryAfter === null ? '来源请求受限：HTTP 429。' : `来源请求受限：HTTP 429，${retryAfter} 秒后重试。`,
+          'RATE_LIMITED',
+          retryAfter ?? undefined,
+        );
+      }
+      if (response.status === 401 || response.status === 403) throw new TerminalJobError(`来源需要重新授权：HTTP ${response.status}。`, 'AUTH_REQUIRED');
+      if (response.status >= 500) throw new RetryableJobError(`来源上游暂时不可用：HTTP ${response.status}。`);
+      if (!response.ok) throw new TerminalJobError(`来源请求不受支持：HTTP ${response.status}。`, 'PERMANENT_UNSUPPORTED');
+      const declaredLength = Number(response.headers.get('content-length') ?? 0);
+      if (declaredLength > 5_000_000) throw new TerminalJobError('来源响应超过 5 MB。', 'PAYLOAD_LIMIT');
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > 5_000_000) throw new TerminalJobError('来源响应超过 5 MB。', 'PAYLOAD_LIMIT');
+      return {
+        url,
+        contentType: response.headers.get('content-type') ?? '',
+        text: new TextDecoder().decode(bytes),
+        byteCount: bytes.byteLength,
+        requestCount,
+        notModified: false,
+        etag: response.headers.get('etag'),
+        lastModified: response.headers.get('last-modified'),
+      };
+    } finally {
+      await dispatcher.close();
     }
-    if (!response.ok) throw new Error(`来源请求失败：HTTP ${response.status}`);
-    const declaredLength = Number(response.headers.get('content-length') ?? 0);
-    if (declaredLength > 5_000_000) throw new Error('来源响应超过 5 MB。');
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > 5_000_000) throw new Error('来源响应超过 5 MB。');
-    return { url, contentType: response.headers.get('content-type') ?? '', text: new TextDecoder().decode(bytes) };
   }
-  throw new Error('来源重定向次数超过 3 次。');
+  throw new TerminalJobError('来源重定向次数超过 3 次。', 'REDIRECT_LIMIT');
+}
+
+type CredentialBinding = { credential_ref?: string | null; credential_version?: number };
+
+async function fetchSourceForJob(
+  initialUrl: string,
+  checkpoint: SourceCheckpoint,
+  source: CredentialBinding,
+  job: WorkerJob,
+) {
+  if (!source.credential_ref) return fetchPublicSource(initialUrl, checkpoint);
+  const jobCredentialRef = typeof job.payload.credentialRef === 'string' ? job.payload.credentialRef : '';
+  const jobCredentialVersion = Number(job.payload.credentialVersion);
+  if (jobCredentialRef !== source.credential_ref || jobCredentialVersion !== source.credential_version) {
+    throw new TerminalJobError('来源凭据已在作业排队后变化。', 'AUTH_REQUIRED');
+  }
+  const response = await fetch(`${credentialBrokerUrl}/api/v1/credential-broker/fetch`, {
+    method: 'POST',
+    headers: workerHeaders,
+    body: JSON.stringify({
+      sourceConfigId: job.payload.sourceConfigId,
+      credentialRef: jobCredentialRef,
+      credentialVersion: jobCredentialVersion,
+      url: initialUrl,
+      workerId,
+      jobId: job.id,
+      leaseEpoch: job.lease_epoch,
+      conditional: {
+        etag: typeof checkpoint.etag === 'string' ? checkpoint.etag : undefined,
+        lastModified: typeof checkpoint.lastModified === 'string' ? checkpoint.lastModified : undefined,
+      },
+    }),
+  });
+  if (response.ok) return response.json() as Promise<{
+    url: string; contentType: string; text: string; byteCount: number; requestCount: number;
+    notModified: boolean; etag: string | null; lastModified: string | null;
+  }>;
+  const payload = await response.json().catch(() => ({})) as {
+    error?: unknown; errorCode?: unknown; retryable?: unknown; retryAfterSeconds?: unknown;
+  };
+  const message = typeof payload.error === 'string' ? payload.error.slice(0, 500) : `Credential broker 请求失败：HTTP ${response.status}`;
+  const code = typeof payload.errorCode === 'string' ? payload.errorCode : 'NETWORK';
+  if (payload.retryable === true) {
+    throw new RetryableJobError(message, code, Number.isFinite(payload.retryAfterSeconds) ? Number(payload.retryAfterSeconds) : undefined);
+  }
+  throw new TerminalJobError(message, code === 'POLICY_DRIFT' ? 'AUTH_REQUIRED' : code);
+}
+
+async function workPagedHttpJsonIngestion(
+  job: WorkerJob,
+  source: RuntimeSource,
+  config: SourceConfigInput,
+  ingestionRunId: string,
+  initialCheckpoint: SourceCheckpoint,
+) {
+  const recoveryUrl = new URL(`${controlUrl}/api/v1/ingestion-runs/${encodeURIComponent(ingestionRunId)}/pages`);
+  recoveryUrl.searchParams.set('jobId', job.id);
+  recoveryUrl.searchParams.set('workerId', workerId);
+  recoveryUrl.searchParams.set('leaseEpoch', String(job.lease_epoch));
+  const recovery = await json<{
+    pageCount: number;
+    nextPageOrdinal: number;
+    lastPageKey: string | null;
+    finalPageCommitted: boolean;
+    resumeCheckpointJson: SourceCheckpoint;
+    totals: {
+      fetchedCount: number;
+      acceptedCount: number;
+      rejectedCount: number;
+      duplicateCount: number;
+      requestCount: number;
+      byteCount: number;
+    };
+  }>(await fetch(recoveryUrl, { headers: workerHeaders }));
+  let pageOrdinal = recovery.nextPageOrdinal;
+  let lastPageKey = recovery.lastPageKey;
+  let checkpointBefore = recovery.pageCount > 0
+    ? recovery.resumeCheckpointJson
+    : initialCheckpoint;
+  const totals = { ...recovery.totals };
+
+  if (!recovery.finalPageCommitted) {
+    const pagination = normalizeHttpJsonPagination(source.config.pagination);
+    let state = initialHttpJsonPageState(pagination, checkpointBefore);
+    const runBoundary = {
+      watermark: typeof checkpointBefore.runWatermark === 'string'
+        ? checkpointBefore.runWatermark
+        : checkpointBefore.watermark,
+      tieBreakerIds: Array.isArray(checkpointBefore.runTieBreakerIds)
+        ? checkpointBefore.runTieBreakerIds
+        : checkpointBefore.tieBreakerIds,
+    };
+    const sinceWatermark = typeof checkpointBefore.sinceWatermark === 'string'
+      ? checkpointBefore.sinceWatermark
+      : checkpointBefore.watermark;
+    const seenCursors = new Set<string>(state.cursor ? [state.cursor] : []);
+    const backfillRange = checkpointBefore.mode === 'backfill'
+      && checkpointBefore.range && typeof checkpointBefore.range === 'object'
+      && !Array.isArray(checkpointBefore.range)
+      ? checkpointBefore.range as { from?: unknown; to?: unknown }
+      : null;
+    const backfillFrom = backfillRange && typeof backfillRange.from === 'string'
+      ? new Date(backfillRange.from).valueOf()
+      : Number.NaN;
+    const backfillTo = backfillRange && typeof backfillRange.to === 'string'
+      ? new Date(backfillRange.to).valueOf()
+      : Number.NaN;
+    if (backfillRange && (!Number.isFinite(backfillFrom) || !Number.isFinite(backfillTo) || backfillFrom >= backfillTo)) {
+      throw new TerminalJobError('补采时间范围无效。');
+    }
+    const backfillMaxItems = backfillRange && Number.isInteger(checkpointBefore.maxItems)
+      ? Math.max(1, Math.min(100, Number(checkpointBefore.maxItems)))
+      : 100;
+
+    for (let pageIndex = 0; pageIndex < pagination.maxPages; pageIndex += 1) {
+      const pageUrl = buildHttpJsonPageUrl(
+        source.config.url!,
+        pagination,
+        pagination.mode === 'since' ? { ...checkpointBefore, watermark: sinceWatermark } : checkpointBefore,
+        state,
+      );
+      const response = await fetchSourceForJob(
+        pageUrl,
+        pageIndex === 0 && pagination.mode === 'none' ? checkpointBefore : {},
+        source,
+        job,
+      );
+      let payload: unknown = {};
+      let page = { articles: [] as ArticleInput[], items: [] as NormalizedSourceItem[], rejections: [] as SourceItemRejection[], fetchedCount: 0 };
+      if (!response.notModified) {
+        if (!response.contentType.toLowerCase().includes('json')) {
+          throw new TerminalJobError('HTTP 适配器要求 JSON Content-Type。');
+        }
+        try { payload = JSON.parse(response.text) as unknown; }
+        catch { throw new TerminalJobError('HTTP JSON 响应不是有效 JSON。'); }
+        try { page = mapHttpJsonPage(payload, { ...config, url: response.url }); }
+        catch (error) { throw new TerminalJobError(error instanceof Error ? error.message : 'HTTP JSON 字段映射失败。'); }
+      }
+
+      const rejections = [...page.rejections];
+      let validArticles = page.articles.filter((article, index) => {
+        const issue = validateArticleInput(article);
+        if (!issue) return true;
+        rejections.push({
+          itemIndex: index,
+          platformItemId: article.id ?? null,
+          errorCode: 'INVALID_ITEM',
+          detailRedacted: issue.slice(0, 200),
+          payloadHash: sha256Hex(JSON.stringify(article)),
+        });
+        return false;
+      });
+      let validItems = page.items.filter((item) => item.kind === 'tombstone'
+        || validArticles.some((article) => article.url.replace(/#.*$/, '') === item.url.replace(/#.*$/, '')));
+      if (backfillRange) {
+        const remaining = Math.max(0, backfillMaxItems - totals.acceptedCount);
+        validItems = validItems.filter((item) => {
+          const eventAt = new Date(sourceItemEventAt(item)).valueOf();
+          return eventAt >= backfillFrom && eventAt < backfillTo;
+        }).slice(0, remaining);
+        const acceptedUrls = new Set(validItems.filter((item) => item.kind === 'upsert').map((item) => item.url.replace(/#.*$/, '')));
+        validArticles = validArticles.filter((article) => acceptedUrls.has(article.url.replace(/#.*$/, '')));
+      }
+
+      let checkpoint = validItems.map(sourceItemEventAt).sort().at(-1)
+        ?? (typeof checkpointBefore.watermark === 'string' ? checkpointBefore.watermark : null);
+      let tieBreakerIds = Array.isArray(checkpointBefore.tieBreakerIds)
+        ? checkpointBefore.tieBreakerIds.filter((value): value is string => typeof value === 'string')
+        : [];
+      let skippedCount = 0;
+      if (!backfillRange) {
+        // 后续页常按时间倒序，不能用第一页已推进的最新 watermark 过滤，
+        // 否则会漏掉“比旧水位新、但比第一页旧”的合法条目。接纳始终对比
+        // 本轮最初边界，checkpoint 汇总则对比当前已提交边界。
+        const incremental = filterPagedIncrementalSourceItems(validItems, runBoundary, {
+          watermark: checkpointBefore.watermark,
+          tieBreakerIds: checkpointBefore.tieBreakerIds,
+        });
+        skippedCount = incremental.skippedCount;
+        validItems = incremental.items;
+        const acceptedUrls = new Set(validItems.filter((item) => item.kind === 'upsert').map((item) => item.url.replace(/#.*$/, '')));
+        validArticles = validArticles.filter((article) => acceptedUrls.has(article.url.replace(/#.*$/, '')));
+        checkpoint = incremental.watermark;
+        tieBreakerIds = incremental.tieBreakerIds;
+      }
+
+      let shouldContinue = false;
+      let nextCursor: string | null = state.cursor;
+      if (!response.notModified) {
+        let advance: ReturnType<typeof advanceHttpJsonPagination>;
+        try {
+          advance = advanceHttpJsonPagination({
+            pagination,
+            payload,
+            state,
+            fetchedCount: page.fetchedCount,
+            seenCursors,
+          });
+        } catch (error) {
+          const code = error && typeof error === 'object' && 'code' in error && error.code === 'CURSOR_LOOP'
+            ? 'CURSOR_LOOP'
+            : 'SCHEMA_CHANGED';
+          throw new TerminalJobError(error instanceof Error ? error.message : '分页状态无效。', code);
+        }
+        state = advance.state;
+        nextCursor = advance.cursor;
+        shouldContinue = advance.shouldContinue;
+      }
+      const reachedBackfillLimit = Boolean(backfillRange && totals.acceptedCount + validItems.length >= backfillMaxItems);
+      // maxPages 是一次运行的资源上限；保存 cursor 后正常终结，由下一次运行续采，
+      // 不把一个合法的大来源误判成永久分页错误。
+      const finalPage = response.notModified || !shouldContinue || reachedBackfillLimit || pageIndex === pagination.maxPages - 1;
+      const upstreamComplete = response.notModified || !shouldContinue || reachedBackfillLimit;
+      const checkpointJson: SourceCheckpoint = backfillRange ? {
+        ...checkpointBefore,
+        connector: source.adapter,
+        connectorVersion: '2',
+        completed: finalPage && (!shouldContinue || reachedBackfillLimit),
+        acceptedThrough: checkpoint,
+        watermark: checkpoint,
+        cursor: nextCursor,
+        etag: response.etag,
+        lastModified: response.lastModified,
+        lastFetchOutcome: response.notModified ? 'not_modified' : 'modified',
+      } : {
+        schemaVersion: 2,
+        connector: source.adapter,
+        connectorVersion: '2',
+        paginationMode: pagination.mode,
+        watermark: checkpoint,
+        tieBreakerIds,
+        cursor: nextCursor,
+        pageNumber: pagination.mode === 'page'
+          ? (upstreamComplete ? pagination.startPage : state.pageNumber)
+          : undefined,
+        sinceWatermark: pagination.mode === 'since'
+          ? (upstreamComplete ? checkpoint : sinceWatermark)
+          : undefined,
+        runWatermark: upstreamComplete ? undefined : runBoundary.watermark,
+        runTieBreakerIds: upstreamComplete ? undefined : runBoundary.tieBreakerIds,
+        etag: response.etag,
+        lastModified: response.lastModified,
+        lastFetchOutcome: response.notModified ? 'not_modified' : 'modified',
+      };
+      const pageKey = `page-${pageOrdinal}`;
+      const committed = await ingestionCommitJson<{
+        acceptedCount: number;
+        rejectedCount: number;
+        duplicateCount: number;
+        fetchedCount: number;
+        requestCount: number;
+        byteCount: number;
+      }>(await fetch(`${controlUrl}/api/v1/ingestion-runs/${encodeURIComponent(ingestionRunId)}/pages/${encodeURIComponent(pageKey)}`, {
+        method: 'PUT',
+        headers: workerHeaders,
+        body: JSON.stringify({
+          jobId: job.id,
+          workerId,
+          leaseEpoch: job.lease_epoch,
+          pageOrdinal,
+          finalPage,
+          checkpointBeforeJson: checkpointBefore,
+          items: validItems,
+          fetchedCount: page.fetchedCount,
+          skippedCount,
+          checkpoint,
+          checkpointJson,
+          rejections,
+          requestCount: response.requestCount,
+          byteCount: response.byteCount,
+        }),
+      }));
+      totals.fetchedCount += committed.fetchedCount;
+      totals.acceptedCount += committed.acceptedCount;
+      totals.rejectedCount += committed.rejectedCount;
+      totals.duplicateCount += committed.duplicateCount;
+      totals.requestCount += committed.requestCount;
+      totals.byteCount += committed.byteCount;
+      lastPageKey = pageKey;
+      pageOrdinal += 1;
+      checkpointBefore = checkpointJson;
+      if (finalPage) break;
+    }
+  }
+
+  if (!lastPageKey || pageOrdinal < 1) throw new Error('逐页采集未形成可终结页面。');
+  return ingestionCommitJson(await fetch(`${controlUrl}/api/v1/ingestion-runs/${encodeURIComponent(ingestionRunId)}/complete`, {
+    method: 'POST',
+    headers: workerHeaders,
+    body: JSON.stringify({
+      jobId: job.id,
+      workerId,
+      leaseEpoch: job.lease_epoch,
+      pageCount: pageOrdinal,
+      lastPageKey,
+      ...totals,
+    }),
+  }));
 }
 
 async function workIngestion(job: WorkerJob) {
   const sourceConfigId = typeof job.payload.sourceConfigId === 'string' ? job.payload.sourceConfigId : '';
   const ingestionRunId = typeof job.payload.ingestionRunId === 'string' ? job.payload.ingestionRunId : '';
   if (!sourceConfigId || !ingestionRunId) throw new Error('采集作业缺少 sourceConfigId 或 ingestionRunId。');
-  const { source } = await json<{ source: { name: string; adapter: string; enabled: number; rights_status: string; rate_limit_per_minute: number; retention_mode: 'metadata' | 'raw'; retention_days: number; config: { sourceType: SourceConfigInput['sourceType']; url?: string; mapping?: Record<string, string> } } }>(await fetch(`${controlUrl}/api/v1/source-configs/${encodeURIComponent(sourceConfigId)}`, { headers: { 'x-worker-token': requiredWorkerToken } }));
+  const { source } = await json<{ source: RuntimeSource }>(await fetch(`${controlUrl}/api/v1/worker/source-configs/${encodeURIComponent(sourceConfigId)}`, { headers: { 'x-worker-token': requiredWorkerToken } }));
   if (!source.enabled || source.rights_status !== 'approved') throw new Error('来源未启用或授权未批准。');
   if (!source.config.url || !['rss', 'http'].includes(source.adapter)) throw new Error(`后台 Worker 暂不支持 ${source.adapter} 适配器自动拉取。`);
-  const response = await fetchPublicSource(source.config.url);
+  const checkpointBefore = job.payload.checkpointJson && typeof job.payload.checkpointJson === 'object' && !Array.isArray(job.payload.checkpointJson)
+    ? job.payload.checkpointJson as SourceCheckpoint
+    : {};
   const config: SourceConfigInput = {
+    name: source.name,
+    adapter: source.adapter as 'rss' | 'http',
+    sourceType: source.config.sourceType,
+    url: source.config.url,
+    rightsStatus: 'approved',
+    mapping: source.config.mapping,
+    pagination: source.config.pagination,
+    rateLimitPerMinute: source.rate_limit_per_minute,
+    retention: { mode: source.retention_mode, days: source.retention_days },
+    namespace: source.platform || source.adapter,
+    connectorId: typeof job.payload.connectorId === 'string' ? job.payload.connectorId : `${source.adapter}-v1`,
+    connectorVersion: typeof job.payload.connectorVersion === 'string' ? job.payload.connectorVersion : '1',
+  };
+  if (source.adapter === 'http' && source.retention_mode === 'metadata' && job.payload.shadow !== true) {
+    return workPagedHttpJsonIngestion(job, source, config, ingestionRunId, checkpointBefore);
+  }
+  let articles: ArticleInput[] = [];
+  let normalizedItems: NormalizedSourceItem[] = [];
+  const rejections: SourceItemRejection[] = [];
+  let fetchedCount = 0;
+  let requestCount = 0;
+  let byteCount = 0;
+  let responseEtag: string | null = null;
+  let responseLastModified: string | null = null;
+  let responseContentType = 'application/json';
+  let notModified = false;
+  const rawPages: string[] = [];
+  let paginationCursor: string | null = null;
+  let paginationMode: HttpJsonPaginationConfig['mode'] = 'none';
+  if (source.adapter === 'rss') {
+    const response = await fetchSourceForJob(source.config.url, checkpointBefore, source, job);
+    requestCount = response.requestCount;
+    byteCount = response.byteCount;
+    responseEtag = response.etag;
+    responseLastModified = response.lastModified;
+    responseContentType = response.contentType || 'application/xml';
+    notModified = response.notModified;
+    if (!response.notModified) {
+      rawPages.push(response.text);
+      articles = parseRssFeed(response.text, { ...config, url: response.url });
+      fetchedCount = articles.length;
+    }
+  } else {
+    const pagination = normalizeHttpJsonPagination(source.config.pagination);
+    paginationMode = pagination.mode;
+    let state = initialHttpJsonPageState(pagination, checkpointBefore);
+    paginationCursor = state.cursor;
+    const seenCursors = new Set<string>(state.cursor ? [state.cursor] : []);
+    for (let pageIndex = 0; pageIndex < pagination.maxPages; pageIndex += 1) {
+      const pageUrl = buildHttpJsonPageUrl(source.config.url, pagination, checkpointBefore, state);
+      const response = await fetchSourceForJob(pageUrl, pageIndex === 0 && pagination.mode === 'none' ? checkpointBefore : {}, source, job);
+      requestCount += response.requestCount;
+      byteCount += response.byteCount;
+      responseEtag = response.etag;
+      responseLastModified = response.lastModified;
+      responseContentType = response.contentType || 'application/json';
+      if (byteCount > 10_000_000) throw new TerminalJobError('HTTP JSON 单次运行响应超过 10 MB。', 'PAYLOAD_LIMIT');
+      if (response.notModified) {
+        notModified = true;
+        break;
+      }
+      if (!response.contentType.toLowerCase().includes('json')) throw new TerminalJobError('HTTP 适配器要求 JSON Content-Type。');
+      let payload: unknown;
+      try { payload = JSON.parse(response.text) as unknown; }
+      catch { throw new TerminalJobError('HTTP JSON 响应不是有效 JSON。'); }
+      rawPages.push(response.text);
+      let page: ReturnType<typeof mapHttpJsonPage>;
+      try { page = mapHttpJsonPage(payload, { ...config, url: response.url }); }
+      catch (error) { throw new TerminalJobError(error instanceof Error ? error.message : 'HTTP JSON 字段映射失败。'); }
+      const itemOffset = fetchedCount;
+      articles.push(...page.articles);
+      normalizedItems.push(...page.items);
+      rejections.push(...page.rejections.map((rejection) => ({ ...rejection, itemIndex: rejection.itemIndex + itemOffset })));
+      fetchedCount += page.fetchedCount;
+      if (fetchedCount > 1_000) throw new TerminalJobError('HTTP JSON 单次运行条目超过 1000 条。', 'PAGINATION_LIMIT');
+
+      let advance: ReturnType<typeof advanceHttpJsonPagination>;
+      try { advance = advanceHttpJsonPagination({ pagination, payload, state, fetchedCount: page.fetchedCount, seenCursors }); }
+      catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error && error.code === 'CURSOR_LOOP' ? 'CURSOR_LOOP' : 'SCHEMA_CHANGED';
+        throw new TerminalJobError(error instanceof Error ? error.message : '分页状态无效。', code);
+      }
+      const { shouldContinue } = advance;
+      state = advance.state;
+      paginationCursor = advance.cursor;
+      if (!shouldContinue) break;
+      if (pageIndex === pagination.maxPages - 1) throw new TerminalJobError(`HTTP JSON 超过配置的 ${pagination.maxPages} 页上限。`, 'PAGINATION_LIMIT');
+    }
+  }
+  const backfillRange = checkpointBefore.mode === 'backfill'
+    && checkpointBefore.range && typeof checkpointBefore.range === 'object'
+    && !Array.isArray(checkpointBefore.range)
+    ? checkpointBefore.range as { from?: unknown; to?: unknown }
+    : null;
+  if (backfillRange) {
+    const from = typeof backfillRange.from === 'string' ? new Date(backfillRange.from).valueOf() : Number.NaN;
+    const to = typeof backfillRange.to === 'string' ? new Date(backfillRange.to).valueOf() : Number.NaN;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new TerminalJobError('补采时间范围无效。');
+    const maxItems = Number.isInteger(checkpointBefore.maxItems)
+      ? Math.max(1, Math.min(100, Number(checkpointBefore.maxItems)))
+      : 100;
+    if (source.adapter === 'http') {
+      normalizedItems = normalizedItems.filter((item) => {
+        const eventAt = new Date(sourceItemEventAt(item)).valueOf();
+        return eventAt >= from && eventAt < to;
+      }).slice(0, maxItems);
+      const acceptedUrls = new Set(normalizedItems.filter((item) => item.kind === 'upsert').map((item) => item.url.replace(/#.*$/, '')));
+      articles = articles.filter((article) => acceptedUrls.has(article.url.replace(/#.*$/, '')));
+    } else {
+      articles = articles
+        .filter((article) => {
+          const publishedAt = new Date(article.publishedAt).valueOf();
+          return publishedAt >= from && publishedAt < to;
+        })
+        .slice(0, maxItems);
+    }
+  }
+  let validArticles = articles.filter((article, index) => {
+    const issue = validateArticleInput(article);
+    if (!issue) return true;
+    rejections.push({
+      itemIndex: index,
+      platformItemId: article.id ?? null,
+      errorCode: 'INVALID_ITEM',
+      detailRedacted: issue.slice(0, 200),
+      payloadHash: sha256Hex(JSON.stringify(article)),
+    });
+    return false;
+  });
+  if (source.adapter === 'http') {
+    const validUrls = new Set(validArticles.map((article) => article.url.replace(/#.*$/, '')));
+    normalizedItems = normalizedItems.filter((item) => item.kind === 'tombstone' || validUrls.has(item.url.replace(/#.*$/, '')));
+  }
+  let checkpoint = (source.adapter === 'http' ? normalizedItems.map(sourceItemEventAt) : validArticles.map((article) => article.publishedAt)).sort().at(-1)
+    ?? (typeof checkpointBefore.watermark === 'string' ? checkpointBefore.watermark : null);
+  let tieBreakerIds = Array.isArray(checkpointBefore.tieBreakerIds)
+    ? checkpointBefore.tieBreakerIds.filter((value): value is string => typeof value === 'string')
+    : [];
+  let skippedCount = 0;
+  if (!backfillRange && source.adapter === 'http') {
+    const incremental = filterIncrementalSourceItems(normalizedItems, checkpointBefore);
+    skippedCount = normalizedItems.length - incremental.items.length;
+    normalizedItems = incremental.items;
+    const acceptedUrls = new Set(normalizedItems.filter((item) => item.kind === 'upsert').map((item) => item.url.replace(/#.*$/, '')));
+    validArticles = validArticles.filter((article) => acceptedUrls.has(article.url.replace(/#.*$/, '')));
+    checkpoint = incremental.watermark;
+    tieBreakerIds = incremental.tieBreakerIds;
+  }
+  const checkpointJson = backfillRange ? {
+    ...checkpointBefore,
+    connector: source.adapter,
+    connectorVersion: source.adapter === 'http' ? '2' : '1',
+    completed: true,
+    acceptedThrough: checkpoint,
+    cursor: paginationCursor,
+    etag: responseEtag,
+    lastModified: responseLastModified,
+    lastFetchOutcome: notModified ? 'not_modified' : 'modified',
+  } : {
+    schemaVersion: source.adapter === 'http' ? 2 : 1,
+    connector: source.adapter,
+    connectorVersion: source.adapter === 'http' ? '2' : '1',
+    paginationMode,
+    watermark: checkpoint,
+    tieBreakerIds,
+    cursor: paginationCursor,
+    etag: responseEtag,
+    lastModified: responseLastModified,
+    lastFetchOutcome: notModified ? 'not_modified' : 'modified',
+  };
+  let rawObjectKey: string | null = null;
+  if (source.retention_mode === 'raw' && !notModified && rawPages.length) {
+    const rawBody = rawPages.length === 1 ? rawPages[0] : `{"schemaVersion":1,"pages":[${rawPages.join(',')}]}`;
+    const rawUpload = await json<{ objectKey: string }>(await fetch(`${controlUrl}/api/v1/ingestion-runs/${encodeURIComponent(ingestionRunId)}/raw`, {
+      method: 'PUT',
+      headers: {
+        'content-type': responseContentType,
+        'x-worker-token': requiredWorkerToken,
+        'x-job-id': job.id,
+        'x-worker-id': workerId,
+        'x-lease-epoch': String(job.lease_epoch),
+      },
+      body: rawBody,
+    }));
+    rawObjectKey = rawUpload.objectKey;
+  }
+  return ingestionCommitJson(await fetch(`${controlUrl}/api/v1/ingestion-runs/${encodeURIComponent(ingestionRunId)}/commit`, {
+    method: 'POST',
+    headers: workerHeaders,
+    body: JSON.stringify({
+      jobId: job.id,
+      workerId,
+      leaseEpoch: job.lease_epoch,
+      ...(source.adapter === 'http' ? { items: normalizedItems } : { articles: validArticles }),
+      fetchedCount,
+      skippedCount,
+      checkpoint,
+      checkpointJson,
+      rawObjectKey,
+      ...(source.adapter === 'rss' ? { origins: validArticles.map((article) => ({
+        namespace: source.platform || source.adapter,
+        platformItemId: article.id || sha256Hex(article.url),
+        url: article.url,
+      })) } : {}),
+      rejections,
+      requestCount,
+      byteCount,
+      notModified,
+    }),
+  }));
+}
+
+async function workSourceTest(job: WorkerJob) {
+  const sourceConfigId = typeof job.payload.sourceConfigId === 'string' ? job.payload.sourceConfigId : '';
+  const testId = typeof job.payload.testId === 'string' ? job.payload.testId : '';
+  const configHash = typeof job.payload.configHash === 'string' ? job.payload.configHash : '';
+  if (!sourceConfigId || !testId || !configHash) throw new Error('来源测试作业字段不完整。');
+  const { source } = await json<{ source: RuntimeSource }>(await fetch(`${controlUrl}/api/v1/worker/source-configs/${encodeURIComponent(sourceConfigId)}`, {
+    headers: { 'x-worker-token': requiredWorkerToken },
+  }));
+  if (source.config_hash !== configHash) throw new TerminalJobError('来源配置已在测试排队期间变更。');
+  if (!source.config.url || !['rss', 'http'].includes(source.adapter)) throw new TerminalJobError(`连接器不支持测试 ${source.adapter}。`);
+  const testUrl = source.adapter === 'http'
+    ? buildHttpJsonPageUrl(
+        source.config.url,
+        normalizeHttpJsonPagination(source.config.pagination),
+        {},
+        initialHttpJsonPageState(normalizeHttpJsonPagination(source.config.pagination), {}),
+      )
+    : source.config.url;
+  const response = await fetchSourceForJob(testUrl, {}, source, job);
+  const sourceConfig: SourceConfigInput = {
     name: source.name,
     adapter: source.adapter as 'rss' | 'http',
     sourceType: source.config.sourceType,
     url: response.url,
     rightsStatus: 'approved',
     mapping: source.config.mapping,
+    pagination: source.config.pagination,
     rateLimitPerMinute: source.rate_limit_per_minute,
     retention: { mode: source.retention_mode, days: source.retention_days },
   };
   let articles: ArticleInput[];
-  if (source.adapter === 'rss') {
-    articles = parseRssFeed(response.text, config);
-  } else {
-    if (!response.contentType.toLowerCase().includes('json')) throw new Error('HTTP 适配器要求 JSON Content-Type。');
-    articles = mapHttpJson(JSON.parse(response.text), config);
+  try {
+    if (source.adapter === 'rss') {
+      articles = parseRssFeed(response.text, sourceConfig);
+    } else {
+      if (!response.contentType.toLowerCase().includes('json')) throw new Error('HTTP 适配器要求 JSON Content-Type。');
+      articles = mapHttpJsonPage(JSON.parse(response.text), sourceConfig).articles;
+    }
+  } catch (error) {
+    throw new TerminalJobError(error instanceof Error ? error.message : '来源内容格式无法解析。');
   }
-  const validArticles = articles.filter((article) => validateArticleInput(article) === null);
-  const checkpoint = validArticles.map((article) => article.publishedAt).sort().at(-1) ?? null;
-  let rawObjectKey: string | null = null;
-  if (source.retention_mode === 'raw') {
-    const rawUpload = await json<{ objectKey: string }>(await fetch(`${controlUrl}/api/v1/ingestion-runs/${encodeURIComponent(ingestionRunId)}/raw`, {
-      method: 'PUT',
-      headers: { 'content-type': response.contentType || 'application/octet-stream', 'x-worker-token': requiredWorkerToken, 'x-job-id': job.id },
-      body: response.text,
-    }));
-    rawObjectKey = rawUpload.objectKey;
-  }
-  return json(await fetch(`${controlUrl}/api/v1/ingestion-runs/${encodeURIComponent(ingestionRunId)}/commit`, {
+  const preview = articles.filter((article) => validateArticleInput(article) === null).slice(0, 5);
+  if (!preview.length) throw new TerminalJobError('来源可以访问，但没有解析出含标题、URL 和发布时间的有效条目。');
+  return json(await fetch(
+    `${controlUrl}/api/v1/source-configs/${encodeURIComponent(sourceConfigId)}/tests/${encodeURIComponent(testId)}/complete`,
+    {
+      method: 'POST',
+      headers: workerHeaders,
+      body: JSON.stringify({
+        jobId: job.id,
+        workerId,
+        leaseEpoch: job.lease_epoch,
+        configHash,
+        preview,
+        capabilities: {
+          conditionalRequests: Boolean(response.etag || response.lastModified),
+          contentType: response.contentType,
+          finalUrl: response.url,
+        },
+      }),
+    },
+  ));
+}
+
+async function workTopicRecompute(job: WorkerJob) {
+  const derivationKey = typeof job.payload.derivationKey === 'string'
+    ? job.payload.derivationKey
+    : '';
+  if (!derivationKey) throw new TerminalJobError('主题重算作业缺少 derivationKey。');
+  return json(await fetch(`${controlUrl}/api/v1/pipeline/recompute`, {
     method: 'POST',
     headers: workerHeaders,
-    body: JSON.stringify({ jobId: job.id, articles: validArticles, fetchedCount: articles.length, checkpoint, rawObjectKey }),
+    body: JSON.stringify({ jobId: job.id, workerId, leaseEpoch: job.lease_epoch, derivationKey }),
   }));
 }
 
@@ -295,11 +998,42 @@ async function deleteYouTube(externalId: string) {
   return { withdrawn: true, externalId };
 }
 
+async function authorizeLegalWithdrawal(job: WorkerJob) {
+  if (typeof job.payload.deletionRequestId !== 'string' || typeof job.payload.deletionItemId !== 'string') return;
+  const response = await fetch(
+    `${controlUrl}/api/v1/worker/legal-deletion-withdrawals/${encodeURIComponent(job.id)}/authorize`,
+    {
+      method: 'POST',
+      headers: workerHeaders,
+      body: JSON.stringify({ workerId, leaseEpoch: job.lease_epoch }),
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+  if (response.ok) return;
+  let payload: { error?: unknown; errorCode?: unknown; retryAfterSeconds?: unknown } = {};
+  try { payload = await response.json() as typeof payload; }
+  catch { /* Use the bounded fallback below. */ }
+  const message = typeof payload.error === 'string'
+    ? payload.error.slice(0, 500)
+    : `外部撤回执行授权失败：HTTP ${response.status}。`;
+  const errorCode = typeof payload.errorCode === 'string' ? payload.errorCode : 'POLICY_DRIFT';
+  if (['LEGAL_HOLD_ACTIVE', 'LEASE_LOST', 'POLICY_DRIFT'].includes(errorCode)) {
+    throw new RetryableJobError(
+      message,
+      errorCode,
+      Number.isInteger(payload.retryAfterSeconds) ? Number(payload.retryAfterSeconds) : 60,
+    );
+  }
+  throw new TerminalJobError(message, errorCode);
+}
+
 async function workPublish(job: WorkerJob) {
   if (!job.project_id || typeof job.payload.publishJobId !== 'string' || typeof job.payload.channel !== 'string') throw new Error('发布作业字段不完整。');
   if (job.payload.operation === 'withdraw') {
+    await authorizeLegalWithdrawal(job);
     if (job.payload.channel === 'youtube' && typeof job.payload.externalId === 'string') return deleteYouTube(job.payload.externalId);
-    return { withdrawn: true, externalId: job.payload.externalId ?? null };
+    if (job.payload.channel === 'package' && !job.payload.externalId) return { withdrawn: true, externalId: null, localOnly: true };
+    throw new TerminalJobError(`渠道 ${job.payload.channel} 没有已验证的外部删除实现。`, 'PERMANENT_UNSUPPORTED');
   }
   if (!job.payload.asset || typeof job.payload.asset !== 'object') throw new Error('发布作业缺少成片资产。');
   const asset = job.payload.asset as { objectKey?: unknown; sha256?: unknown; byteSize?: unknown };
@@ -327,6 +1061,8 @@ async function workPublish(job: WorkerJob) {
 }
 
 async function workRender(job: WorkerJob) {
+  // 延迟加载让 source-only 镜像不需要携带 Chromium/FFmpeg/Remotion 组合代码。
+  const { renderProject } = await import('./render.ts');
   if (!job.project_id) throw new Error('渲染作业缺少 project_id。');
   const profile = job.kind === 'preview' ? 'preview' : 'final';
   const projectPayload = await json<{ project: ProjectRecord }>(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}`));
@@ -381,21 +1117,38 @@ async function workRender(job: WorkerJob) {
 }
 
 async function work(job: WorkerJob) {
-  if (job.kind === 'ingestion') return workIngestion(job);
+  if (job.kind === 'ingestion') {
+    if (job.payload.operation === 'source_test') return workSourceTest(job);
+    if (job.payload.operation === 'topic_recompute') return workTopicRecompute(job);
+    return workIngestion(job);
+  }
   if (job.kind === 'voice') return workVoice(job);
   if (job.kind === 'preview' || job.kind === 'render') return workRender(job);
   if (job.kind === 'publish') return workPublish(job);
   throw new Error(`Worker 不支持 ${job.kind} 作业。`);
 }
 
-async function finish(jobId: string, payload: unknown) {
-  await json(await fetch(`${controlUrl}/api/v1/jobs/${encodeURIComponent(jobId)}/finish`, { method: 'POST', headers: workerHeaders, body: JSON.stringify(payload) }));
+async function finish(jobId: string, leaseEpoch: number, payload: Record<string, unknown>) {
+  await json(await fetch(`${controlUrl}/api/v1/jobs/${encodeURIComponent(jobId)}/finish`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ ...payload, leaseEpoch }) }));
 }
 
 const LEASE_SECONDS = 900;
 const HEARTBEAT_INTERVAL_MS = 120_000;
 /** 这个 Worker 能处理的作业类型；同时用于租约请求和心跳上报。 */
-const WORKER_KINDS = ['ingestion', 'voice', 'preview', 'render', 'publish'];
+const WORKER_KINDS = workerProfile === 'source'
+  ? ['ingestion']
+  : workerProfile === 'render'
+    ? ['voice', 'preview', 'render', 'publish']
+    : ['ingestion', 'voice', 'preview', 'render', 'publish'];
+const WORKER_CAPABILITIES = workerProfile === 'render' ? [] : ['source:rss', 'source:http-json', 'source:pipeline'];
+const WORKER_CAPABILITY_PROTOCOL_VERSIONS: Record<string, number> =
+  workerProfile === 'render'
+    ? {}
+    : {
+        'source:rss': 1,
+        'source:http-json': 2,
+        'source:pipeline': 1,
+      };
 /** 空闲轮询每 2 秒一次，心跳没必要跟着那么密；控制面按 90 秒判定离线。 */
 const WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
 let lastWorkerHeartbeatAt = 0;
@@ -413,7 +1166,7 @@ async function reportWorkerHeartbeat() {
     const response = await fetch(`${controlUrl}/api/v1/workers`, {
       method: 'POST',
       headers: workerHeaders,
-      body: JSON.stringify({ workerId, hostname: os.hostname(), kinds: WORKER_KINDS, version: process.env.SIGNAL40_WORKER_VERSION || `node-${process.version}` }),
+      body: JSON.stringify({ workerId, hostname: os.hostname(), kinds: WORKER_KINDS, capabilities: WORKER_CAPABILITIES, capabilityProtocolVersions: WORKER_CAPABILITY_PROTOCOL_VERSIONS, version: process.env.SIGNAL40_WORKER_VERSION || `node-${process.version}` }),
     });
     if (!response.ok) process.stderr.write(`心跳上报失败 HTTP ${response.status}\n`);
   } catch (error) {
@@ -425,12 +1178,12 @@ async function reportWorkerHeartbeat() {
  * 执行期间周期性续约。渲染可能远超一次租约时长，不续约的话租约到期后
  * 另一个 Worker 会重复领取同一作业，白烧一次渲染并可能产出重复资产。
  */
-function startHeartbeat(jobId: string) {
+function startHeartbeat(jobId: string, leaseEpoch: number) {
   const timer = setInterval(() => {
     void fetch(`${controlUrl}/api/v1/jobs/${encodeURIComponent(jobId)}/heartbeat`, {
       method: 'POST',
       headers: workerHeaders,
-      body: JSON.stringify({ workerId, leaseSeconds: LEASE_SECONDS }),
+      body: JSON.stringify({ workerId, leaseEpoch, leaseSeconds: LEASE_SECONDS }),
     }).then((response) => {
       if (!response.ok) process.stderr.write(`${jobId}: 续约失败 HTTP ${response.status}\n`);
     }).catch((error: unknown) => {
@@ -442,24 +1195,40 @@ function startHeartbeat(jobId: string) {
 }
 
 async function main() {
-  process.stdout.write(`Signal 40 Render Worker ${workerId} connected to ${controlUrl}\n`);
+  process.stdout.write(`Signal 40 ${workerProfile} Worker ${workerId} connected to ${controlUrl}\n`);
+  await reportWorkerHeartbeat();
+  // 注册心跳与作业租约心跳相互独立；长渲染期间也必须保持“在线”，否则控制台会误报孤儿作业。
+  const workerHeartbeat = setInterval(() => { void reportWorkerHeartbeat(); }, WORKER_HEARTBEAT_INTERVAL_MS);
+  workerHeartbeat.unref?.();
   for (;;) {
-    await reportWorkerHeartbeat();
-    const response = await fetch(`${controlUrl}/api/v1/jobs/lease`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ workerId, kinds: WORKER_KINDS, leaseSeconds: LEASE_SECONDS }) });
+    const response = await fetch(`${controlUrl}/api/v1/jobs/lease`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ workerId, kinds: WORKER_KINDS, capabilities: WORKER_CAPABILITIES, capabilityProtocolVersions: WORKER_CAPABILITY_PROTOCOL_VERSIONS, maxPayloadSchemaVersion: 2, leaseSeconds: LEASE_SECONDS }) });
     if (response.status === 204) { await new Promise((resolve) => setTimeout(resolve, 2000)); continue; }
     const { job } = await json<{ job: WorkerJob }>(response);
-    const stopHeartbeat = startHeartbeat(job.id);
+    const stopHeartbeat = startHeartbeat(job.id, job.lease_epoch);
     try {
       const startedAt = Date.now();
       const result = await work(job);
       const measuredResult = result && typeof result === 'object' ? { ...result, durationMs: Date.now() - startedAt } : { value: result, durationMs: Date.now() - startedAt };
       stopHeartbeat();
-      await finish(job.id, { workerId, succeeded: true, result: measuredResult });
+      await finish(job.id, job.lease_epoch, { workerId, succeeded: true, result: measuredResult });
     } catch (error) {
       stopHeartbeat();
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`${job.id}: ${message}\n`);
-      await finish(job.id, { workerId, succeeded: false, error: message, terminal: error instanceof TerminalJobError });
+      try {
+        await finish(job.id, job.lease_epoch, {
+          workerId,
+          succeeded: false,
+          error: message,
+          errorCode: error instanceof TerminalJobError || error instanceof RetryableJobError ? error.errorCode : 'NETWORK',
+          retryDelaySeconds: error instanceof RetryableJobError ? error.retryDelaySeconds : undefined,
+          terminal: error instanceof TerminalJobError,
+        });
+      } catch (finishError) {
+        // Kill switch、legal hold 或 lease takeover 会主动 fence 旧执行。
+        // 这时完成写回被 409 拒绝是预期行为，Worker 必须继续服务下一项而不是退出。
+        process.stderr.write(`${job.id}: 完成写回被拒绝 ${finishError instanceof Error ? finishError.message : String(finishError)}\n`);
+      }
     }
   }
 }

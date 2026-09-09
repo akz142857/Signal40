@@ -1,5 +1,6 @@
 import type { TopicCandidate } from './domain.ts';
 import { getVideoTemplate } from './templates.ts';
+import { narrationBudget } from './script-duration.ts';
 import { stableHash } from './workflow.ts';
 
 export type EvidenceStance = 'supports' | 'refutes' | 'context';
@@ -277,14 +278,21 @@ export function createProjectV2(topic: TopicCandidate, now = new Date()): VideoP
         observedAt: source.publishedAt,
         locator: { type: 'url' as const, value: source.url },
       })),
-    }));
+  }));
   if (!claims.length) throw new Error('项目没有可冻结的原始声明。');
+  const targetDurationSeconds = 45;
+  const lineCount = claims.length + 2;
+  const characterBudget = narrationBudget(targetDurationSeconds, lineCount).characters;
+  const clip = (value: string, limit: number) => value.length <= limit ? value : `${value.slice(0, Math.max(1, limit - 1))}…`;
+  const hookBudget = Math.max(24, Math.floor(characterBudget * 0.2));
+  const takeawayBudget = Math.max(42, Math.floor(characterBudget * 0.3));
+  const evidenceBudget = Math.max(20, Math.floor((characterBudget - hookBudget - takeawayBudget) / claims.length));
   const lines = [
-    { id: 'line_hook', text: topic.title, screenText: topic.title, claimIds: [claims[0].id], pronunciationHints: {}, locked: false, comment: '' },
+    { id: 'line_hook', text: clip(`今天关注${topic.title}。接下来只依据已核验来源，拆解这件事的关键信号。`, hookBudget), screenText: topic.title, claimIds: [claims[0].id], pronunciationHints: {}, locked: false, comment: '' },
     ...claims.map((claim, index) => ({
       id: `line_evidence_${index + 1}`,
-      text: claim.text,
-      screenText: claim.text,
+      text: clip(`第${index + 1}个已核验事实：${claim.text}。这条信息由${claim.evidence.length}条来源记录支持。`, evidenceBudget),
+      screenText: clip(claim.text, 36),
       claimIds: [claim.id],
       pronunciationHints: {},
       locked: false,
@@ -292,7 +300,7 @@ export function createProjectV2(topic: TopicCandidate, now = new Date()): VideoP
     })),
     {
       id: 'line_takeaway',
-      text: '以上信息仅用于事实解读，不构成任何投资建议。',
+      text: clip('把这些事实放在一起看，重点是事件本身以及后续变化。以上信息仅用于事实解读，不构成任何投资建议。', takeawayBudget),
       screenText: '不构成投资建议',
       claimIds: [],
       pronunciationHints: {},
@@ -311,7 +319,7 @@ export function createProjectV2(topic: TopicCandidate, now = new Date()): VideoP
     schemaVersion: '2.0' as const,
     identity: { projectId, topicId: topic.id, title: topic.title, locale: 'zh-CN', brand: 'Signal 40', createdAt: now.toISOString() },
     research: { snapshotId: `research_${stableHash(researchCore)}`, algorithmVersion: 'signal40-score/1.0.0', ...researchCore, approvedHash: stableHash(researchCore) },
-    script: { version: 1, title: topic.title, targetDurationSeconds: 45, disclaimer: '本内容仅供信息参考，不构成投资建议。', modelVersion: 'deterministic-template/1.0.0', promptVersion: 'signal40-script/1.0.0', humanModifiedBy: null, humanModifiedAt: null, lines },
+    script: { version: 1, title: topic.title, targetDurationSeconds, disclaimer: '本内容仅供信息参考，不构成投资建议。', modelVersion: 'deterministic-template/1.1.0', promptVersion: 'signal40-script/1.1.0', humanModifiedBy: null, humanModifiedAt: null, lines },
     timeline,
     visuals: [
       { id: 'visual_hero', type: 'text' as const, spec: { title: topic.title } },
@@ -321,7 +329,7 @@ export function createProjectV2(topic: TopicCandidate, now = new Date()): VideoP
     assets: [],
     audio: { provider: null, voice: null, objectKey: null, durationMs: null, speed: 1, pronunciationDictionary: {}, sha256: null, fallbackProvider: 'macos-say-local', estimatedCostMicros: 0, music: null, mix: { voiceVolume: 1, targetLufs: -16, duckMusicUnderVoice: true } },
     captions: [],
-    render: { compositionId: 'Signal40Vertical', templateId: 'signal40-editorial', templateVersion: getVideoTemplate('signal40-editorial').version, fps: 30 as const, width: 1080 as const, height: 1920 as const, durationSeconds: 45, snapshotHash: '' },
+    render: { compositionId: 'Signal40Vertical', templateId: 'signal40-editorial', templateVersion: getVideoTemplate('signal40-editorial').version, fps: 30 as const, width: 1080 as const, height: 1920 as const, durationSeconds: targetDurationSeconds, snapshotHash: '' },
     distribution: { channelPreset: null, accountId: null, title: topic.title, description: '财经事实解读。\n\n本内容不构成投资建议。', tags: [], coverAssetId: null, scheduledAt: null, finalUrl: null },
     provenance: { generatedBy: 'signal40-control-plane', sourceProjectVersion: '2.0', immutableInputsHash: '' },
   };

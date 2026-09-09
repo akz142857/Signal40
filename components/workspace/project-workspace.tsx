@@ -5,6 +5,7 @@ import { ArrowLeft, CheckCircle2, Circle, CircleAlert, FileText, Film, Gauge, La
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { ScriptEditor, StoryboardEditor } from '@/components/workspace/production-editors';
 import { ResearchEditor } from '@/components/workspace/research-editor';
 import { MetricsPanel } from '@/components/workspace/metrics-panel';
@@ -19,6 +20,7 @@ const VideoPreview = lazy(() => import('@/components/workspace/video-preview').t
 type AuditEvent = { id: string; action: string; actor_id: string; actor_role: string; created_at: string; metadata: Record<string, unknown> };
 
 type OrphanedJob = { id: string; kind: string; projectId: string | null; createdAt: string };
+type Incident = { id: string; kind: string; severity: string; status: 'open' | 'resolved'; reason: string; resolution: string | null; actor_id: string; created_at: string };
 
 const phases = [
   { label: '研究', states: ['DRAFT', 'RESEARCHING', 'EVIDENCE_READY', 'EDITOR_APPROVED'], icon: ShieldCheck },
@@ -58,6 +60,9 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [orphaned, setOrphaned] = useState<OrphanedJob[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [incidentKind, setIncidentKind] = useState('correction');
+  const [incidentSeverity, setIncidentSeverity] = useState('medium');
   const session = useSession();
   // 生产环境返回空对象，服务端用反向代理注入的真实身份；
   // 只有本机开发且服务端明确允许时，才带上伪造角色头。
@@ -67,11 +72,12 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   );
 
   const refresh = useCallback(async () => {
-    const [projectResponse, gateResponse, auditResponse, workerResponse] = await Promise.all([
+    const [projectResponse, gateResponse, auditResponse, workerResponse, incidentResponse] = await Promise.all([
       fetch(`/api/v1/projects/${project.id}`, { cache: 'no-store' }),
       fetch(`/api/v1/projects/${project.id}/gates`, { cache: 'no-store' }),
       fetch(`/api/v1/projects/${project.id}/audit`, { cache: 'no-store' }),
       fetch('/api/v1/workers', { cache: 'no-store' }),
+      fetch(`/api/v1/projects/${project.id}/incidents`, { cache: 'no-store' }),
     ]);
     if (!projectResponse.ok) throw new Error(await readError(projectResponse));
     const projectPayload = (await projectResponse.json()) as { project: ProjectRecord };
@@ -80,10 +86,18 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     setProject(projectPayload.project);
     setGates(gatePayload.gates);
     setAudit(auditPayload.events);
+    if (incidentResponse.ok) setIncidents(((await incidentResponse.json()) as { incidents: Incident[] }).incidents);
     if (workerResponse.ok) {
       const workerPayload = (await workerResponse.json()) as { orphanedJobs: OrphanedJob[] };
       setOrphaned(workerPayload.orphanedJobs.filter((job) => job.projectId === project.id));
     }
+  }, [project.id]);
+
+  const refreshWorkers = useCallback(async () => {
+    const response = await fetch('/api/v1/workers', { cache: 'no-store' });
+    if (!response.ok) return;
+    const payload = await response.json() as { orphanedJobs: OrphanedJob[] };
+    setOrphaned(payload.orphanedJobs.filter((job) => job.projectId === project.id));
   }, [project.id]);
 
   useEffect(() => {
@@ -92,6 +106,11 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     }, 0);
     return () => window.clearTimeout(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => { void refreshWorkers(); }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [refreshWorkers]);
 
   const approve = async (kind: 'research' | 'script' | 'qc' | 'publish') => {
     setBusy(true);
@@ -213,6 +232,30 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
     finally { setBusy(false); }
   };
 
+  const createIncident = async () => {
+    if (note.trim().length < 10) { setMessage('登记内容事件需要至少 10 个字的原因。'); return; }
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/v1/projects/${project.id}/incidents`, { method: 'POST', headers: { 'content-type': 'application/json', ...actorHeaders('editor', 'local-editor') }, body: JSON.stringify({ kind: incidentKind, severity: incidentSeverity, reason: note.trim() }) });
+      if (!response.ok) throw new Error(await readError(response));
+      await refresh();
+      setMessage('内容事件已登记，本项目自动化已暂停。');
+    } catch (error) { setMessage(error instanceof Error ? error.message : '内容事件登记失败。'); }
+    finally { setBusy(false); }
+  };
+
+  const resolveIncident = async (incident: Incident) => {
+    if (note.trim().length < 10) { setMessage('关闭内容事件需要至少 10 个字的处置结果。'); return; }
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/v1/incidents/${incident.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json', ...actorHeaders('editor', 'local-editor') }, body: JSON.stringify({ resolution: note.trim() }) });
+      if (!response.ok) throw new Error(await readError(response));
+      await refresh();
+      setMessage('内容事件已关闭；自动化仍保持人工模式，需显式恢复。');
+    } catch (error) { setMessage(error instanceof Error ? error.message : '内容事件关闭失败。'); }
+    finally { setBusy(false); }
+  };
+
   useEffect(() => {
     const context = document.modelContext;
     if (!context?.registerTool) return;
@@ -330,12 +373,22 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
           </section>
           <ProductionConfig key={`production-${project.version}`} project={project} onSaved={refresh} onMessage={setMessage} />
           <MetricsPanel project={project} onSaved={refresh} onMessage={setMessage} />
+          <section className="rounded-2xl border border-border bg-card p-5">
+            <h2 className="font-semibold">内容事件</h2>
+            <p className="mt-1 text-xs text-muted-foreground">勘误、事实更新或投诉会立即让自动化转人工；关闭事件后仍需显式恢复。</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <NativeSelect value={incidentKind} onChange={(event) => setIncidentKind(event.target.value)}><NativeSelectOption value="correction">勘误</NativeSelectOption><NativeSelectOption value="fact_update">事实更新</NativeSelectOption><NativeSelectOption value="complaint">投诉</NativeSelectOption></NativeSelect>
+              <NativeSelect value={incidentSeverity} onChange={(event) => setIncidentSeverity(event.target.value)}><NativeSelectOption value="low">低</NativeSelectOption><NativeSelectOption value="medium">中</NativeSelectOption><NativeSelectOption value="high">高</NativeSelectOption><NativeSelectOption value="critical">严重</NativeSelectOption></NativeSelect>
+              <Button variant="outline" disabled={busy || note.trim().length < 10} onClick={() => void createIncident()}><CircleAlert />用“当前操作”说明登记事件</Button>
+            </div>
+            <div className="mt-4 grid gap-2">{incidents.map((incident) => <article className="rounded-xl bg-secondary/50 p-3 text-sm" key={incident.id}><div className="flex flex-wrap items-center gap-2"><span className="font-semibold">{incident.kind} · {incident.severity}</span><span className={incident.status === 'open' ? 'text-destructive' : 'text-chart-1'}>{incident.status === 'open' ? '处理中' : '已关闭'}</span><span className="text-xs text-muted-foreground">{new Date(incident.created_at).toLocaleString('zh-CN')} · {incident.actor_id}</span></div><p className="mt-1 leading-6">{incident.reason}</p>{incident.resolution && <p className="mt-1 text-muted-foreground">处置：{incident.resolution}</p>}{incident.status === 'open' && <Button className="mt-2" size="sm" variant="outline" disabled={busy || note.trim().length < 10} onClick={() => void resolveIncident(incident)}>用“当前操作”说明关闭</Button>}</article>)}{!incidents.length && <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">当前没有内容事件。</p>}</div>
+          </section>
         </div>
 
         <aside className="space-y-4">
           <section className="rounded-2xl border border-border bg-card p-4"><h2 className="font-semibold">G0–G8 门禁</h2><div className="mt-3 space-y-2">{gates.map((gate) => <div key={gate.code} className="flex items-start gap-2 rounded-lg bg-secondary/50 p-2.5">{gate.passed ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-chart-1" /> : <CircleAlert className="mt-0.5 size-4 shrink-0 text-chart-2" />}<div><p className="font-mono text-xs font-semibold">{gate.code}</p>{!gate.passed && <p className="mt-1 text-xs leading-5 text-muted-foreground">{gate.reasons.join('；')}</p>}</div></div>)}</div></section>
           <section className="rounded-2xl border border-border bg-card p-4"><h2 className="font-semibold">当前操作</h2><Textarea className="mt-3 min-h-24 text-sm" value={note} onChange={(event) => setNote(event.target.value)} /><div className="mt-3 grid gap-2">{requiredApproval && <Button variant="outline" disabled={busy || note.trim().length < 10} onClick={() => void approve(requiredApproval)}><ShieldCheck />批准当前 {requiredApproval}</Button>}{project.state === 'SCRIPT_APPROVED' && !project.project.audio.objectKey && <Button variant="outline" disabled={busy} onClick={() => void enqueueVoice()}><Mic2 />生成配音与字幕</Button>}{project.state === 'PUBLISH_SCHEDULED' && <><Button variant="outline" disabled={busy} onClick={() => void enqueuePublish('package')}><PackageCheck />生成发布包</Button><Button disabled={busy} onClick={() => void enqueuePublish('youtube')}><Film />YouTube 私密上传</Button></>}{project.state === 'ASSETS_READY' ? <><Button variant="outline" disabled={busy} onClick={() => void enqueuePreview()}>{busy ? <LoaderCircle className="animate-spin" /> : <Play />}生成低码率预览片</Button><Button disabled={busy} onClick={() => void enqueueRender()}>{busy ? <LoaderCircle className="animate-spin" /> : <Film />}创建正式渲染任务</Button></> : project.state !== 'PUBLISH_SCHEDULED' && currentNext && <Button disabled={busy} onClick={() => void transition(currentNext)}>{busy ? <LoaderCircle className="animate-spin" /> : <Play />}推进到 {stateLabels[currentNext]}</Button>}{canRequestChanges && <Button variant="destructive" disabled={busy || note.trim().length < 10} onClick={() => void transition('CHANGES_REQUESTED')}><CircleAlert />要求修改</Button>}</div><p className="mt-3 text-xs leading-5 text-muted-foreground">若对应门禁未通过，服务端会拒绝推进并返回具体原因。</p></section>
-          <section className="rounded-2xl border border-border bg-card p-4"><h2 className="font-semibold">审计流</h2><div className="mt-3 space-y-3">{audit.slice(0, 8).map((event) => <div key={event.id} className="border-l-2 border-border pl-3"><p className="text-sm font-medium">{event.action}</p><p className="mt-1 text-xs text-muted-foreground">{event.actor_role} · {new Date(event.created_at).toLocaleString('zh-CN')}</p></div>)}{!audit.length && <p className="text-sm text-muted-foreground">正在读取审计记录…</p>}</div></section>
+          <section className="rounded-2xl border border-border bg-card p-4"><h2 className="font-semibold">审计流</h2><div className="mt-3 space-y-3">{audit.slice(0, 8).map((event) => { const trigger = event.metadata?.trigger === 'automation' ? '自动化' : event.metadata?.trigger === 'human' ? '人工' : '历史记录'; const policyId = typeof event.metadata?.policyId === 'string' ? event.metadata.policyId : null; return <div key={event.id} className="border-l-2 border-border pl-3"><p className="text-sm font-medium">{event.action}</p><p className="mt-1 text-xs text-muted-foreground">{trigger} · {event.actor_id} · {event.actor_role} · {new Date(event.created_at).toLocaleString('zh-CN')}</p>{policyId ? <p className="mt-1 font-mono text-[11px] text-muted-foreground">Policy: {policyId}</p> : null}</div>; })}{!audit.length && <p className="text-sm text-muted-foreground">正在读取审计记录…</p>}</div></section>
         </aside>
       </div>
     </main>

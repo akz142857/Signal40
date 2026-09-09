@@ -18,7 +18,7 @@ export interface PgTransactionRunner extends PgQueryRunner {
 }
 
 /**
- * 把 D1/SQLite 风格的 `?` 占位符换成 PG 的 `$1..$n`。
+ * 把仓库统一使用的 `?` 占位符换成 PG 的 `$1..$n`。
  *
  * 225 处 SQL 全部写的是 `?`，在这里统一转换比逐条改写安全得多。
  * 单引号字符串内部的 `?` 不算占位符（PG 用 `''` 转义引号，这里一并处理）。
@@ -107,7 +107,8 @@ class PgStatement implements SqlStatement {
   }
 }
 
-export function createPgDatabase(runner: PgTransactionRunner): SqlDatabase {
+export function createPgDatabase(runner: PgTransactionRunner, inTransaction = false): SqlDatabase {
+  let savepointSequence = 0;
   /** 取一个独占连接跑显式事务；PGlite 这类单连接实现没有 connect()，直接复用本体。 */
   async function withConnection<T>(run: (executor: PgQueryRunner) => Promise<T>): Promise<T> {
     const client = runner.connect ? await runner.connect() : null;
@@ -125,26 +126,46 @@ export function createPgDatabase(runner: PgTransactionRunner): SqlDatabase {
     }
   }
 
-  return {
+  async function withSavepoint<T>(run: () => Promise<T>): Promise<T> {
+    savepointSequence += 1;
+    const name = `signal40_nested_${savepointSequence}`;
+    await runner.query(`SAVEPOINT ${name}`);
+    try {
+      const value = await run();
+      await runner.query(`RELEASE SAVEPOINT ${name}`);
+      return value;
+    } catch (error) {
+      await runner.query(`ROLLBACK TO SAVEPOINT ${name}`).catch(() => undefined);
+      await runner.query(`RELEASE SAVEPOINT ${name}`).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  const database: SqlDatabase = {
     prepare(sql) {
       return new PgStatement(runner, toPositionalPlaceholders(sql));
     },
     transaction(run) {
-      return withConnection((executor) => run(createPgDatabase(executor)));
+      // 业务函数会彼此组合（例如编排器持有项目行锁后调用状态机，状态机本身也开事务）。
+      // 已在事务中时复用同一连接，否则 PG 会把内层工作分派到另一连接，既丢失行锁也可能死锁。
+      if (inTransaction) return withSavepoint(() => run(database));
+      return withConnection((executor) => run(createPgDatabase(executor, true)));
     },
     async batch(statements) {
       const prepared = statements.map((statement) => {
         if (!(statement instanceof PgStatement)) throw new TypeError('batch 只接受同一个 PG 连接创建的语句。');
         return statement;
       });
-      return withConnection(async (executor) => {
+      const execute = async (executor: PgQueryRunner) => {
         const results: SqlRunResult[] = [];
         for (const statement of prepared) {
           const result = await executor.query(statement.text, statement.values);
           results.push({ meta: { changes: changesOf(result) } });
         }
         return results;
-      });
+      };
+      return inTransaction ? withSavepoint(() => execute(runner)) : withConnection(execute);
     },
   };
+  return database;
 }

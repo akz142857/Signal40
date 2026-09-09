@@ -1,0 +1,1 @@
+ALTER TABLE "ingestion_runs" ADD COLUMN "cost_micros_per_request" integer DEFAULT 0 NOT NULL;

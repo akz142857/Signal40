@@ -107,6 +107,8 @@ export type DiagnosticsInput = {
     openAiApiKey?: string;
     youtubeAccessToken?: string;
     workerToken?: string;
+    sourceWorkerToken?: string;
+    renderWorkerToken?: string;
     schedulerToken?: string;
     mediaSigningSecret?: string;
     automationActorId?: string;
@@ -130,7 +132,14 @@ export async function runDiagnostics(input: DiagnosticsInput) {
 
   checks.push(credentialCheck('openai', 'OpenAI 凭据（配音与字幕对齐）', input.env.openAiApiKey, '不配就跑不了 voice 作业，其余流程不受影响。'));
   checks.push(credentialCheck('youtube', 'YouTube 凭据', input.env.youtubeAccessToken, '不配就只能用 package 渠道产出发布包。'));
-  checks.push(credentialCheck('worker_token', 'Worker 令牌', input.env.workerToken, '控制面与 Worker 共用同一个令牌，见 .env.example。'));
+  const workerScopeStatus: DiagnosticCheck = input.env.sourceWorkerToken && input.env.renderWorkerToken
+    ? input.env.sourceWorkerToken === input.env.renderWorkerToken
+      ? { id: 'worker_token_scope', label: 'Worker 令牌隔离', status: 'degraded', detail: '采集与渲染/发布仍共用令牌。', hint: '为 SIGNAL40_SOURCE_WORKER_TOKEN 和 SIGNAL40_RENDER_WORKER_TOKEN 配置不同的长随机值。' }
+      : { id: 'worker_token_scope', label: 'Worker 令牌隔离', status: 'ok', detail: '采集与渲染/发布使用不同服务令牌。' }
+    : input.env.workerToken
+      ? { id: 'worker_token_scope', label: 'Worker 令牌隔离', status: 'degraded', detail: '仅配置了兼容共享令牌。', hint: '生产应改用两个 profile 专用令牌。' }
+      : { id: 'worker_token_scope', label: 'Worker 令牌隔离', status: 'unconfigured', detail: '未配置 Worker 令牌。', hint: '按 .env.example 配置采集和渲染 Worker 令牌。' };
+  checks.push(workerScopeStatus);
   checks.push(credentialCheck('scheduler_token', '调度器令牌', input.env.schedulerToken, '手动触发编排的接口需要它。'));
   checks.push(credentialCheck('media_signing_secret', '媒体签名密钥', input.env.mediaSigningSecret, '不配就签不出短时效媒体 URL。'));
   checks.push({

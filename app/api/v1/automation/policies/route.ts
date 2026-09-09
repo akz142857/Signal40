@@ -12,22 +12,36 @@ import { stableHash } from '@/lib/workflow';
 export async function GET(request: Request) {
   const actor = await resolveRequestActor(request);
   if (!actor || !['admin', 'auditor'].includes(actor.role)) return Response.json({ error: '当前角色无权查看自动化策略。' }, { status: 403 });
-  // 成本按策略归集：预算烧在哪条策略上，看这一张表就够了，不用去翻作业。
-  const costs = await db
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  // 成本按作业创建时的策略快照归集；项目后来换策略不会改写历史账单。
+  const [costs, projects, activity] = await Promise.all([
+    db
     .prepare(`
-      SELECT cp.automation_policy_id AS policy_id,
-        COUNT(DISTINCT cp.id) AS project_count,
-        COALESCE(SUM(CASE WHEN j.cost_micros > 0 THEN j.cost_micros ELSE j.estimated_cost_micros END), 0) AS cost_micros
-      FROM content_projects cp LEFT JOIN jobs j ON j.project_id = cp.id AND j.created_at >= ?
-      WHERE cp.automation_policy_id IS NOT NULL
-      GROUP BY cp.automation_policy_id
+      SELECT automation_policy_id AS policy_id,
+        COALESCE(SUM(CASE WHEN cost_micros > 0 THEN cost_micros ELSE estimated_cost_micros END), 0) AS cost_micros
+      FROM jobs WHERE automation_policy_id IS NOT NULL AND created_at >= ?
+      GROUP BY automation_policy_id
     `)
-    .bind(new Date(Date.now() - 30 * 86_400_000).toISOString())
-    .all<{ policy_id: string; project_count: number; cost_micros: number }>();
+      .bind(since)
+      .all<{ policy_id: string; cost_micros: number }>(),
+    db.prepare('SELECT automation_policy_id AS policy_id, COUNT(*) AS project_count FROM content_projects WHERE automation_policy_id IS NOT NULL GROUP BY automation_policy_id').all<{ policy_id: string; project_count: number }>(),
+    db.prepare(`
+      SELECT COALESCE(metadata_json ->> 'trigger', 'human') AS trigger, COUNT(*) AS total
+      FROM audit_events WHERE created_at >= ? GROUP BY COALESCE(metadata_json ->> 'trigger', 'human')
+    `).bind(since).all<{ trigger: string; total: number }>(),
+  ]);
+  const costByPolicy = new Map(costs.results.map((row) => [row.policy_id, Number(row.cost_micros)]));
+  const projectByPolicy = new Map(projects.results.map((row) => [row.policy_id, Number(row.project_count)]));
+  const policyIds = new Set([...costByPolicy.keys(), ...projectByPolicy.keys()]);
   return Response.json({
     policies: await listAutomationPolicies(db),
     defaults: defaultAutomationPolicy(),
-    costs: Object.fromEntries(costs.results.map((row) => [row.policy_id, { projectCount: Number(row.project_count), costMicros: Number(row.cost_micros) }])),
+    costs: Object.fromEntries([...policyIds].map((id) => [id, { projectCount: projectByPolicy.get(id) ?? 0, costMicros: costByPolicy.get(id) ?? 0 }])),
+    activity: {
+      automated: Number(activity.results.find((row) => row.trigger === 'automation')?.total ?? 0),
+      human: activity.results.filter((row) => row.trigger !== 'automation').reduce((sum, row) => sum + Number(row.total), 0),
+      since,
+    },
   });
 }
 

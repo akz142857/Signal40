@@ -1,4 +1,4 @@
-import { FINANCE_TERMS, similarity, tokensFor, type Article, type TopicCandidate } from './domain.ts';
+import { FINANCE_TERMS, similarity, tokensFor, type Article, type TopicCandidate, type TopicQuality } from './domain.ts';
 
 /**
  * 选题质量度量——自动建项目的前置条件。
@@ -31,24 +31,8 @@ export const MAX_COHERENT_CLUSTER_SIZE = 25;
 /** 一致性抽样上限：两两比较是 O(n²)，大簇只取最新的这些文章。 */
 const COHERENCE_SAMPLE_SIZE = 40;
 
-export type TopicLanguage = 'zh' | 'en' | 'mixed' | 'unknown';
-
-export type TopicQuality = {
-  version: string;
-  assessedAt: string;
-  articleCount: number;
-  sourceCount: number;
-  /** 簇内两两关键词重合度的中位数（0–1）。 */
-  coherence: number;
-  /** 关键词重合度的最小值，用来暴露「被硬塞进来的那一篇」。 */
-  coherenceFloor: number;
-  /** 声明与证据的对应唯一性（0–1）：1 表示没有任何两条声明共享同一批证据。 */
-  evidenceDistinctness: number;
-  language: TopicLanguage;
-  lexiconCoverage: number;
-  automatable: boolean;
-  reasons: string[];
-};
+export type TopicLanguage = TopicQuality['language'];
+export type { TopicQuality } from './domain.ts';
 
 function median(values: number[]) {
   if (!values.length) return 0;
@@ -127,6 +111,10 @@ export function assessTopicQuality(
   const language = detectLanguage(text);
   const lexiconCoverage = FINANCE_TERMS.filter((term) => text.includes(term)).length / FINANCE_TERMS.length;
   const distinctness = evidenceDistinctness(candidateClaims(articles));
+  const coherenceScore = Math.min(1, coherence / MIN_COHERENCE);
+  const distinctnessScore = Math.min(1, distinctness / MIN_EVIDENCE_DISTINCTNESS);
+  const languageScore = language === 'zh' ? Math.min(1, lexiconCoverage / MIN_LEXICON_COVERAGE) : 0;
+  const qualityScore = Math.round(((coherenceScore + distinctnessScore + languageScore) / 3) * 100);
 
   const reasons: string[] = [];
   if (articles.length < 2) reasons.push('簇内只有一篇文章，无法度量主题一致性。');
@@ -146,6 +134,7 @@ export function assessTopicQuality(
     evidenceDistinctness: round(distinctness),
     language,
     lexiconCoverage: round(lexiconCoverage),
+    score: qualityScore,
     automatable: reasons.length === 0,
     reasons,
   };

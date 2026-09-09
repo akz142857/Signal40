@@ -1,4 +1,4 @@
-import { config, db } from '@/lib/runtime';
+import { db, resolveRequestActor } from '@/lib/runtime';
 import {
   runPipeline,
   validateArticleInput,
@@ -16,17 +16,13 @@ import {
   validIdempotencyKey,
   type IdempotencyReservation,
 } from '@/lib/idempotency';
-import { resolveActor, stableHash } from '@/lib/workflow';
+import { stableHash } from '@/lib/workflow';
 
 const MAX_ARTICLES = 100;
 const MAX_BODY_BYTES = 1_000_000;
 
 export async function GET(request: Request) {
-  const actor = await resolveActor(
-    request,
-    db,
-    config.bootstrapAdminEmails,
-  );
+  const actor = await resolveRequestActor(request);
   if (!actor)
     return Response.json(
       { error: '用户未加入 Signal 40 团队。' },
@@ -54,11 +50,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const actor = await resolveActor(
-    request,
-    db,
-    config.bootstrapAdminEmails,
-  );
+  const actor = await resolveRequestActor(request);
   if (!actor)
     return Response.json(
       { error: '用户未加入 Signal 40 团队。' },

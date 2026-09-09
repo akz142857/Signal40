@@ -7,7 +7,7 @@ import {
 
 const MAX_IMPORT_ARTICLES = 100;
 
-function parseCsvRows(input: string) {
+export function parseCsvRows(input: string) {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';

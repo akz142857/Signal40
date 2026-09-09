@@ -3,7 +3,13 @@
 import { useEffect, useState } from 'react';
 import type { Role } from '@/lib/workflow';
 
-export type SessionActor = { id: string; email: string; role: Role };
+export type SessionActor = {
+  id: string;
+  email: string;
+  role: Role;
+  canApproveSourceRights?: boolean;
+  canManageSourceLegal?: boolean;
+};
 
 export type Session = {
   actor: SessionActor | null;

@@ -19,6 +19,10 @@ export type ArticleInput = {
   url: string;
   publishedAt: string;
   metrics?: { views?: number; likes?: number; recommends?: number };
+  /** 由持久化层从 source_item_origins/publisher_entities 注入，外部导入不能自行提权。 */
+  evidenceFamilyId?: string;
+  publisherEntityId?: string;
+  publisherOwnershipGroup?: string;
 };
 
 export type Article = Required<
@@ -29,6 +33,9 @@ export type Article = Required<
   summary: string;
   metrics: NonNullable<ArticleInput['metrics']>;
   contentHash: string;
+  evidenceFamilyId?: string;
+  publisherEntityId?: string;
+  publisherOwnershipGroup?: string;
 };
 
 export type ScoreBreakdown = {
@@ -49,6 +56,22 @@ export type EvidenceGate = {
 
 export type VerificationStatus = 'unreviewed' | 'verified' | 'rejected';
 
+export type TopicQuality = {
+  version: string;
+  assessedAt: string;
+  articleCount: number;
+  sourceCount: number;
+  coherence: number;
+  coherenceFloor: number;
+  evidenceDistinctness: number;
+  language: 'zh' | 'en' | 'mixed' | 'unknown';
+  lexiconCoverage: number;
+  /** 综合质量分（0–100），供自动化策略设置可审计的数值下限。 */
+  score: number;
+  automatable: boolean;
+  reasons: string[];
+};
+
 export type TopicCandidate = {
   id: string;
   title: string;
@@ -62,6 +85,7 @@ export type TopicCandidate = {
   gate: EvidenceGate;
   verificationStatus: VerificationStatus;
   verificationNote: string;
+  quality?: TopicQuality | null;
   articles: Article[];
   updatedAt: string;
 };
@@ -192,6 +216,9 @@ export function normalizeArticles(inputs: ArticleInput[]) {
       publishedAt: publishedAt.toISOString(),
       metrics: input.metrics ?? {},
       contentHash,
+      evidenceFamilyId: input.evidenceFamilyId,
+      publisherEntityId: input.publisherEntityId,
+      publisherOwnershipGroup: input.publisherOwnershipGroup,
     });
   }
   return [...byHash.values()].sort((a, b) =>
@@ -246,6 +273,11 @@ function scoreCluster(
   const uniqueSources = new Set(
     cluster.articles.map((article) => article.source),
   );
+  // 同一证据家族的改写/转载，或同一所有权集团的多个账号，都不能
+  // 通过改显示名称就增加独立证据数。旧/手工数据没有治理元数据时才回退到 source。
+  const evidenceFamilies = new Set(cluster.articles.map((article) => article.evidenceFamilyId || `legacy-content:${article.contentHash}`));
+  const publisherGroups = new Set(cluster.articles.map((article) => article.publisherOwnershipGroup || article.publisherEntityId || `legacy-source:${article.source}`));
+  const independentSourceCount = Math.min(evidenceFamilies.size, publisherGroups.size);
   const sourceTypes = new Set(
     cluster.articles.map((article) => article.sourceType),
   );
@@ -262,9 +294,9 @@ function scoreCluster(
   const numericMatches = text.match(/\d+(?:\.\d+)?%?|[¥￥$]\s?\d+/g) ?? [];
 
   const breakdown: ScoreBreakdown = {
-    resonance: clamp(uniqueSources.size * 19 + sourceTypes.size * 7),
+    resonance: clamp(independentSourceCount * 19 + sourceTypes.size * 7),
     velocity: clamp(
-      26 + recentCount * 20 + Math.max(0, uniqueSources.size - 1) * 8,
+      26 + recentCount * 20 + Math.max(0, independentSourceCount - 1) * 8,
     ),
     numericImpact: clamp(44 + numericMatches.length * 18),
     sourceQuality: clamp(
@@ -291,7 +323,6 @@ function scoreCluster(
   const hasPrimarySource = cluster.articles.some((article) =>
     ['filing', 'company', 'market'].includes(article.sourceType),
   );
-  const independentSourceCount = uniqueSources.size;
   const passed = hasPrimarySource && independentSourceCount >= 2;
   const gate: EvidenceGate = {
     passed,
@@ -312,10 +343,10 @@ function scoreCluster(
   return {
     score,
     heatChange: clamp(
-      recentCount * 4 + Math.max(0, uniqueSources.size - 1) * 3,
+      recentCount * 4 + Math.max(0, independentSourceCount - 1) * 3,
     ),
     scoreBreakdown: breakdown,
-    sourceCount: uniqueSources.size,
+    sourceCount: independentSourceCount,
     sources: [...uniqueSources],
     status,
     gate,

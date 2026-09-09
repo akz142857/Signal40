@@ -33,18 +33,31 @@ jobs:
       S3_BUCKET: ${{ secrets.R2_TEST_BUCKET }}
       S3_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       S3_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      SIGNAL40_SOURCE_SCAN_CANARY: signal40-source-api-canary:${{ github.run_id }}:${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - name: Install media probe dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm ci
       - run: npm audit --omit=dev
       - run: npm run lint
+      - run: npm run openapi:lint
+      - name: Reject OpenAPI breaking changes against the published Git baseline
+        env:
+          OPENAPI_BASELINE_GIT_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: npm run openapi:breaking -- --baseline-git-ref "$OPENAPI_BASELINE_GIT_REF"
       # 存储契约测试靠上面的 R2 secret 启用；没配就自动跳过。
       - run: npm test
+      - name: Scan Actor DTO and redacted source artifacts for sensitive canary variants
+        run: npm run source:sensitive-canary
       - run: npm run test:evaluation
+      - run: npm run db:migrations:verify
       - run: npm run db:migrate
       # 再跑一次验证迁移是幂等的。
       - run: npm run db:migrate
@@ -52,35 +65,91 @@ jobs:
       - run: npm run build
       - run: npm run test:render
 
-  render-worker-image:
+  workload-images:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: control
+            dockerfile: Dockerfile
+            image: signal40-control-plane:ci
+            compose_image: signal40-control-plane:latest
+            service: control-plane
+          - profile: source
+            dockerfile: source-worker/Dockerfile
+            image: signal40-source-worker:ci
+            compose_image: signal40-source-worker:latest
+            service: source-worker
+          - profile: render
+            dockerfile: render-worker/Dockerfile
+            image: signal40-render-worker:ci
+            compose_image: signal40-render-worker:latest
+            service: render-worker
+          - profile: broker
+            dockerfile: credential-broker/Dockerfile
+            image: signal40-credential-broker:ci
+            compose_image: signal40-credential-broker:latest
+            service: credential-broker
+    env:
+      SIGNAL40_IMAGE_SCAN_CANARY: signal40-ci-canary-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - name: Place ignored build-context canaries
+        run: npm run image:canary:prepare
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: render-worker/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: false
           load: true
-          tags: signal40-render-worker:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - run: docker run --rm --shm-size=1g --entrypoint npm signal40-render-worker:ci run test:render
-
-  control-plane-image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+          tags: |
+            ${{ matrix.image }}
+            ${{ matrix.compose_image }}
+          cache-from: type=gha,scope=${{ matrix.profile }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.profile }}
+      - name: Verify non-root, production defaults, rootfs and all image layers
+        run: npm run image:verify -- --image "${{ matrix.image }}" --profile "${{ matrix.profile }}"
+      - name: Verify Compose runtime Secret visibility
+        run: npm run compose:env:verify -- --service "${{ matrix.service }}" --profile "${{ matrix.profile }}"
+      - name: Verify scheduler runtime Secret visibility
+        if: matrix.profile == 'control'
+        run: |
+          docker tag "${{ matrix.image }}" signal40-scheduler:latest
+          npm run compose:env:verify -- --service scheduler --profile scheduler
+      - name: Scan image secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          context: .
-          file: Dockerfile
-          push: false
-          load: true
-          tags: signal40-control-plane:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          scan-type: image
+          image-ref: ${{ matrix.image }}
+          scanners: secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '1'
+          hide-progress: true
+      - name: Scan fixable high/critical vulnerabilities and image misconfiguration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ matrix.image }}
+          scanners: vuln,misconfig
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          hide-progress: true
+      - name: Generate SPDX JSON SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ matrix.image }}
+          format: spdx-json
+          artifact-name: signal40-${{ matrix.profile }}-${{ github.sha }}.spdx.json
+          output-file: signal40-${{ matrix.profile }}.spdx.json
+          upload-release-assets: false
+      - name: Render image smoke
+        if: matrix.profile == 'render'
+        run: docker run --rm --shm-size=1g --entrypoint npm "${{ matrix.image }}" run test:render
+      - name: Remove build-context canaries
+        if: always()
+        run: npm run image:canary:cleanup

@@ -8,6 +8,60 @@
 
 type ParsedIp = { family: 4 | 6; bytes: number[] };
 
+/**
+ * 固定到 IANA 2025-10-09 special-purpose registries。
+ *
+ * Source egress 比通用浏览器更保守：除 IPv4-embedded translation 需要先解包
+ * 判断真实目标外，registry 中的地址即使标为 globally reachable 也不作为内容来源
+ * 目标。升级此版本时必须同时更新回归语料和威胁模型。
+ *
+ * https://www.iana.org/assignments/iana-ipv4-special-registry/
+ * https://www.iana.org/assignments/iana-ipv6-special-registry/
+ */
+export const IANA_SPECIAL_PURPOSE_REGISTRY_VERSION = '2025-10-09';
+
+export const IANA_IPV4_SPECIAL_PURPOSE_CIDRS = [
+  '0.0.0.0/8',
+  '10.0.0.0/8',
+  '100.64.0.0/10',
+  '127.0.0.0/8',
+  '169.254.0.0/16',
+  '172.16.0.0/12',
+  '192.0.0.0/24',
+  '192.0.2.0/24',
+  '192.31.196.0/24',
+  '192.52.193.0/24',
+  '192.88.99.0/24',
+  '192.168.0.0/16',
+  '192.175.48.0/24',
+  '198.18.0.0/15',
+  '198.51.100.0/24',
+  '203.0.113.0/24',
+  '240.0.0.0/4',
+] as const;
+
+export const IANA_IPV6_SPECIAL_PURPOSE_CIDRS = [
+  '::/128',
+  '::1/128',
+  '64:ff9b:1::/48',
+  '100::/64',
+  '100:0:0:1::/64',
+  '2001::/23',
+  '2001:db8::/32',
+  '2620:4f:8000::/48',
+  '3fff::/20',
+  '5f00::/16',
+  'fc00::/7',
+  'fe80::/10',
+] as const;
+
+// Multicast is maintained in separate IANA registries but is never a valid
+// unicast content-source destination.
+const NON_UNICAST_CIDRS = {
+  4: ['224.0.0.0/4'],
+  6: ['ff00::/8'],
+} as const;
+
 function parseIpv4(value: string): number[] | null {
   const parts = value.split('.');
   if (parts.length !== 4) return null;
@@ -68,20 +122,32 @@ export function parseIpLiteral(host: string): ParsedIp | null {
   return ipv6 ? { family: 6, bytes: ipv6 } : null;
 }
 
-function isPrivateIpv4(bytes: number[]) {
-  const [a, b] = bytes;
-  if (a === 0) return true; // 0.0.0.0/8
-  if (a === 10) return true; // 10/8
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64/10 CGNAT
-  if (a === 127) return true; // 127/8 回环
-  if (a === 169 && b === 254) return true; // 169.254/16 链路本地
-  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16/12
-  if (a === 192 && b === 0 && bytes[2] === 0) return true; // 192.0.0/24
-  if (a === 192 && b === 88 && bytes[2] === 99) return true; // 192.88.99/24 6to4 中继
-  if (a === 192 && b === 168) return true; // 192.168/16
-  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18/15 基准测试
-  if (a >= 224) return true; // 224/4 组播与 240/4 保留
+function matchesCidr(bytes: number[], network: number[], prefix: number) {
+  if (bytes.length !== network.length || prefix < 0 || prefix > bytes.length * 8) {
+    return false;
+  }
+  const fullBytes = Math.floor(prefix / 8);
+  for (let index = 0; index < fullBytes; index += 1) {
+    if (bytes[index] !== network[index]) return false;
+  }
+  const remaining = prefix % 8;
+  if (!remaining) return true;
+  const mask = (0xff << (8 - remaining)) & 0xff;
+  return (bytes[fullBytes] & mask) === (network[fullBytes] & mask);
+}
+
+function inCidrs(bytes: number[], cidrs: readonly string[], family: 4 | 6) {
+  for (const cidr of cidrs) {
+    const [networkText, prefixText] = cidr.split('/');
+    const network = family === 4 ? parseIpv4(networkText) : parseIpv6(networkText);
+    if (network && matchesCidr(bytes, network, Number(prefixText))) return true;
+  }
   return false;
+}
+
+function isPrivateIpv4(bytes: number[]) {
+  return inCidrs(bytes, IANA_IPV4_SPECIAL_PURPOSE_CIDRS, 4) ||
+    inCidrs(bytes, NON_UNICAST_CIDRS[4], 4);
 }
 
 function isPrivateIpv6(bytes: number[]) {
@@ -97,10 +163,8 @@ function isPrivateIpv6(bytes: number[]) {
   }
   // 2002::/16 6to4：内嵌 IPv4 地址在第 2–5 字节
   if (bytes[0] === 0x20 && bytes[1] === 0x02) return isPrivateIpv4(bytes.slice(2, 6));
-  if ((bytes[0] & 0xfe) === 0xfc) return true; // fc00::/7 唯一本地地址
-  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10 链路本地
-  if (bytes[0] === 0xff) return true; // ff00::/8 组播
-  return false;
+  return inCidrs(bytes, IANA_IPV6_SPECIAL_PURPOSE_CIDRS, 6) ||
+    inCidrs(bytes, NON_UNICAST_CIDRS[6], 6);
 }
 
 /** 判断一个 IP 字面量（或 DNS 解析结果）是否落在私有、回环、链路本地或其他保留网段。 */

@@ -11,6 +11,7 @@ type TopicRow = {
   source_count: number;
   status: TopicCandidate['status'];
   gate_json: string;
+  quality_json: string;
   updated_at: string;
 };
 
@@ -26,6 +27,9 @@ type ArticleRow = {
   published_at: string;
   metrics_json: string;
   content_hash: string;
+  evidence_family_id?: string | null;
+  publisher_entity_id?: string | null;
+  publisher_ownership_group?: string | null;
 };
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -104,8 +108,26 @@ export async function loadRecentArticles(
   limit = 1_000,
 ) {
   const result = await db.prepare(`
-    SELECT id, source, source_type, author, title, summary, url, published_at, metrics_json, content_hash
-    FROM articles WHERE published_at >= ? ORDER BY published_at DESC LIMIT ?
+    SELECT a.id, a.source, a.source_type, a.author, a.title, a.summary, a.url,
+      a.published_at, a.metrics_json, a.content_hash,
+      origin.evidence_family_id, origin.publisher_entity_id,
+      origin.publisher_ownership_group
+    FROM articles a
+    LEFT JOIN LATERAL (
+      SELECT o.evidence_family_id, o.publisher_entity_id,
+        COALESCE(pe.ownership_group, o.publisher_entity_id) AS publisher_ownership_group
+      FROM source_item_origins o
+      LEFT JOIN publisher_entities pe ON pe.id = o.publisher_entity_id
+      WHERE o.article_id = a.id AND o.deleted_at IS NULL
+      ORDER BY o.first_seen_at ASC, o.id ASC
+      LIMIT 1
+    ) origin ON TRUE
+    WHERE a.published_at >= ?
+      AND (
+        NOT EXISTS (SELECT 1 FROM source_item_origins any_origin WHERE any_origin.article_id = a.id)
+        OR origin.evidence_family_id IS NOT NULL
+      )
+    ORDER BY a.published_at DESC LIMIT ?
   `).bind(since.toISOString(), limit).all<Omit<ArticleRow, 'topic_id'>>();
   return result.results.map((row) => ({
     id: row.id,
@@ -118,6 +140,9 @@ export async function loadRecentArticles(
     publishedAt: row.published_at,
     metrics: parseJson(row.metrics_json, {}),
     contentHash: row.content_hash,
+    evidenceFamilyId: row.evidence_family_id ?? undefined,
+    publisherEntityId: row.publisher_entity_id ?? undefined,
+    publisherOwnershipGroup: row.publisher_ownership_group ?? undefined,
   }));
 }
 
@@ -188,7 +213,7 @@ export async function persistPipeline(
         title = excluded.title, keywords_json = excluded.keywords_json, run_id = excluded.run_id,
         score = excluded.score, heat_change = excluded.heat_change, score_breakdown_json = excluded.score_breakdown_json,
         source_count = excluded.source_count, status = excluded.status, gate_json = excluded.gate_json,
-        updated_at = excluded.updated_at
+        quality_json = '{}', updated_at = excluded.updated_at
     `)
         .bind(
           ...topicChunk.flatMap((topic) => [
@@ -344,6 +369,7 @@ async function hydrateTopics(
       }),
       verificationStatus: verification.status,
       verificationNote: verification.note,
+      quality: parseJson<TopicCandidate['quality']>(row.quality_json, null),
       articles: articlesByTopic.get(row.id) ?? [],
       updatedAt: row.updated_at,
     };
@@ -359,7 +385,7 @@ export async function loadLatestTopics(db: SqlDatabase) {
   if (!latestRun) return { topics: [], run: null };
   const result = await db
     .prepare(`
-    SELECT id, title, keywords_json, score, heat_change, score_breakdown_json, source_count, status, gate_json, updated_at
+    SELECT id, title, keywords_json, score, heat_change, score_breakdown_json, source_count, status, gate_json, quality_json, updated_at
     FROM topics
     WHERE run_id = ?
     ORDER BY score DESC, source_count DESC
@@ -372,7 +398,7 @@ export async function loadLatestTopics(db: SqlDatabase) {
 export async function loadTopic(db: SqlDatabase, id: string) {
   const row = await db
     .prepare(`
-    SELECT id, title, keywords_json, score, heat_change, score_breakdown_json, source_count, status, gate_json, updated_at
+    SELECT id, title, keywords_json, score, heat_change, score_breakdown_json, source_count, status, gate_json, quality_json, updated_at
     FROM topics WHERE id = ? LIMIT 1
   `)
     .bind(id)

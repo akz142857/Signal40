@@ -13,6 +13,7 @@ type AttentionItem = {
   project_id: string | null;
   topic_id: string | null;
   policy_id: string | null;
+  source_config_id: string | null;
   reason: string;
   detail: Record<string, unknown>;
   status: 'open' | 'resolved';
@@ -34,6 +35,11 @@ const kindLabels: Record<string, string> = {
   incident_open: '内容事件进行中',
   metrics_due: '指标待回流',
   automation_actor_missing: '自动化服务账号缺失',
+  source_rights: '来源权利异常',
+  source_connector: '来源连接器异常',
+  source_slo: '来源 SLO 告警',
+  source_budget: '来源预算告警',
+  source_ownership: '来源负责人异常',
 };
 
 const severityClass = { info: 'border-border', warning: 'border-chart-2/50 bg-chart-2/5', critical: 'border-destructive/50 bg-destructive/5' } as const;
@@ -77,20 +83,28 @@ export function AttentionInbox() {
       {error && <p className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>}
       {loading && <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />读取待办…</p>}
       <div className="grid gap-3">
-        {items.map((item) => <article className={`rounded-xl border p-4 ${severityClass[item.severity]}`} key={item.id}>
+        {items.map((item) => {
+          const handlerRole = typeof item.detail?.handlerRole === 'string' ? item.detail.handlerRole : null;
+          const owner = item.detail?.businessOwner && typeof item.detail.businessOwner === 'object' ? item.detail.businessOwner as Record<string, unknown> : null;
+          const ownerLabel = typeof owner?.email === 'string' ? owner.email : typeof owner?.id === 'string' ? owner.id : null;
+          return <article className={`rounded-xl border p-4 ${severityClass[item.severity]}`} key={item.id}>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <CircleAlert className="size-4" />
             <span className="font-semibold">{kindLabels[item.kind] ?? item.kind}</span>
             <span className="text-xs text-muted-foreground">{new Date(item.created_at).toLocaleString('zh-CN')}</span>
             {item.project_id && <Link className="text-xs underline" href={`/projects/${item.project_id}`}>打开项目</Link>}
-            {item.notify_error && <span className="text-xs text-destructive">通知推送失败：{item.notify_error}</span>}
+            {item.topic_id && <Link className="text-xs underline" href={`/?topic=${encodeURIComponent(item.topic_id)}`}>打开选题雷达（{item.topic_id}）</Link>}
+            {item.source_config_id && <Link className="text-xs underline" href={`/sources?source=${encodeURIComponent(item.source_config_id)}`}>打开来源（{item.source_config_id}）</Link>}
+            {item.notified_at ? <span className="text-xs text-chart-1">已推送通知 · {new Date(item.notified_at).toLocaleString('zh-CN')}</span> : item.notify_error ? <span className="text-xs text-destructive">通知推送失败：{item.notify_error}</span> : <span className="text-xs text-muted-foreground">尚未推送外部通知</span>}
           </div>
           <p className="mt-2 text-sm leading-6">{item.reason}</p>
+          {(handlerRole || ownerLabel) && <p className="mt-2 text-xs text-muted-foreground">处理角色：{handlerRole ?? '未指定'} · 业务负责人：{ownerLabel ?? '未分配'}</p>}
+          {Object.keys(item.detail ?? {}).length > 0 && <details className="mt-2 rounded-lg bg-secondary/50 p-3 text-xs"><summary className="cursor-pointer font-medium">查看机器详情</summary><pre className="mt-2 overflow-auto whitespace-pre-wrap font-mono">{JSON.stringify(item.detail, null, 2)}</pre></details>}
           {status === 'open' && <div className="mt-3 flex flex-wrap gap-2">
             <Input className="max-w-md" placeholder="处置说明（至少 5 个字）" value={notes[item.id] ?? ''} onChange={(event) => setNotes((current) => ({ ...current, [item.id]: event.target.value }))} />
             <Button variant="outline" onClick={() => void resolve(item)}>标记已处理</Button>
           </div>}
-        </article>)}
+        </article>;})}
         {!loading && !items.length && <p className="rounded-xl border border-dashed p-7 text-center text-sm text-muted-foreground">{status === 'open' ? '没有待处理事项。' : '还没有已处理的记录。'}</p>}
       </div>
     </div>

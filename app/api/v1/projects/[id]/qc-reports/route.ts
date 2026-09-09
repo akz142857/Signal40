@@ -3,7 +3,7 @@ import { stableHash } from '@/lib/workflow';
 import { authorizeWorker } from '@/lib/worker-auth';
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await authorizeWorker(request, config.workerToken))) return Response.json({ error: 'Worker 未授权。' }, { status: 401 });
+  if (!(await authorizeWorker(request, config.renderWorkerToken))) return Response.json({ error: 'Worker 未授权。' }, { status: 401 });
   let body: { renderJobId?: string; status?: string; checks?: unknown[] };
   try { body = (await request.json()) as typeof body; } catch { return Response.json({ error: '请求体必须是 JSON。' }, { status: 400 }); }
   if (!body.renderJobId || !['passed', 'failed'].includes(body.status || '') || !Array.isArray(body.checks)) return Response.json({ error: 'QC 报告字段无效。' }, { status: 422 });

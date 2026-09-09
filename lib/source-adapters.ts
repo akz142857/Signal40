@@ -1,8 +1,32 @@
 import type { ArticleInput, SourceType } from './domain.ts';
 import { isPrivateHostname } from './net-guard.ts';
 import { isValidCron } from './schedule.ts';
+import { XMLParser } from 'fast-xml-parser';
+import { SyntaxValidator } from 'fast-xml-validator';
+import { sha256Hex } from './hash.ts';
+import {
+  SOURCE_RIGHTS_STATUSES,
+  type SourceRightsStatus,
+} from './source-lifecycle-status.ts';
+import type { NormalizedSourceItem } from './source-normalized-item.ts';
 
 export type SourceAdapterName = 'rss' | 'http' | 'opencli' | 'csv';
+
+export type HttpJsonPaginationConfig = {
+  mode: 'none' | 'page' | 'cursor' | 'since';
+  /** 每次运行的硬页数上限；到达上限但上游仍声明有下一页时整次运行失败，不推进 checkpoint。 */
+  maxPages?: number;
+  pageParameter?: string;
+  startPage?: number;
+  pageSizeParameter?: string;
+  pageSize?: number;
+  cursorParameter?: string;
+  /** 从响应 JSON 中读取下一游标的点路径。 */
+  cursorPath?: string;
+  sinceParameter?: string;
+  /** 可选布尔/0/1 字段；明确为 false 时停止翻页。 */
+  hasMorePath?: string;
+};
 
 export type SourceConfigInput = {
   name: string;
@@ -10,19 +34,31 @@ export type SourceConfigInput = {
   sourceType: SourceType;
   url?: string;
   scheduleCron?: string | null;
-  rightsStatus: 'approved' | 'restricted' | 'blocked';
+  rightsStatus: SourceRightsStatus;
   rateLimitPerMinute?: number;
   retention?: { mode: 'metadata' | 'raw'; days: number };
   mapping?: Record<string, string>;
+  pagination?: HttpJsonPaginationConfig;
+  namespace?: string;
+  connectorId?: string;
+  connectorVersion?: string;
 };
+
+const SENSITIVE_SOURCE_QUERY_NAME = /(?:^|[-_.])(access|auth|credential|key|pass(?:word)?|secret|sig(?:nature)?|token)(?:$|[-_.])/i;
 
 export function assertPublicHttpUrl(value: string) {
   let url: URL;
   try { url = new URL(value); } catch { throw new Error('来源 URL 无效。'); }
   if (!['https:', 'http:'].includes(url.protocol)) throw new Error('来源 URL 必须使用 HTTP(S)。');
   if (isPrivateHostname(url.hostname)) throw new Error('来源 URL 不能指向本地或私有网络。');
-  url.username = '';
-  url.password = '';
+  if (url.port && !['80', '443'].includes(url.port)) throw new Error('来源 URL 只允许标准 HTTP(S) 端口。');
+  if (url.username || url.password) throw new Error('来源 URL 不能包含用户凭据。');
+  if (url.hash) throw new Error('来源 URL 不能包含 fragment。');
+  for (const key of url.searchParams.keys()) {
+    if (SENSITIVE_SOURCE_QUERY_NAME.test(key) || key.toLowerCase().startsWith('x-amz-')) {
+      throw new Error('来源 URL 不能包含敏感 query；请使用服务端 credential alias。');
+    }
+  }
   return url.toString();
 }
 
@@ -37,29 +73,105 @@ function decodeXml(value: string) {
     .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function element(block: string, names: string[]) {
+const rssParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  textNodeName: '#text',
+  removeNSPrefix: true,
+  parseTagValue: false,
+  parseAttributeValue: false,
+  trimValues: true,
+  processEntities: false,
+  isArray: (tagName) => tagName === 'item' || tagName === 'entry' || tagName === 'link',
+});
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function text(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return decodeXml(String(value));
+  if (Array.isArray(value)) return value.map(text).filter(Boolean).join(' ');
+  const object = record(value);
+  if (!object) return '';
+  return text(object['#text'] ?? object.value ?? object.name ?? '');
+}
+
+function firstText(item: Record<string, unknown>, names: string[]) {
   for (const name of names) {
-    const match = new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${name}>`, 'i').exec(block);
-    if (match) return decodeXml(match[1]);
+    const value = text(item[name]);
+    if (value) return value;
   }
   return '';
 }
 
-export function parseRssFeed(xml: string, config: Pick<SourceConfigInput, 'name' | 'sourceType'>): ArticleInput[] {
-  const blocks = xml.match(/<(?:item|entry)(?:\s[^>]*)?>[\s\S]*?<\/(?:item|entry)>/gi) ?? [];
-  return blocks.slice(0, 100).flatMap((block) => {
-    const title = element(block, ['title']);
-    const linkText = element(block, ['link']);
-    const linkHref = /<link[^>]+href=["']([^"']+)["']/i.exec(block)?.[1];
-    const publishedAt = element(block, ['pubDate', 'published', 'updated']);
-    if (!title || !(linkHref || linkText) || !publishedAt) return [];
+function feedLink(value: unknown) {
+  const links = Array.isArray(value) ? value : [value];
+  for (const link of links) {
+    if (typeof link === 'string' && link.trim()) return decodeXml(link);
+    const object = record(link);
+    if (!object) continue;
+    const relation = typeof object['@_rel'] === 'string' ? object['@_rel'] : 'alternate';
+    const href = typeof object['@_href'] === 'string' ? object['@_href'] : text(object);
+    if ((!relation || relation === 'alternate') && href) return decodeXml(href);
+  }
+  return '';
+}
+
+export function parseRssFeed(
+  xml: string,
+  config: Pick<SourceConfigInput, 'name' | 'sourceType'> & { url?: string },
+): ArticleInput[] {
+  // 即使关闭实体处理，也显式拒绝 DTD，避免未来依赖配置变更重新引入实体扩展风险。
+  if (/<!DOCTYPE/i.test(xml)) throw new Error('RSS/Atom 不允许包含 DOCTYPE。');
+  let parsed: unknown;
+  try {
+    SyntaxValidator.validate(xml, {
+      allowBooleanAttributes: false,
+      invalidCharSequence: { comment: true, tagValue: true, attrLt: true },
+    });
+    parsed = rssParser.parse(xml);
+  } catch {
+    throw new Error('RSS/Atom XML 格式无效。');
+  }
+  const root = record(parsed);
+  const rss = record(root?.rss);
+  const channel = record(rss?.channel);
+  const atom = record(root?.feed);
+  const documentBase = typeof atom?.['@_base'] === 'string'
+    ? atom['@_base']
+    : config.url || feedLink(channel?.link) || feedLink(atom?.link);
+  const candidates = channel?.item ?? atom?.entry ?? [];
+  const items = Array.isArray(candidates) ? candidates : [candidates];
+  return items.slice(0, 100).flatMap((candidate) => {
+    const item = record(candidate);
+    if (!item) return [];
+    const title = firstText(item, ['title']);
+    const link = feedLink(item.link) || firstText(item, ['guid', 'id']);
+    const publishedAt = firstText(item, ['pubDate', 'published', 'updated', 'date']);
+    if (!title || !link || !publishedAt) return [];
     try {
-      return [{ source: config.name, sourceType: config.sourceType, title, summary: element(block, ['description', 'summary', 'content']), url: assertPublicHttpUrl(linkHref || linkText), publishedAt: new Date(publishedAt).toISOString() }];
+      const timestamp = new Date(publishedAt);
+      if (Number.isNaN(timestamp.valueOf())) return [];
+      const itemBase = typeof item['@_base'] === 'string' ? item['@_base'] : documentBase;
+      const url = itemBase ? new URL(link, itemBase).toString() : link;
+      return [{
+        id: firstText(item, ['guid', 'id']) || undefined,
+        source: config.name,
+        sourceType: config.sourceType,
+        title,
+        summary: firstText(item, ['description', 'summary', 'content', 'encoded']),
+        author: firstText(item, ['author', 'creator']),
+        url: assertPublicHttpUrl(url),
+        publishedAt: timestamp.toISOString(),
+      }];
     } catch { return []; }
   });
 }
 
-function readPath(value: unknown, path: string) {
+export function readJsonPath(value: unknown, path: string) {
   return path.split('.').reduce<unknown>((current, key) => current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined, value);
 }
 
@@ -68,16 +180,104 @@ function stringValue(value: unknown) {
 }
 
 export function mapHttpJson(payload: unknown, config: SourceConfigInput): ArticleInput[] {
-  const mapping = { items: 'items', title: 'title', summary: 'summary', url: 'url', publishedAt: 'publishedAt', author: 'author', ...config.mapping };
-  const items = readPath(payload, mapping.items);
+  return mapHttpJsonPage(payload, config).articles;
+}
+
+export type SourceItemRejection = {
+  itemIndex: number;
+  platformItemId: string | null;
+  errorCode: 'INVALID_ITEM';
+  detailRedacted: string;
+  payloadHash: string;
+};
+
+export function mapHttpJsonPage(payload: unknown, config: SourceConfigInput) {
+  const mapping = { items: 'items', id: 'id', kind: 'kind', title: 'title', summary: 'summary', url: 'url', publishedAt: 'publishedAt', updatedAt: 'updatedAt', deletedAt: 'deletedAt', author: 'author', ...config.mapping };
+  const items = readJsonPath(payload, mapping.items);
   if (!Array.isArray(items)) throw new Error(`HTTP JSON 路径 ${mapping.items} 不是数组。`);
-  return items.slice(0, 100).map((item, index) => {
-    const title = readPath(item, mapping.title);
-    const url = readPath(item, mapping.url);
-    const publishedAt = readPath(item, mapping.publishedAt);
-    if (typeof title !== 'string' || typeof url !== 'string' || typeof publishedAt !== 'string') throw new Error(`第 ${index + 1} 条缺少 title、url 或 publishedAt。`);
-    return { source: config.name, sourceType: config.sourceType, title, summary: stringValue(readPath(item, mapping.summary)), author: stringValue(readPath(item, mapping.author)), url: assertPublicHttpUrl(url), publishedAt: new Date(publishedAt).toISOString() };
-  });
+  if (items.length > 100) throw new Error('HTTP JSON 单页不能超过 100 条；请配置上游 pageSize。');
+  const articles: ArticleInput[] = [];
+  const normalizedItems: NormalizedSourceItem[] = [];
+  const rejections: SourceItemRejection[] = [];
+  for (const [index, item] of items.entries()) {
+    const platformItemId = stringValue(readJsonPath(item, mapping.id ?? 'id')) || null;
+    try {
+      const declaredKind = stringValue(readJsonPath(item, mapping.kind));
+      if (declaredKind && declaredKind !== 'upsert' && declaredKind !== 'tombstone') throw new Error('kind 必须是 upsert 或 tombstone');
+      if (declaredKind === 'tombstone') {
+        const deletedAt = stringValue(readJsonPath(item, mapping.deletedAt));
+        const timestamp = new Date(deletedAt);
+        if (!platformItemId) throw new Error('tombstone 缺少稳定 id');
+        if (Number.isNaN(timestamp.valueOf())) throw new Error('deletedAt 不是有效时间');
+        normalizedItems.push({
+          kind: 'tombstone',
+          namespace: config.namespace ?? config.adapter,
+          platformItemId,
+          deletedAt: timestamp.toISOString(),
+          provenance: {
+            connectorId: config.connectorId ?? `${config.adapter}-v1`,
+            connectorVersion: config.connectorVersion ?? '1',
+            observedAt: timestamp.toISOString(),
+          },
+          identityStrategy: 'platform_id',
+          identityConfidence: 'high',
+        });
+        continue;
+      }
+      const title = readJsonPath(item, mapping.title);
+      const url = readJsonPath(item, mapping.url);
+      const publishedAt = readJsonPath(item, mapping.publishedAt);
+      if (typeof title !== 'string' || typeof url !== 'string' || typeof publishedAt !== 'string') throw new Error('缺少 title、url 或 publishedAt');
+      const timestamp = new Date(publishedAt);
+      if (Number.isNaN(timestamp.valueOf())) throw new Error('publishedAt 不是有效时间');
+      const canonicalUrl = assertPublicHttpUrl(url);
+      const identity = platformItemId ?? sha256Hex(canonicalUrl);
+      const updatedAtValue = stringValue(readJsonPath(item, mapping.updatedAt));
+      const updatedAt = updatedAtValue ? new Date(updatedAtValue) : null;
+      if (updatedAt && Number.isNaN(updatedAt.valueOf())) throw new Error('updatedAt 不是有效时间');
+      const article: ArticleInput = {
+        id: platformItemId ?? undefined,
+        source: config.name,
+        sourceType: config.sourceType,
+        title,
+        summary: stringValue(readJsonPath(item, mapping.summary)),
+        author: stringValue(readJsonPath(item, mapping.author)),
+        url: canonicalUrl,
+        publishedAt: timestamp.toISOString(),
+      };
+      articles.push(article);
+      normalizedItems.push({
+        kind: 'upsert',
+        namespace: config.namespace ?? config.adapter,
+        platformItemId: identity,
+        title,
+        summary: article.summary,
+        author: article.author,
+        url: canonicalUrl,
+        publishedAt: timestamp.toISOString(),
+        updatedAt: updatedAt?.toISOString(),
+        metrics: article.metrics,
+        provenance: {
+          connectorId: config.connectorId ?? `${config.adapter}-v1`,
+          connectorVersion: config.connectorVersion ?? '1',
+          observedAt: updatedAt?.toISOString() ?? timestamp.toISOString(),
+        },
+        identityStrategy: platformItemId ? 'platform_id' : 'canonical_url',
+        identityConfidence: platformItemId ? 'high' : 'medium',
+        canonicalUrlVersion: 'url-v1',
+        contentFingerprintVersion: 'content-v1',
+      });
+    } catch (error) {
+      rejections.push({
+        itemIndex: index,
+        platformItemId,
+        errorCode: 'INVALID_ITEM',
+        detailRedacted: (error instanceof Error ? error.message : '条目无效').slice(0, 200),
+        payloadHash: sha256Hex(JSON.stringify(item)),
+      });
+    }
+  }
+  return { articles, items: normalizedItems, rejections, fetchedCount: items.length };
 }
 
 export function validateSourceConfig(input: SourceConfigInput, requireApproved = true) {
@@ -88,9 +288,23 @@ export function validateSourceConfig(input: SourceConfigInput, requireApproved =
     try { if (!input.url) throw new Error(); else assertPublicHttpUrl(input.url); } catch { errors.push('RSS/HTTP 适配器必须提供公网 HTTP(S) URL'); }
   }
   if (input.scheduleCron && !isValidCron(input.scheduleCron)) errors.push('scheduleCron 格式无效或超出取值范围');
-  if (!['approved', 'restricted', 'blocked'].includes(input.rightsStatus)) errors.push('rightsStatus 无效');
+  if (!(SOURCE_RIGHTS_STATUSES as readonly string[]).includes(input.rightsStatus)) errors.push('rightsStatus 无效');
   else if (requireApproved && input.rightsStatus !== 'approved') errors.push('只有 rightsStatus=approved 的来源可以启用采集');
   if (input.rateLimitPerMinute !== undefined && (!Number.isInteger(input.rateLimitPerMinute) || input.rateLimitPerMinute < 1 || input.rateLimitPerMinute > 600)) errors.push('rateLimitPerMinute 必须为 1–600 的整数');
   if (input.retention && (!['metadata', 'raw'].includes(input.retention.mode) || !Number.isInteger(input.retention.days) || input.retention.days < 1 || input.retention.days > 3650)) errors.push('retention 必须指定 metadata/raw 和 1–3650 天');
+  if (input.pagination) {
+    const pagination = input.pagination;
+    const parameterValid = (value: string | undefined) => value === undefined || /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value);
+    const pathValid = (value: string | undefined) => value === undefined || /^[A-Za-z0-9_$-]+(?:\.[A-Za-z0-9_$-]+)*$/.test(value);
+    if (input.adapter !== 'http') errors.push('只有 HTTP JSON 来源可以配置 pagination');
+    if (!['none', 'page', 'cursor', 'since'].includes(pagination.mode)) errors.push('pagination.mode 无效');
+    if (pagination.maxPages !== undefined && (!Number.isInteger(pagination.maxPages) || pagination.maxPages < 1 || pagination.maxPages > 20)) errors.push('pagination.maxPages 必须为 1–20 的整数');
+    if (pagination.startPage !== undefined && (!Number.isInteger(pagination.startPage) || pagination.startPage < 0 || pagination.startPage > 1_000_000)) errors.push('pagination.startPage 必须为 0–1000000 的整数');
+    if (pagination.pageSize !== undefined && (!Number.isInteger(pagination.pageSize) || pagination.pageSize < 1 || pagination.pageSize > 100)) errors.push('pagination.pageSize 必须为 1–100 的整数');
+    if (![pagination.pageParameter, pagination.pageSizeParameter, pagination.cursorParameter, pagination.sinceParameter].every(parameterValid)) errors.push('pagination 查询参数名无效');
+    if (![pagination.cursorPath, pagination.hasMorePath].every(pathValid)) errors.push('pagination 响应字段路径无效');
+    if (pagination.mode === 'cursor' && !pagination.cursorPath) errors.push('cursor 分页必须配置 cursorPath');
+    if (pagination.mode === 'since' && pagination.cursorPath && !pagination.cursorParameter) errors.push('since 分页配置 cursorPath 时必须同时配置 cursorParameter');
+  }
   return { valid: errors.length === 0, errors };
 }

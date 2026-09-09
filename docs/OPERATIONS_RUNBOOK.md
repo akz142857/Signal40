@@ -1,15 +1,26 @@
 # Signal 40 运行、故障与内容勘误手册
 
-更新时间：2026-09-08
+更新时间：2026-09-09
 
 ## 1. 值班入口与初始 SLO
 
 - `/api/v1/health`：数据库可达性、活跃队列和 DLQ；外部探针每分钟检查。
 - `/operations`：近 30 天采集、TTS、渲染、发布的成功/失败、重试、P50/P95、记录成本和待处置作业。
+- `npm run source-slo:report`：从 PostgreSQL 输出与 `/operations` 相同的来源 SLO 策略、来源和聚合切片 JSON；口径见 [来源采集 SLO 策略](./SOURCE_SLO_POLICY.md)。
 - 初始目标：控制面月可用性 99.9%；正式渲染 30 分钟完成率 98%；未核验声明和重复逻辑发布均为 0；重大事实错误目标为 0。
 - 告警：健康接口 503 立即告警；`deadLetter > 0`、发布/渲染失败持续 5 分钟、渲染 P95 超过 30 分钟、月预算使用 80% 分别触发 P1/P2 告警。
 
 生产告警发送器不保存在本仓库。部署时由托管监控读取上述接口，并把通知路由到团队实际值班系统。
+
+来源 SLO 当前策略版本是 `2026-09-09.v2`。304 已以 `not_modified` 独立持久化；管理员在来源页暂停时必须填写原因，系统自动记录排除窗口并在重新启用时关闭。计划维护用 `POST /api/v1/source-configs/{sourceId}/slo-exclusions` 提前登记，开始前可用同一路径的 `DELETE` 携带 exclusionId 与取消原因撤销；不得直接改库或事后补窗。预算软阈值后的自动降频保留原始 cron：优先级 80–100 不降频、50–79 使用 2x 周期、0–49 使用 4x 周期；每个跳过时点必须存在 `source_schedule_throttles` 记录，运维页的 `budgetThrottled` 与恢复日期可用于对账。没有该记录的漏跑、硬预算阻断或无 Worker 仍是异常，不得从 SLO 分母移除。迁移 `0024`–`0026`、真实来源/告警清单和 Product/SRE 签字未完成前，报表只能用于运行诊断，不能据此启动或补记正式 28 天观察。
+
+## 1.1 来源采集本地故障演练
+
+`npm run source:chaos` 以固定 seed 构建完整 PGlite 迁移库，演练两个 Scheduler 重复入队、新旧协议 Worker、租约过期接管、raw 上传失败重放、page/complete 事务回滚、ACK 丢失和 staged visibility，并输出 SQL before/after 不变量。详见 [来源采集固定种子故障演练](./SOURCE_CHAOS_DRILL.md)。它只是本地前置检查；目标环境仍需真实进程强杀、网络/对象存储故障、混合镜像和签字证据，未完成时不得启动 28 天观察。
+
+## 1.2 来源连接器发布控制
+
+连接器版本必须按 [来源连接器发布、停用与恢复 Runbook](./runbooks/SOURCE_CONNECTOR_RELEASE.md) 操作。发布顺序是 shadow → 小比例 canary → 全量 enabled；canary 以来源稳定分桶，未命中来源继续 shadow，达到最小样本和失败阈值后由下一次 Scheduler tick 调用同一 kill switch 自动停用。自动停用不是验收替代品：目标环境仍需保存命中/未命中 run、阈值触发、queued/leased 处理、审计/待办和恢复证据。
 
 ## 2. 调度器与编排引擎
 
@@ -93,7 +104,7 @@ docker run --rm --shm-size=1g \
 
 ## 6. 迁移后核对
 
-`drizzle/0014` 与 `drizzle/0015` 会把历史 `evidence_links` 行回填到具体的 `article_revisions`。0014 按 URL 精确匹配，0015 补一轮忽略大小写与尾斜杠的匹配；查询参数差异仍然匹配不上，属于已知残留。每次在新环境应用迁移后统计未回填行数并记录到发布检查单：
+当前 PostgreSQL baseline 已包含 `evidence_links.article_revision_id`；不能再按旧 SQLite 迁移编号推断回填职责。`drizzle/0014_polite_rafael_vega.sql` 是来源预算快照，`drizzle/0015_milky_stick.sql` 是来源维护责任，`drizzle/0016_wakeful_wendigo.sql` 是逐页提交与 lease epoch，`drizzle/0017_warm_scarlet_spider.sql` 是整数 capability protocol 门禁，`drizzle/0018_daffy_rogue.sql` 前向恢复旧控制面滚动升级所需的废弃写入列。每次在新环境应用迁移后仍需统计未绑定 revision 的证据链接并记录到发布检查单：
 
 ```sql
 SELECT COUNT(*) AS unmatched
@@ -103,17 +114,75 @@ WHERE article_revision_id IS NULL;
 
 数值不为 0 时不阻塞发布，但需要确认这些证据链接确实没有对应的本地文章修订（例如人工导入的外部来源），必要时补一轮按归一化 URL 的人工回填。
 
+`0015` 只从仍为 active 的历史创建人或当前 active 团队成员回填负责人；不能证明归属的来源故意保留空值，并由 Scheduler 投影到 `source_ownership` 待办。迁移后执行：
+
+```sql
+SELECT COUNT(*) AS ownership_incomplete
+FROM source_configs
+WHERE lifecycle_status <> 'archived'
+  AND (business_owner_id IS NULL OR credential_steward_id IS NULL);
+
+SELECT source.id, source.name, source.business_owner_id,
+       source.credential_steward_id, source.backup_admin_id
+FROM source_configs source
+LEFT JOIN team_members owner ON owner.user_id = source.business_owner_id
+LEFT JOIN team_members steward ON steward.user_id = source.credential_steward_id
+LEFT JOIN team_members backup ON backup.user_id = source.backup_admin_id
+WHERE source.lifecycle_status <> 'archived'
+  AND (
+    owner.status IS DISTINCT FROM 'active'
+    OR owner.role = 'auditor'
+    OR steward.status IS DISTINCT FROM 'active'
+    OR steward.role IS DISTINCT FROM 'admin'
+    OR (source.backup_admin_id IS NOT NULL AND (
+      backup.status IS DISTINCT FROM 'active'
+      OR backup.role IS DISTINCT FROM 'admin'
+      OR source.backup_admin_id = source.credential_steward_id
+    ))
+  );
+```
+
+任一查询有结果时，不得把来源维护责任标为验收通过。管理员先在 `/sources` 转移负责人，再确认对应待办已关闭；不要直接写表绕过版本锁和审计。
+
+`0016`–`0018` 后还必须核对分页唯一约束和单一协议真相。查询应返回两个页面索引、两个协议字段，并且最后一项在滚动兼容期为 1；租约裁决仍只允许读取整数协议字段。结果不符时禁止启动新 Worker：
+
+```sql
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname = 'public'
+  AND tablename = 'ingestion_pages'
+  AND indexname IN ('idx_ingestion_pages_run_key', 'idx_ingestion_pages_run_ordinal')
+ORDER BY indexname;
+
+SELECT table_name, column_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND (
+    (table_name = 'jobs' AND column_name = 'required_capability_protocol_version')
+    OR (table_name = 'workers' AND column_name = 'capability_protocol_versions_json')
+  )
+ORDER BY table_name, column_name;
+
+SELECT COUNT(*) AS deprecated_write_compatibility_columns
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'jobs'
+  AND column_name = 'minimum_worker_version';
+```
+
+部署期间先暂停 Scheduler 和控制面的入队写入，在同一个维护步骤中连续应用到 `0018`，确认兼容列已恢复后再恢复旧控制面或发布新控制面和 Worker；不能在只完成 `0017` 的中间状态恢复流量。旧 Worker 仅声明 protocol v1，新 Worker 才声明 HTTP JSON v2；控制面会让 v1 Worker 跳过 v2 作业。产品/镜像版本只用于观测，不能重新作为租约门禁。确认所有旧控制面退出且回滚窗口关闭后，另建 contract migration 删除兼容列，不能修改已应用的 `0017`/`0018`。
+
 ## 7. 备份与恢复
 
 本地演练：
 
 ```bash
 ./scripts/backup-local.sh backups/drill
-CONFIRM_RESTORE=isolated RESTORE_PERSIST_TO=/private/tmp/signal40-restore-drill ./scripts/restore-local.sh backups/drill
+CONFIRM_RESTORE=isolated RESTORE_TARGET_DB=signal40_restore_manual_drill ./scripts/restore-local.sh backups/drill
 npm run drill:restore
 ```
 
-`drill:restore` 会用 `pg_dump` 备份当前库，恢复到一个 `signal40_restore_` 前缀的隔离数据库，逐表比对行数，结束后自动删除该库，全程不修改源库。恢复脚本校验 SHA-256，并且要求同时设置 `CONFIRM_RESTORE=isolated` 和以 `signal40_restore_` 开头的 `RESTORE_TARGET_DB`——少设一个就拒绝执行，不可能误覆盖生产库。对象存储只做清单快照；真正的对象副本交给 R2 的版本控制与生命周期规则。生产库使用托管的时间点恢复。季度演练必须在隔离环境恢复数据库、核对对象清单，并从研究快照重新生成成片。
+手工命令会保留指定的隔离库，便于检查；确认完成后由操作者显式删除。`drill:restore` 则会用 `pg_dump` 备份当前库，恢复到一个 `signal40_restore_` 前缀的随机隔离数据库，逐表比对行数，结束后自动删除该库，全程不修改源库。恢复脚本校验 SHA-256，并且要求同时设置 `CONFIRM_RESTORE=isolated` 和以 `signal40_restore_` 开头的 `RESTORE_TARGET_DB`——少设一个就拒绝执行，不可能误覆盖生产库。对象存储只做清单快照；真正的对象副本交给 R2 的版本控制与生命周期规则。生产库使用托管的时间点恢复。季度演练必须在隔离环境恢复数据库、核对对象清单，并从研究快照重新生成成片。
 
 ## 8. 内容发布渠道
 

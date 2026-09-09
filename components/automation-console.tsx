@@ -11,6 +11,8 @@ import { AUTOMATION_STAGES, STAGE_MODES, type AutomationPolicy, type AutomationS
 
 type Member = { user_id: string; email: string; role: string; status: string };
 type PolicyCost = { projectCount: number; costMicros: number };
+type GlobalControl = { paused: boolean; reason: string; updatedBy: string | null; updatedAt: string | null };
+type ActivityRatio = { automated: number; human: number; since: string };
 type Run = {
   id: string;
   trigger: string;
@@ -50,23 +52,29 @@ export function AutomationConsole() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [name, setName] = useState('');
+  const [control, setControl] = useState<GlobalControl>({ paused: false, reason: '', updatedBy: null, updatedAt: null });
+  const [globalReason, setGlobalReason] = useState('运营人工暂停全部自动化');
+  const [activity, setActivity] = useState<ActivityRatio>({ automated: 0, human: 0, since: '' });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [policyResponse, runResponse, memberResponse] = await Promise.all([
+      const [policyResponse, runResponse, memberResponse, controlResponse] = await Promise.all([
         fetch('/api/v1/automation/policies', { cache: 'no-store' }),
         fetch('/api/v1/automation/runs?limit=20', { cache: 'no-store' }),
         fetch('/api/v1/team-members', { cache: 'no-store' }),
+        fetch('/api/v1/automation/control', { cache: 'no-store' }),
       ]);
       if (!policyResponse.ok) throw new Error(await readError(policyResponse));
-      const policyPayload = (await policyResponse.json()) as { policies: AutomationPolicy[]; costs?: Record<string, PolicyCost> };
+      const policyPayload = (await policyResponse.json()) as { policies: AutomationPolicy[]; costs?: Record<string, PolicyCost>; activity?: ActivityRatio };
       setPolicies(policyPayload.policies);
       setCosts(policyPayload.costs ?? {});
+      setActivity(policyPayload.activity ?? { automated: 0, human: 0, since: '' });
       if (runResponse.ok) setRuns(((await runResponse.json()) as { runs: Run[] }).runs);
       if (memberResponse.ok) setMembers(((await memberResponse.json()) as { members: Member[] }).members.filter((member) => member.status === 'active'));
+      if (controlResponse.ok) setControl(((await controlResponse.json()) as { control: GlobalControl }).control);
       setMessage('');
     } catch (error) { setMessage(error instanceof Error ? error.message : '读取自动化配置失败。'); }
     finally { setLoading(false); }
@@ -97,6 +105,12 @@ export function AutomationConsole() {
     await refresh();
   };
 
+  const setGlobalPause = async (paused: boolean) => {
+    const response = await fetch('/api/v1/automation/control', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ paused, reason: paused ? globalReason : '' }) });
+    if (!response.ok) { setMessage(await readError(response)); return; }
+    await refresh();
+  };
+
   const automatedActions = runs.flatMap((run) => run.actions).length;
   const openBreakers = Object.entries(runs[0]?.breakers ?? {}).filter(([, state]) => state.failures >= 3);
   const researchCandidates = members.filter((member) => ['editor', 'admin'].includes(member.role));
@@ -111,9 +125,14 @@ export function AutomationConsole() {
 
       {openBreakers.length > 0 && <div className="mb-5 rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive"><p className="flex items-center gap-2 font-semibold"><ShieldAlert className="size-4" />已熔断的阶段</p><ul className="mt-2 space-y-1">{openBreakers.map(([stage, state]) => <li key={stage}>{stageLabels[stage as AutomationStage] ?? stage}：连续失败 {state.failures} 次，最近错误「{state.lastError}」</li>)}</ul></div>}
 
+      <section className={`mb-5 rounded-2xl border p-5 ${control.paused ? 'border-destructive/50 bg-destructive/5' : 'bg-card'}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">全局自动化：{control.paused ? '已暂停' : '运行中'}</h2><p className="mt-1 text-xs text-muted-foreground">{control.paused ? control.reason : '调度器可按启用策略执行各阶段。'}{control.updatedAt ? ` · ${new Date(control.updatedAt).toLocaleString('zh-CN')} · ${control.updatedBy ?? '未知操作者'}` : ''}</p></div><div className="flex flex-wrap gap-2"><Input className="w-72" aria-label="全局暂停原因" value={globalReason} onChange={(event) => setGlobalReason(event.target.value)} /><Button variant={control.paused ? 'default' : 'destructive'} disabled={!control.paused && !globalReason.trim()} onClick={() => void setGlobalPause(!control.paused)}>{control.paused ? '恢复全部自动化' : '暂停全部自动化'}</Button></div></div>
+        <p className="mt-3 text-sm">近 30 天审计动作：自动化 {activity.automated} / 人工 {activity.human}，自动化占比 {activity.automated + activity.human ? Math.round(activity.automated / (activity.automated + activity.human) * 100) : 0}%</p>
+      </section>
+
       <section className="rounded-2xl border bg-card p-5">
         <h2 className="font-semibold">新建策略</h2>
-        <p className="mt-1 text-xs text-muted-foreground">新策略默认：机械步骤自动、四道审批人工、自动建项目关闭、总开关关闭。建好后再逐项打开。</p>
+        <p className="mt-1 text-xs text-muted-foreground">新策略默认：机械步骤自动、四道审批人工、自动建项目关闭、策略本身停用。建好后再逐项打开。</p>
         <div className="mt-3 flex flex-wrap gap-2"><Input className="max-w-sm" placeholder="策略名称" value={name} onChange={(event) => setName(event.target.value)} /><Button variant="outline" disabled={!name.trim()} onClick={() => void create()}>创建</Button></div>
       </section>
 
@@ -176,6 +195,7 @@ export function AutomationConsole() {
             <div><Label className="text-xs text-muted-foreground">静默时段起（UTC 小时）</Label><Input className="mt-1" type="number" min="0" max="23" value={policy.guardrails.quietHoursUtc.start} onChange={(event) => void update(policy, { guardrails: { ...policy.guardrails, quietHoursUtc: { ...policy.guardrails.quietHoursUtc, start: Number(event.target.value) } } })} /></div>
             <div><Label className="text-xs text-muted-foreground">静默时段止（UTC 小时）</Label><Input className="mt-1" type="number" min="0" max="23" value={policy.guardrails.quietHoursUtc.end} onChange={(event) => void update(policy, { guardrails: { ...policy.guardrails, quietHoursUtc: { ...policy.guardrails.quietHoursUtc, end: Number(event.target.value) } } })} /></div>
             <div><Label className="text-xs text-muted-foreground">选题分数下限</Label><Input className="mt-1" type="number" min="0" max="100" value={policy.scope.minTopicScore} onChange={(event) => void update(policy, { scope: { ...policy.scope, minTopicScore: Number(event.target.value) } })} /></div>
+            <div><Label className="text-xs text-muted-foreground">选题质量分下限</Label><Input className="mt-1" type="number" min="0" max="100" value={policy.scope.minQualityScore} onChange={(event) => void update(policy, { scope: { ...policy.scope, minQualityScore: Number(event.target.value) } })} /></div>
             <label className="flex items-center gap-2 self-end text-sm"><input type="checkbox" checked={policy.scope.requireTopicQuality} onChange={(event) => void update(policy, { scope: { ...policy.scope, requireTopicQuality: event.target.checked } })} />要求选题质量指标达标</label>
             <div><Label className="text-xs text-muted-foreground">品牌范围（逗号分隔，空为不限）</Label><Input className="mt-1" defaultValue={policy.scope.brands.join(',')} onBlur={(event) => void update(policy, { scope: { ...policy.scope, brands: splitList(event.target.value) } })} /></div>
             <div><Label className="text-xs text-muted-foreground">语言范围（逗号分隔，空为不限）</Label><Input className="mt-1" defaultValue={policy.scope.locales.join(',')} onBlur={(event) => void update(policy, { scope: { ...policy.scope, locales: splitList(event.target.value) } })} /></div>

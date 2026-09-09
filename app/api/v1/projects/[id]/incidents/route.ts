@@ -30,7 +30,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const now = new Date().toISOString();
   await db.batch([
     db.prepare("INSERT INTO content_incidents (id, project_id, publish_job_id, kind, severity, status, reason, actor_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)").bind(incidentId, id, body.publishJobId ?? null, body.kind, body.severity, body.reason.trim(), actor.id, now, now),
-    db.prepare("INSERT INTO audit_events (id, project_id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at) VALUES (?, ?, ?, ?, 'incident.created', 'content_incident', ?, ?, ?, ?, ?)").bind(`audit_${crypto.randomUUID()}`, id, actor.id, actor.role, incidentId, stableHash(body), JSON.stringify({ kind: body.kind, severity: body.severity }), crypto.randomUUID(), now),
+    db.prepare("INSERT INTO audit_events (id, project_id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at) VALUES (?, ?, ?, ?, 'incident.created', 'content_incident', ?, ?, ?, ?, ?)").bind(`audit_${crypto.randomUUID()}`, id, actor.id, actor.role, incidentId, stableHash(body), JSON.stringify({ kind: body.kind, severity: body.severity, trigger: 'human' }), crypto.randomUUID(), now),
     // 内容事件与自动化互斥：不能一边处理勘误或投诉，一边继续往发布推。
     pauseAutomationStatement(db, id, `已登记 ${body.kind} 内容事件，自动化已停止，事件关闭并显式恢复前不会自动推进。`),
   ]);

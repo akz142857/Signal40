@@ -60,6 +60,19 @@ export function scheduledMinuteSince(expression: string, lastRunAt: string, now 
   return null;
 }
 
+/** 返回 strictly-after 的下一个 UTC cron occurrence，搜索窗口有界为 366 天。 */
+export function nextScheduledMinute(expression: string, after: string | Date) {
+  const start = after instanceof Date ? after : new Date(after);
+  if (Number.isNaN(start.valueOf()) || !isValidCron(expression)) return null;
+  const first = Math.floor(start.valueOf() / 60_000) * 60_000 + 60_000;
+  const end = first + 366 * 24 * 60 * 60_000;
+  for (let value = first; value <= end; value += 60_000) {
+    const candidate = new Date(value);
+    if (cronMatches(expression, candidate)) return candidate.toISOString();
+  }
+  return null;
+}
+
 export function sourceRunRateLimit(
   recentRunTimes: string[],
   rateLimitPerMinute: number,

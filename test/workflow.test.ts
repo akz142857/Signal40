@@ -4,6 +4,7 @@ import test from 'node:test';
 import { runPipeline } from '../lib/domain.ts';
 import { createVideoProject } from '../lib/video-project.ts';
 import { computeRenderSnapshotHash, createProjectV2, migrateProjectV1, validateProjectV2, type VideoProjectV2 } from '../lib/project-v2.ts';
+import { evaluateScriptDuration, narrationBudget } from '../lib/script-duration.ts';
 import { VIDEO_TEMPLATES } from '../lib/templates.ts';
 import { sampleArticles } from './fixtures/sample-articles.ts';
 import { assertTransition, parseIfMatch, resolveActor, stableHash, WorkflowError } from '../lib/workflow.ts';
@@ -19,6 +20,8 @@ function verifiedTopic() {
 
 void test('project v2 contains claim evidence, a contiguous timeline, and immutable hashes', () => {
   const project = createProjectV2(verifiedTopic(), now);
+  assert.equal(evaluateScriptDuration({ lines: project.script.lines, targetDurationSeconds: project.render.durationSeconds }).status, 'ok');
+  assert.ok(project.script.lines.reduce((sum, line) => sum + line.text.length, 0) <= narrationBudget(45, project.script.lines.length).characters);
   assert.equal(project.schemaVersion, '2.0');
   assert.ok(project.research.claims.every((claim) => claim.evidence.some((evidence) => evidence.stance === 'supports')));
   assert.equal(project.timeline.at(-1)!.startFrame + project.timeline.at(-1)!.durationFrames, 1350);

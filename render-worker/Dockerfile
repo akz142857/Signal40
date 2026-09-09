@@ -3,12 +3,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg chromium
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY . .
+COPY render-worker ./render-worker
+COPY lib ./lib
+COPY video ./video
+COPY public ./public
+COPY scripts/media-qc.ts ./scripts/media-qc.ts
 ENV REMOTION_BROWSER_EXECUTABLE=/usr/bin/chromium
 ENV NODE_ENV=production
+ENV SIGNAL40_WORKER_PROFILE=render
+ENV SIGNAL40_DEPLOYMENT_MODE=production
 # 非特权用户运行 Node/Chromium/FFmpeg：渲染进程会执行来自控制面的项目数据，不应拥有 root。
 RUN useradd --system --create-home --home-dir /home/signal40 --shell /usr/sbin/nologin signal40 \
   && chown -R signal40:signal40 /app /home/signal40
 USER signal40
 ENV HOME=/home/signal40
-CMD ["npm", "run", "worker"]
+CMD ["node", "--experimental-strip-types", "render-worker/worker.ts"]

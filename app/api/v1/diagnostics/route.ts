@@ -19,6 +19,8 @@ export async function GET(request: Request) {
       openAiApiKey: process.env.OPENAI_API_KEY,
       youtubeAccessToken: process.env.YOUTUBE_ACCESS_TOKEN,
       workerToken: config.workerToken,
+      sourceWorkerToken: process.env.SIGNAL40_SOURCE_WORKER_TOKEN,
+      renderWorkerToken: process.env.SIGNAL40_RENDER_WORKER_TOKEN,
       schedulerToken: config.schedulerToken,
       mediaSigningSecret: config.mediaSigningSecret,
       automationActorId: config.automationActorId,

@@ -2,6 +2,7 @@ import pg from 'pg';
 import { configurePgTypeParsers, createPgDatabase } from './sql-pg.ts';
 import type { SqlDatabase } from './sql.ts';
 import type { ObjectStorage } from './storage.ts';
+import { controlPlaneWorkerTokens } from './workload-env.ts';
 import { createS3Client, createS3Storage } from './storage-s3.ts';
 import { resolveActor, type Actor } from './workflow.ts';
 
@@ -92,9 +93,15 @@ export const config = {
     return process.env.BOOTSTRAP_ADMIN_EMAILS ?? '';
   },
   get workerToken() {
-    // 历史上控制面绑定叫 WORKER_TOKEN、Worker 侧环境变量叫 SIGNAL40_WORKER_TOKEN，
-    // 其实是同一个密钥。两个名字都认，自建部署只配后者即可。
-    return process.env.WORKER_TOKEN || process.env.SIGNAL40_WORKER_TOKEN;
+    return controlPlaneWorkerTokens(process.env).shared;
+  },
+  /** 采集服务专用令牌；共享令牌回退只允许本机开发模式。 */
+  get sourceWorkerToken() {
+    return controlPlaneWorkerTokens(process.env).source;
+  },
+  /** 渲染/发布服务专用令牌；生产不接受共享令牌回退。 */
+  get renderWorkerToken() {
+    return controlPlaneWorkerTokens(process.env).render;
   },
   get schedulerToken() {
     return process.env.SCHEDULER_TOKEN;
@@ -121,6 +128,16 @@ export const config = {
   /** 待办箱外部通知地址；不配就只在界面里能看到待办。 */
   get attentionWebhookUrl() {
     return process.env.SIGNAL40_ATTENTION_WEBHOOK_URL;
+  },
+  /**
+   * HTTP JSON Secret Header 的服务端 allowlist。值只描述 alias -> env var/origin/header 的绑定，
+   * 长期 Secret 本身仍只从对应环境变量读取，绝不进入数据库或客户端响应。
+   */
+  get sourceCredentialPoliciesJson() {
+    return process.env.SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON;
+  },
+  resolveSourceCredentialSecret(environmentName: string) {
+    return process.env[environmentName];
   },
   /**
    * 反向代理注入身份头时用的头名。默认沿用 OpenAI Sites 时期的 `oai-authenticated-user-*`，

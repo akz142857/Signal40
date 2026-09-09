@@ -3,7 +3,7 @@ import { authorizeWorker } from '@/lib/worker-auth';
 import { verifyMediaAccess } from '@/lib/media-auth';
 
 export async function GET(request: Request) {
-  const worker = await authorizeWorker(request, config.workerToken);
+  const worker = await authorizeWorker(request, config.renderWorkerToken);
   const requestUrl = new URL(request.url);
   const objectKey = requestUrl.searchParams.get('objectKey');
   if (!objectKey?.startsWith('projects/') || objectKey.length > 500) return Response.json({ error: '媒体键无效。' }, { status: 422 });

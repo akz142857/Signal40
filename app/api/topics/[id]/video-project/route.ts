@@ -1,17 +1,12 @@
-import { config, db } from '@/lib/runtime';
+import { db, resolveRequestActor } from '@/lib/runtime';
 import { loadTopic } from '@/lib/persistence';
 import { createProjectV2 } from '@/lib/project-v2';
-import { resolveActor } from '@/lib/workflow';
 
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor(
-    request,
-    db,
-    config.bootstrapAdminEmails,
-  );
+  const actor = await resolveRequestActor(request);
   if (!actor)
     return Response.json(
       { error: '用户未加入 Signal 40 团队。' },

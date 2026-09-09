@@ -42,6 +42,8 @@ export type AutomationPolicy = {
     /** 选题必须至少包含这些来源类型之一；空表示不限。 */
     sourceTypes: string[];
     minTopicScore: number;
+    /** 质量评估综合分下限（0–100）。 */
+    minQualityScore: number;
     requireTopicQuality: boolean;
   };
   stages: Record<AutomationStage, StageMode>;
@@ -76,14 +78,14 @@ export const APPROVAL_ROLES: Record<ApprovalKind, Role[]> = {
  */
 export function defaultAutomationPolicy(): Omit<AutomationPolicy, 'id' | 'name' | 'version'> {
   return {
-    scope: { brands: [], locales: [], sourceTypes: [], minTopicScore: 60, requireTopicQuality: true },
+    scope: { brands: [], locales: [], sourceTypes: [], minTopicScore: 60, minQualityScore: 70, requireTopicQuality: true },
     stages: {
       ingestion: 'auto',
       topic_quality: 'auto',
       project_creation: 'off',
       advance: 'auto',
       jobs: 'auto',
-      publish: 'manual',
+      publish: 'auto',
       metrics: 'auto',
     },
     autoApprovals: { research: { enabled: false }, script: { enabled: false }, qc: { enabled: false }, publish: { enabled: false } },
@@ -179,6 +181,7 @@ export function validateAutomationPolicy(policy: AutomationPolicy, now = new Dat
     if (!Number.isInteger(bound) || bound < 0 || bound > 23) errors.push('静默时段必须是 0–23 的整数小时（UTC）。');
   }
   if (!Number.isInteger(policy.scope.minTopicScore) || policy.scope.minTopicScore < 0 || policy.scope.minTopicScore > 100) errors.push('选题分数下限必须是 0–100 的整数。');
+  if (!Number.isInteger(policy.scope.minQualityScore) || policy.scope.minQualityScore < 0 || policy.scope.minQualityScore > 100) errors.push('选题质量分下限必须是 0–100 的整数。');
   if (policy.scope.sourceTypes.some((type) => !['social', 'media', 'market', 'filing', 'company'].includes(type))) errors.push('来源类型只能是 social、media、market、filing、company。');
   if (policy.expiresAt && Number.isNaN(new Date(policy.expiresAt).valueOf())) errors.push('expiresAt 不是合法时间。');
   if (policy.expiresAt && new Date(policy.expiresAt).valueOf() <= now.valueOf()) errors.push('预先授权的有效期必须晚于当前时间。');
@@ -235,10 +238,11 @@ export function policyMatchesProject(policy: AutomationPolicy, project: { brand:
 
 export function policyMatchesTopic(
   policy: AutomationPolicy,
-  topic: { score: number; sourceTypes?: readonly string[]; quality?: { automatable?: boolean } | null },
+  topic: { score: number; sourceTypes?: readonly string[]; quality?: { automatable?: boolean; score?: number } | null },
 ) {
   if (topic.score < policy.scope.minTopicScore) return false;
   if (policy.scope.requireTopicQuality && !topic.quality?.automatable) return false;
+  if (policy.scope.requireTopicQuality && (topic.quality?.score ?? -1) < policy.scope.minQualityScore) return false;
   if (policy.scope.sourceTypes.length && !(topic.sourceTypes ?? []).some((type) => policy.scope.sourceTypes.includes(type))) return false;
   return true;
 }

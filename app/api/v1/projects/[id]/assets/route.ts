@@ -1,6 +1,6 @@
 import { config, db, resolveRequestActor, storage } from '@/lib/runtime';
 import type { SqlStatement } from '@/lib/sql';
-import { loadContentProject } from '@/lib/control-plane';
+import { loadContentProject, pauseAutomationStatement } from '@/lib/control-plane';
 import { computeRenderSnapshotHash } from '@/lib/project-v2';
 import { authorizeWorker } from '@/lib/worker-auth';
 import { stableHash, type Actor } from '@/lib/workflow';
@@ -15,7 +15,8 @@ function decodeHeader(value: string | null) {
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   let actor: Actor | null;
-  if (await authorizeWorker(request, config.workerToken)) {
+  const isWorker = await authorizeWorker(request, config.renderWorkerToken);
+  if (isWorker) {
     actor = { id: 'media-worker', email: 'worker@signal40.internal', role: 'producer' };
   } else {
     actor = await resolveRequestActor(request);
@@ -72,6 +73,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       nextProject.render.snapshotHash = immutableInputsHash;
       nextProject.provenance.immutableInputsHash = immutableInputsHash;
       statements.push(db.prepare('UPDATE content_projects SET project_json = ?, immutable_hash = ?, state = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?').bind(JSON.stringify(nextProject), stableHash(nextProject), project.state === 'CHANGES_REQUESTED' ? 'SCRIPT_APPROVED' : project.state, now, projectId, project.version));
+      if (!isWorker) statements.push(pauseAutomationStatement(db, projectId, '人工上传了输入资产，自动化已暂停，需显式恢复。'));
     }
     statements.push(
       assetRole === 'input' ? db.prepare(`
@@ -88,10 +90,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         SELECT ?, ?, ?, ?, 'asset.uploaded', 'asset', ?, ?, ?, ?, ? WHERE EXISTS (
           SELECT 1 FROM content_projects WHERE id = ? AND version = ? AND updated_at = ?
         )
-      `).bind(`audit_${crypto.randomUUID()}`, projectId, actor.id, actor.role, assetId, stableHash({ objectKey, digest }), JSON.stringify({ contentType, assetRole, audioPurpose, byteSize: data.byteLength, rightsStatus }), crypto.randomUUID(), now, projectId, project.version + 1, now) : db.prepare(`
+      `).bind(`audit_${crypto.randomUUID()}`, projectId, actor.id, actor.role, assetId, stableHash({ objectKey, digest }), JSON.stringify({ contentType, assetRole, audioPurpose, byteSize: data.byteLength, rightsStatus, trigger: isWorker ? 'automation' : 'human' }), crypto.randomUUID(), now, projectId, project.version + 1, now) : db.prepare(`
         INSERT INTO audit_events (id, project_id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at)
         VALUES (?, ?, ?, ?, 'asset.uploaded', 'asset', ?, ?, ?, ?, ?)
-      `).bind(`audit_${crypto.randomUUID()}`, projectId, actor.id, actor.role, assetId, stableHash({ objectKey, digest }), JSON.stringify({ contentType, assetRole, audioPurpose, byteSize: data.byteLength, rightsStatus }), crypto.randomUUID(), now),
+      `).bind(`audit_${crypto.randomUUID()}`, projectId, actor.id, actor.role, assetId, stableHash({ objectKey, digest }), JSON.stringify({ contentType, assetRole, audioPurpose, byteSize: data.byteLength, rightsStatus, trigger: isWorker ? 'automation' : 'human' }), crypto.randomUUID(), now),
     );
     const results = await db.batch(statements);
     if (assetRole === 'input' && !results[0].meta.changes) throw new Error('VERSION_CONFLICT');

@@ -83,6 +83,34 @@ void test('文章修订按内容哈希增量记录', async () => {
   assert.ok(recent.length > 0);
 });
 
+void test('滚动语料注入 evidence family/所有权集团并排除已撤回的唯一 origin', async () => {
+  const db = await createMemoryPg();
+  const article = runPipeline(sampleArticles(now), now).flatMap((topic) => topic.articles)[0];
+  await persistArticlesWithRevisions(db, [article], now);
+  await db.client.query(`
+    INSERT INTO publisher_entities
+      (id, legal_name, ownership_group, entity_type, created_at, updated_at)
+    VALUES ('publisher-test', 'Publisher Test', 'group-test', 'company', $1, $1)
+  `, [now.toISOString()]);
+  await db.client.query(`
+    INSERT INTO source_item_origins
+      (id, source_config_id, namespace, platform_item_id, article_id,
+       ingestion_run_id, canonical_url_hash, fingerprint_version,
+       content_fingerprint, relationship, evidence_family_id,
+       publisher_entity_id, confidence, first_seen_at, last_seen_at)
+    VALUES ('origin-test', 'source-test', 'rss', 'item-test', $1, 'run-test',
+      'url-hash', 'content-v1', $2, 'original', 'family-test',
+      'publisher-test', 100, $3, $3)
+  `, [article.id, article.contentHash, now.toISOString()]);
+  const active = await loadRecentArticles(db, new Date(now.valueOf() - 3 * 86_400_000));
+  assert.equal(active[0].evidenceFamilyId, 'family-test');
+  assert.equal(active[0].publisherOwnershipGroup, 'group-test');
+
+  await db.client.query("UPDATE source_item_origins SET deleted_at = $1 WHERE id = 'origin-test'", [now.toISOString()]);
+  const withdrawn = await loadRecentArticles(db, new Date(now.valueOf() - 3 * 86_400_000));
+  assert.equal(withdrawn.some((item) => item.id === article.id), false);
+});
+
 void test('取最新一条审核事件走 ROW_NUMBER 派生表，同秒写入靠 seq 定序', async () => {
   const db = await createMemoryPg();
   const articles = sampleArticles(now);

@@ -14,7 +14,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const now = new Date().toISOString();
   await db.batch([
     db.prepare("UPDATE content_incidents SET status = 'resolved', resolution = ?, updated_at = ? WHERE id = ? AND status = 'open'").bind(body.resolution.trim(), now, id),
-    db.prepare("INSERT INTO audit_events (id, project_id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at) VALUES (?, ?, ?, ?, 'incident.resolved', 'content_incident', ?, ?, ?, ?, ?)").bind(`audit_${crypto.randomUUID()}`, incident.project_id, actor.id, actor.role, id, stableHash(body.resolution.trim()), JSON.stringify({ resolution: body.resolution.trim() }), crypto.randomUUID(), now),
+    db.prepare("INSERT INTO audit_events (id, project_id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at) VALUES (?, ?, ?, ?, 'incident.resolved', 'content_incident', ?, ?, ?, ?, ?)").bind(`audit_${crypto.randomUUID()}`, incident.project_id, actor.id, actor.role, id, stableHash(body.resolution.trim()), JSON.stringify({ resolution: body.resolution.trim(), trigger: 'human' }), crypto.randomUUID(), now),
   ]);
   return Response.json({ incident: { id, status: 'resolved' } });
 }

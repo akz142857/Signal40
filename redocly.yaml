@@ -1,0 +1,10 @@
+extends:
+  - minimal
+
+rules:
+  # Existing operations are path/method keyed; compatibility is enforced by the
+  # repository breaking-change checker instead of generated-client operation IDs.
+  operation-operationId: off
+  # State-contract schemas may intentionally exist before their first response
+  # binding so runtime/OpenAPI enum equality can be enforced in one change.
+  no-unused-components: off

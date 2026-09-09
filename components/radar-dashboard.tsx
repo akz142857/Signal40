@@ -161,6 +161,14 @@ export function RadarDashboard({
     return () => window.clearTimeout(timer);
   }, [refreshTopics]);
 
+  useEffect(() => {
+    const topicId = new URLSearchParams(window.location.search).get('topic');
+    const timer = window.setTimeout(() => {
+      if (topicId) setSelected(topics.find((topic) => topic.id === topicId) ?? null);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [topics]);
+
   const runPipeline = useCallback(
     async (body: { articles: ArticleInput[]; rightsConfirmed: true }) => {
       setRunning(true);
@@ -588,6 +596,9 @@ export function RadarDashboard({
                         <Clock3 className="size-3.5" />
                         {topic.sourceCount} 个独立来源
                       </span>
+                      {topic.quality && <span className={`rounded-md px-2 py-1 text-xs font-medium ${topic.quality.automatable ? 'bg-chart-1/10 text-chart-1' : 'bg-chart-2/10 text-chart-2'}`}>
+                        {topic.quality.automatable ? '可自动化' : '需人工处理'}
+                      </span>}
                     </div>
                     <h2 className="text-xl font-semibold leading-snug tracking-[-0.025em]">
                       {topic.title}
@@ -786,6 +797,21 @@ export function RadarDashboard({
                 <SheetDescription>{selected.gate.reason}</SheetDescription>
               </SheetHeader>
               <div className="space-y-6 p-6">
+                <section>
+                  <h3 className="mb-3 font-semibold">自动化质量指标</h3>
+                  {selected.quality ? <>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        ['簇内一致性', selected.quality.coherence],
+                        ['一致性下限', selected.quality.coherenceFloor],
+                        ['证据区分度', selected.quality.evidenceDistinctness],
+                        ['财经词表覆盖', selected.quality.lexiconCoverage],
+                      ].map(([label, value]) => <div className="rounded-xl bg-secondary/70 p-3" key={String(label)}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-mono text-xl font-semibold">{Math.round(Number(value) * 100)}%</p></div>)}
+                    </div>
+                    <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 语言：{selected.quality.language} · {selected.quality.automatable ? '允许自动建项目' : '禁止自动建项目'}</p>
+                    {selected.quality.reasons.length > 0 && <ul className="mt-2 space-y-1 text-sm leading-6 text-chart-2">{selected.quality.reasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>}
+                  </> : <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">尚未评估；下一轮调度器会计算质量指标。</p>}
+                </section>
                 <section>
                   <h3 className="mb-3 font-semibold">评分拆解</h3>
                   <div className="grid grid-cols-2 gap-2">

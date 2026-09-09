@@ -1,0 +1,2 @@
+DROP INDEX "idx_source_configs_locator";--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_source_configs_locator" ON "source_configs" USING btree ("team_id","platform","locator_hash") WHERE "source_configs"."locator_hash" <> '';

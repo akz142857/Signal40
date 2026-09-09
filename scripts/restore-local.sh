@@ -44,6 +44,11 @@ PG_WORK_DIR="$backup_abs" pg_run psql --dbname="$maintenance_url" -c "CREATE DAT
 
 restore_url="${admin_url%/*}/$target_db"
 dump_path="$(command -v pg_restore >/dev/null 2>&1 && printf '%s' "$backup_abs/database.dump" || printf '/work/database.dump')"
-PG_WORK_DIR="$backup_abs" pg_run pg_restore --dbname="$restore_url" --no-owner --no-privileges "$dump_path"
+# 新版 pg_dump 会写入旧服务端尚不认识的会话参数（例如 PG18 dump → PG16 的
+# transaction_timeout）。先生成 SQL 并只删除这个向后不兼容的 SET，再让 psql
+# 以 ON_ERROR_STOP 恢复；真实 DDL/DML 的任何错误仍会立即失败。
+PG_WORK_DIR="$backup_abs" pg_run pg_restore --no-owner --no-privileges --file=- "$dump_path" \
+  | sed '/^SET transaction_timeout =/d' \
+  | PG_WORK_DIR="$backup_abs" pg_run psql --set=ON_ERROR_STOP=1 --dbname="$restore_url"
 
 printf '已从 %s 恢复到隔离库 %s。对象存储未被自动覆盖。\n' "$backup_dir" "$target_db"

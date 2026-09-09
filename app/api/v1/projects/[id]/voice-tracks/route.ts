@@ -29,7 +29,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await authorizeWorker(request, config.workerToken))) return Response.json({ error: 'Worker 未授权。' }, { status: 401 });
+  if (!(await authorizeWorker(request, config.renderWorkerToken))) return Response.json({ error: 'Worker 未授权。' }, { status: 401 });
   let body: VoiceCommit;
   try { body = (await request.json()) as VoiceCommit; }
   catch { return Response.json({ error: '请求体必须是 JSON。' }, { status: 400 }); }

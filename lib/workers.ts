@@ -19,6 +19,8 @@ export type WorkerRecord = {
   id: string;
   hostname: string;
   kinds: string[];
+  capabilities: string[];
+  capabilityProtocolVersions: Record<string, number>;
   version: string;
   lastHeartbeatAt: string;
   online: boolean;
@@ -33,21 +35,72 @@ function parseKinds(value: string) {
   }
 }
 
+function parseCapabilityProtocolVersions(
+  value: string,
+  capabilities: string[],
+) {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    const source =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    return Object.fromEntries(
+      capabilities.map((capability) => {
+        const version = source[capability];
+        return [
+          capability,
+          Number.isInteger(version) && Number(version) >= 1
+            ? Number(version)
+            : 1,
+        ];
+      }),
+    );
+  } catch {
+    return Object.fromEntries(capabilities.map((capability) => [capability, 1]));
+  }
+}
+
 export async function recordWorkerHeartbeat(
   db: SqlDatabase,
-  input: { id: string; hostname?: string; kinds: string[]; version?: string },
+  input: {
+    id: string;
+    hostname?: string;
+    kinds: string[];
+    capabilities?: string[];
+    capabilityProtocolVersions?: Record<string, number>;
+    version?: string;
+  },
   now = new Date(),
 ) {
   const timestamp = now.toISOString();
   await db
     .prepare(`
-      INSERT INTO workers (id, hostname, kinds_json, version, last_heartbeat_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO workers (id, hostname, kinds_json, capabilities_json, capability_protocol_versions_json, version, last_heartbeat_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
         hostname = excluded.hostname, kinds_json = excluded.kinds_json,
+        capabilities_json = excluded.capabilities_json,
+        capability_protocol_versions_json = excluded.capability_protocol_versions_json,
         version = excluded.version, last_heartbeat_at = excluded.last_heartbeat_at
     `)
-    .bind(input.id, input.hostname ?? '', JSON.stringify(input.kinds), input.version ?? '', timestamp, timestamp)
+    .bind(
+      input.id,
+      input.hostname ?? '',
+      JSON.stringify(input.kinds),
+      JSON.stringify(input.capabilities ?? []),
+      JSON.stringify(
+        Object.fromEntries(
+          (input.capabilities ?? []).map((capability) => [
+            capability,
+            input.capabilityProtocolVersions?.[capability] ?? 1,
+          ]),
+        ),
+      ),
+      input.version ?? '',
+      timestamp,
+      timestamp,
+    )
     .run();
   return { id: input.id, lastHeartbeatAt: timestamp };
 }
@@ -55,16 +108,24 @@ export async function recordWorkerHeartbeat(
 export async function listWorkers(db: SqlDatabase, now = new Date()): Promise<WorkerRecord[]> {
   const threshold = new Date(now.valueOf() - WORKER_ONLINE_WINDOW_SECONDS * 1000).toISOString();
   const result = await db
-    .prepare('SELECT id, hostname, kinds_json, version, last_heartbeat_at FROM workers ORDER BY last_heartbeat_at DESC LIMIT 200')
-    .all<{ id: string; hostname: string; kinds_json: string; version: string; last_heartbeat_at: string }>();
-  return result.results.map((row) => ({
-    id: row.id,
-    hostname: row.hostname,
-    kinds: parseKinds(row.kinds_json),
-    version: row.version,
-    lastHeartbeatAt: row.last_heartbeat_at,
-    online: row.last_heartbeat_at >= threshold,
-  }));
+    .prepare('SELECT id, hostname, kinds_json, capabilities_json, capability_protocol_versions_json, version, last_heartbeat_at FROM workers ORDER BY last_heartbeat_at DESC LIMIT 200')
+    .all<{ id: string; hostname: string; kinds_json: string; capabilities_json: string; capability_protocol_versions_json: string; version: string; last_heartbeat_at: string }>();
+  return result.results.map((row) => {
+    const capabilities = parseKinds(row.capabilities_json);
+    return {
+      id: row.id,
+      hostname: row.hostname,
+      kinds: parseKinds(row.kinds_json),
+      capabilities,
+      capabilityProtocolVersions: parseCapabilityProtocolVersions(
+        row.capability_protocol_versions_json,
+        capabilities,
+      ),
+      version: row.version,
+      lastHeartbeatAt: row.last_heartbeat_at,
+      online: row.last_heartbeat_at >= threshold,
+    };
+  });
 }
 
 export async function pruneStaleWorkers(db: SqlDatabase, now = new Date(), retentionDays = WORKER_RETENTION_DAYS) {
@@ -98,18 +159,38 @@ export async function queueBacklog(db: SqlDatabase) {
  */
 export async function orphanedJobs(db: SqlDatabase, options: { projectId?: string } = {}, now = new Date()) {
   const workers = await listWorkers(db, now);
-  const covered = new Set(workers.filter((worker) => worker.online).flatMap((worker) => worker.kinds));
+  const online = workers.filter((worker) => worker.online);
   const cutoff = new Date(now.valueOf() - ORPHAN_JOB_SECONDS * 1000).toISOString();
   const rows = await db
     .prepare(`
-      SELECT id, kind, project_id, created_at FROM jobs
+      SELECT id, kind, project_id, required_capability,
+        required_capability_protocol_version, created_at FROM jobs
       WHERE status IN ('queued', 'retrying') AND created_at <= ?
         AND (? = '' OR project_id = ?)
       ORDER BY created_at ASC LIMIT 100
     `)
     .bind(cutoff, options.projectId ?? '', options.projectId ?? '')
-    .all<{ id: string; kind: string; project_id: string | null; created_at: string }>();
+    .all<{ id: string; kind: string; project_id: string | null; required_capability: string; required_capability_protocol_version: number; created_at: string }>();
   return rows.results
-    .filter((row) => !covered.has(row.kind))
-    .map((row) => ({ id: row.id, kind: row.kind, projectId: row.project_id, createdAt: row.created_at }));
+    .filter(
+      (row) =>
+        !online.some(
+          (worker) =>
+            worker.kinds.includes(row.kind) &&
+            (!row.required_capability ||
+              (worker.capabilities.includes(row.required_capability) &&
+                (worker.capabilityProtocolVersions[
+                  row.required_capability
+                ] ?? 0) >= row.required_capability_protocol_version)),
+        ),
+    )
+    .map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      requiredCapability: row.required_capability || null,
+      requiredCapabilityProtocolVersion:
+        row.required_capability_protocol_version,
+      projectId: row.project_id,
+      createdAt: row.created_at,
+    }));
 }

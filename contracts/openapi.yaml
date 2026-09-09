@@ -14,210 +14,4175 @@ paths:
       responses: { '200': { description: Project list } }
     post:
       summary: Create a project from an approved topic or a v2 contract
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {$ref: '#/components/requestBodies/JsonBody'}
-      responses: {'201': {description: Created}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/ValidationError'}}
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        {
+          '201': { description: Created },
+          '409': { $ref: '#/components/responses/Conflict' },
+          '422': { $ref: '#/components/responses/ValidationError' },
+        }
   /projects/{projectId}:
     get:
       summary: Read the current project and ETag
-      parameters: [{$ref: '#/components/parameters/ProjectId'}]
-      responses: {'200': {description: Project}, '404': {$ref: '#/components/responses/NotFound'}}
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses:
+        {
+          '200': { description: Project },
+          '404': { $ref: '#/components/responses/NotFound' },
+        }
     patch:
       summary: Update template, brand, locale, or channel configuration and invalidate stale production approval
-      parameters: [{$ref: '#/components/parameters/ProjectId'}, {$ref: '#/components/parameters/IfMatch'}]
-      requestBody: {$ref: '#/components/requestBodies/JsonBody'}
-      responses: {'200': {description: Updated}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/ValidationError'}, '428': {$ref: '#/components/responses/PreconditionRequired'}}
+      parameters:
+        [
+          { $ref: '#/components/parameters/ProjectId' },
+          { $ref: '#/components/parameters/IfMatch' },
+        ]
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        {
+          '200': { description: Updated },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '409': { $ref: '#/components/responses/Conflict' },
+          '422': { $ref: '#/components/responses/ValidationError' },
+          '428': { $ref: '#/components/responses/PreconditionRequired' },
+        }
   /projects/{projectId}/transitions:
     post:
       summary: Apply one state-machine transition using server-computed gates. RENDERING and QC_PENDING are worker-only; PUBLISHED is written by the channel callback, except for the package channel where a publisher confirms manual distribution (requires a completed package publish job and a note of at least 10 characters).
-      parameters: [{$ref: '#/components/parameters/ProjectId'}, {$ref: '#/components/parameters/IfMatch'}]
-      requestBody: {$ref: '#/components/requestBodies/JsonBody'}
-      responses: {'200': {description: Transitioned}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}, '428': {$ref: '#/components/responses/PreconditionRequired'}}
+      parameters:
+        [
+          { $ref: '#/components/parameters/ProjectId' },
+          { $ref: '#/components/parameters/IfMatch' },
+        ]
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        {
+          '200': { description: Transitioned },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '409': { $ref: '#/components/responses/Conflict' },
+          '428': { $ref: '#/components/responses/PreconditionRequired' },
+        }
   /projects/{projectId}/gates:
     get:
       summary: Evaluate G0-G8 from authoritative server data
-      parameters: [{$ref: '#/components/parameters/ProjectId'}]
-      responses: {'200': {description: Gate results}}
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Gate results } }
   /projects/{projectId}/audit:
     get:
       summary: Read the append-only project audit trail
-      parameters: [{$ref: '#/components/parameters/ProjectId'}]
-      responses: {'200': {description: Audit events}}
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Audit events } }
   /projects/{projectId}/research:
     get:
       summary: Read claim-level research
-      parameters: [{$ref: '#/components/parameters/ProjectId'}]
-      responses: {'200': {description: Research snapshot}}
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Research snapshot } }
     post:
       summary: Save an immutable research version and invalidate stale approval
-      parameters: [{$ref: '#/components/parameters/ProjectId'}, {$ref: '#/components/parameters/IfMatch'}]
-      requestBody: {$ref: '#/components/requestBodies/JsonBody'}
-      responses: {'200': {description: Saved}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/ValidationError'}}
+      parameters:
+        [
+          { $ref: '#/components/parameters/ProjectId' },
+          { $ref: '#/components/parameters/IfMatch' },
+        ]
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        {
+          '200': { description: Saved },
+          '409': { $ref: '#/components/responses/Conflict' },
+          '422': { $ref: '#/components/responses/ValidationError' },
+        }
   /projects/{projectId}/scripts:
-    get: {summary: List script versions, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Versions}}}
-    post: {summary: Save immutable script version, parameters: [{$ref: '#/components/parameters/ProjectId'}, {$ref: '#/components/parameters/IfMatch'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Saved}, '409': {$ref: '#/components/responses/Conflict'}}}
+    get:
+      {
+        summary: List script versions,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Versions } },
+      }
+    post:
+      {
+        summary: Save immutable script version,
+        parameters:
+          [
+            { $ref: '#/components/parameters/ProjectId' },
+            { $ref: '#/components/parameters/IfMatch' },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Saved },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /projects/{projectId}/storyboards:
-    get: {summary: List storyboard versions, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Versions}}}
-    post: {summary: Save immutable contiguous storyboard, parameters: [{$ref: '#/components/parameters/ProjectId'}, {$ref: '#/components/parameters/IfMatch'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Saved}, '409': {$ref: '#/components/responses/Conflict'}}}
+    get:
+      {
+        summary: List storyboard versions,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Versions } },
+      }
+    post:
+      {
+        summary: Save immutable contiguous storyboard,
+        parameters:
+          [
+            { $ref: '#/components/parameters/ProjectId' },
+            { $ref: '#/components/parameters/IfMatch' },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Saved },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /projects/{projectId}/approvals:
     post:
       summary: Record research, script, QC, or publish approval bound to a subject hash
-      parameters: [{$ref: '#/components/parameters/ProjectId'}]
-      requestBody: {$ref: '#/components/requestBodies/JsonBody'}
-      responses: {'201': {description: Approved}, '403': {$ref: '#/components/responses/Forbidden'}, '409': {$ref: '#/components/responses/Conflict'}}
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        {
+          '201': { description: Approved },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '409': { $ref: '#/components/responses/Conflict' },
+        }
   /projects/{projectId}/assets:
-    get: {summary: List R2 asset metadata, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Assets}}}
+    get:
+      {
+        summary: List R2 asset metadata,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Assets } },
+      }
     post:
       summary: Upload a small asset directly (50 MB maximum)
-      parameters: [{$ref: '#/components/parameters/ProjectId'}]
-      requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, contentEncoding: binary}}}}
-      responses: {'201': {description: Uploaded}, '413': {description: Too large}}
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/octet-stream:
+                { schema: { type: string, contentEncoding: binary } },
+            },
+        }
+      responses:
+        { '201': { description: Uploaded }, '413': { description: Too large } }
   /projects/{projectId}/asset-uploads:
     post:
       summary: Create a 24-hour R2 multipart upload
-      parameters: [{$ref: '#/components/parameters/ProjectId'}]
-      requestBody: {$ref: '#/components/requestBodies/JsonBody'}
-      responses: {'201': {description: Upload session}}
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses: { '201': { description: Upload session } }
   /asset-uploads/{uploadId}/parts/{partNumber}:
     put:
       summary: Upload one multipart part (100 MB maximum)
       parameters:
-        - {name: uploadId, in: path, required: true, schema: {type: string}}
-        - {name: partNumber, in: path, required: true, schema: {type: integer, minimum: 1}}
-      requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, contentEncoding: binary}}}}
-      responses: {'200': {description: Part ETag}}
+        - { name: uploadId, in: path, required: true, schema: { type: string } }
+        - {
+            name: partNumber,
+            in: path,
+            required: true,
+            schema: { type: integer, minimum: 1 },
+          }
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/octet-stream:
+                { schema: { type: string, contentEncoding: binary } },
+            },
+        }
+      responses: { '200': { description: Part ETag } }
   /asset-uploads/{uploadId}/complete:
-    post: {summary: Complete multipart upload and attach immutable input asset, parameters: [{name: uploadId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Asset}}}
+    post:
+      {
+        summary: Complete multipart upload and attach immutable input asset,
+        parameters:
+          [
+            {
+              name: uploadId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '201': { description: Asset } },
+      }
   /asset-uploads/{uploadId}/abort:
-    post: {summary: Abort an incomplete multipart upload and remove its temporary R2 parts, parameters: [{name: uploadId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Aborted}, '409': {$ref: '#/components/responses/Conflict'}}}
+    post:
+      {
+        summary: Abort an incomplete multipart upload and remove its temporary R2 parts,
+        parameters:
+          [
+            {
+              name: uploadId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200': { description: Aborted },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /jobs:
     post:
       summary: Enqueue voice, low-bitrate preview, or final render work bound to the current immutable hash
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {$ref: '#/components/requestBodies/JsonBody'}
-      responses: {'202': {description: Queued}, '409': {$ref: '#/components/responses/Conflict'}}
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/JsonBody' }
+      responses:
+        {
+          '202': { description: Queued },
+          '409': { $ref: '#/components/responses/Conflict' },
+        }
   /jobs/lease:
-    post: {summary: Lease an eligible job to an authenticated worker, security: [{workerToken: []}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Leased}, '204': {description: No work}}}
+    post:
+      {
+        summary: Lease an eligible job to a service-scoped worker,
+        security:
+          [
+            { sourceWorkerToken: [] },
+            { renderWorkerToken: [] },
+            { workerToken: [] },
+          ],
+        requestBody:
+          {
+            required: true,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: '#/components/schemas/JobLeaseRequest' } },
+              },
+          },
+        responses:
+          { '200': { description: Leased }, '204': { description: No work } },
+      }
   /jobs/{jobId}/heartbeat:
-    post: {summary: Renew the lease of a running job, security: [{workerToken: []}], parameters: [{name: jobId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Lease renewed}, '409': {$ref: '#/components/responses/Conflict'}}}
+    post:
+      {
+        summary: Renew the lease of a running job using the token scope implied by its kind,
+        security:
+          [
+            { sourceWorkerToken: [] },
+            { renderWorkerToken: [] },
+            { workerToken: [] },
+          ],
+        parameters:
+          [{ name: jobId, in: path, required: true, schema: { type: string } }],
+        requestBody:
+          {
+            required: true,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: '#/components/schemas/JobLeaseHeartbeat' } },
+              },
+          },
+        responses:
+          {
+            '200': { description: Lease renewed },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /jobs/{jobId}/finish:
-    post: {summary: Complete or retry a leased job; terminal=true sends a non-retryable failure straight to the dead-letter queue, security: [{workerToken: []}], parameters: [{name: jobId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated}}}
+    post:
+      {
+        summary: "Complete or retry a scoped leased job; retryable failures may carry errorCode and retryDelaySeconds derived from Retry-After, while terminal=true sends a non-retryable failure straight to the dead-letter queue",
+        security:
+          [
+            { sourceWorkerToken: [] },
+            { renderWorkerToken: [] },
+            { workerToken: [] },
+          ],
+        parameters:
+          [{ name: jobId, in: path, required: true, schema: { type: string } }],
+        requestBody:
+          {
+            required: true,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: '#/components/schemas/JobLeaseFinish' } },
+              },
+          },
+        responses: { '200': { description: Updated } },
+      }
   /jobs/{jobId}:
-    get: {summary: Inspect one operational job, parameters: [{name: jobId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Job}}}
-    patch: {summary: Cancel or replay a job with an audit note, parameters: [{name: jobId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated}, '409': {$ref: '#/components/responses/Conflict'}}}
+    get:
+      {
+        summary: Inspect one operational job,
+        parameters:
+          [{ name: jobId, in: path, required: true, schema: { type: string } }],
+        responses: { '200': { description: Job } },
+      }
+    patch:
+      {
+        summary: Cancel or replay a job with an audit note,
+        parameters:
+          [
+            { name: jobId, in: path, required: true, schema: { type: string } },
+            { $ref: '#/components/parameters/IdempotencyKey' },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Updated },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /projects/{projectId}/voice-tracks:
-    get: {summary: List generated voice and caption tracks, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Tracks}}}
-    post: {summary: Commit TTS audio, provider alignment, and captions, security: [{workerToken: []}], parameters: [{$ref: '#/components/parameters/ProjectId'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Committed}, '409': {$ref: '#/components/responses/Conflict'}}}
+    get:
+      {
+        summary: List generated voice and caption tracks,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Tracks } },
+      }
+    post:
+      {
+        summary: "Commit TTS audio, provider alignment, and captions",
+        security: [{ renderWorkerToken: [] }],
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Committed },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /projects/{projectId}/qc-reports:
-    get: {summary: List automatic QC reports, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Reports}}}
-    post: {summary: Commit QC for a leased render job, security: [{workerToken: []}], parameters: [{$ref: '#/components/parameters/ProjectId'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Created}}}
+    get:
+      {
+        summary: List automatic QC reports,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Reports } },
+      }
+    post:
+      {
+        summary: Commit QC for a leased render job,
+        security: [{ renderWorkerToken: [] }],
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '201': { description: Created } },
+      }
   /projects/{projectId}/publish-jobs:
-    get: {summary: List channel jobs, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Jobs}}}
-    post: {summary: Create a package or YouTube publication after G7, parameters: [{$ref: '#/components/parameters/ProjectId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'202': {description: Scheduled}, '409': {$ref: '#/components/responses/Conflict'}}}
+    get:
+      {
+        summary: List channel jobs,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Jobs } },
+      }
+    post:
+      {
+        summary: Create a package or YouTube publication after G7,
+        parameters:
+          [
+            { $ref: '#/components/parameters/ProjectId' },
+            { $ref: '#/components/parameters/IdempotencyKey' },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '202': { description: Scheduled },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /publish-jobs/{publishJobId}/withdraw:
-    post: {summary: Record a withdrawal incident and enqueue remote takedown, parameters: [{name: publishJobId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'202': {description: Withdrawal accepted}, '409': {$ref: '#/components/responses/Conflict'}}}
+    post:
+      {
+        summary: Record a withdrawal incident and enqueue remote takedown,
+        parameters:
+          [
+            {
+              name: publishJobId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            { $ref: '#/components/parameters/IdempotencyKey' },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '202': { description: Withdrawal accepted },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /publish-jobs/{publishJobId}/complete:
-    post: {summary: Commit a worker publication result and remote video identifier, security: [{workerToken: []}], parameters: [{name: publishJobId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Publication committed}, '409': {$ref: '#/components/responses/Conflict'}}}
+    post:
+      {
+        summary: Commit a worker publication result and remote video identifier,
+        security: [{ renderWorkerToken: [] }],
+        parameters:
+          [
+            {
+              name: publishJobId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Publication committed },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /publish-jobs/{publishJobId}/package:
-    get: {summary: Download the authenticated distribution package manifest, parameters: [{name: publishJobId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Package manifest}, '404': {$ref: '#/components/responses/NotFound'}}}
+    get:
+      {
+        summary: Download the authenticated distribution package manifest,
+        parameters:
+          [
+            {
+              name: publishJobId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200': { description: Package manifest },
+            '404': { $ref: '#/components/responses/NotFound' },
+          },
+      }
   /projects/{projectId}/metrics:
-    get: {summary: Read post-publish metric snapshots, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Snapshots}}}
-    post: {summary: Append attributed 2h/24h/7d metrics, parameters: [{$ref: '#/components/parameters/ProjectId'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Captured}}}
+    get:
+      {
+        summary: Read post-publish metric snapshots,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Snapshots } },
+      }
+    post:
+      {
+        summary: Append attributed 2h/24h/7d metrics,
+        parameters:
+          [
+            { $ref: '#/components/parameters/ProjectId' },
+            { $ref: '#/components/parameters/IdempotencyKey' },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '201': { description: Captured } },
+      }
   /projects/{projectId}/incidents:
-    get: {summary: List correction, fact-update, complaint, and withdrawal incidents, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Incidents}}}
-    post: {summary: Open a correction, fact-update, or complaint incident, parameters: [{$ref: '#/components/parameters/ProjectId'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Incident created}}}
+    get:
+      {
+        summary: "List correction, fact-update, complaint, and withdrawal incidents",
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Incidents } },
+      }
+    post:
+      {
+        summary: "Open a correction, fact-update, or complaint incident",
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '201': { description: Incident created } },
+      }
   /incidents/{incidentId}:
-    patch: {summary: Resolve a content incident with an audited resolution, parameters: [{name: incidentId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Resolved}}}
+    patch:
+      {
+        summary: Resolve a content incident with an audited resolution,
+        parameters:
+          [
+            {
+              name: incidentId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '200': { description: Resolved } },
+      }
+  /source-proposals:
+    get:
+      summary: List the caller's proposals, or all proposals for admin and auditor
+      x-source-action: source.proposal.read
+      responses:
+        '200':
+          description: Source proposals
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceProposalCollection' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+    post:
+      summary: Submit a source proposal without creating or approving a source
+      x-source-action: source.proposal.create
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceProposalCreate' }
+      responses:
+        '200':
+          description: Idempotent replay
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceProposalEnvelope' }
+        '201':
+          description: Proposal created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceProposalEnvelope' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+  /source-proposals/{proposalId}/decision:
+    post:
+      summary: Approve or reject another actor's pending proposal
+      x-source-action: source.proposal.decide
+      parameters:
+        - name: proposalId
+          in: path
+          required: true
+          schema: { type: string }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceProposalDecision' }
+      responses:
+        '200':
+          description: Proposal decided
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceProposalEnvelope' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
   /source-configs:
-    get: {summary: List source configurations and health, responses: {'200': {description: Sources}}}
-    post: {summary: Register an authorized source, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Source}}}
+    get:
+      summary: List source configurations, health, ownership/steward assignments, trigger quota, and explicit per-request/monthly budget policy
+      x-source-action: source.read
+      responses:
+        '200':
+          description: Sources
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceConfigCollection' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+    post:
+      {
+        x-source-action: source.create,
+        summary: "Persist a disabled rights=pending draft, provisional rights request, active ownership assignments, and validated cost/budget policy; a separate capable actor must verify the grant",
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceConfigCreate' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Idempotent replay,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceCreateReplay' } } },
+              },
+            '201':
+              {
+                description: Draft source,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceConfigMutationEnvelope' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/imports:
+    post:
+      {
+        x-source-action: source.create,
+        summary: "Preview OPML, source CSV, JSON, or newline URLs with row-level issues, or idempotently create individually asserted rights=pending drafts without bypassing independent rights, test, and enable gates",
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceImportRequest' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Import preview,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceImportPreviewResult' } } },
+              },
+            '201':
+              {
+                description: Draft sources created,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceImportCommitResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+            '425': { $ref: '#/components/responses/SourceTooEarly' },
+            '503': { $ref: '#/components/responses/SourceUnavailable' },
+          },
+      }
+  /source-connectors:
+    get:
+      {
+        x-source-action: source.read,
+        summary: "List server-authoritative connector availability, runtime rollout mode, capabilities, authentication mode, and minimum interval",
+        responses:
+          {
+            '200':
+              {
+                description: Connector registry,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceConnectorCollection' } } },
+              },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+          },
+      }
+  /source-credentials/policies:
+    get:
+      summary: List browser-safe credential aliases and their target/header allowlists without provider lookup names, prefixes, or Secret material
+      x-source-action: source.governance.read
+      responses:
+        {
+          '200':
+            {
+              description: Redacted credential policies,
+              content: { application/json: { schema: { $ref: '#/components/schemas/SourceCredentialPolicyCollection' } } },
+            },
+          '403': { $ref: '#/components/responses/SourceForbidden' },
+          '503': { $ref: '#/components/responses/SourceUnavailable' },
+        }
+  /source-connectors/{connectorId}/versions/{connectorVersion}/control:
+    get:
+      summary: Read one persistent connector-version rollout control
+      x-source-action: source.governance.read
+      parameters:
+        - {
+            name: connectorId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+        - {
+            name: connectorVersion,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      responses:
+        {
+          '200':
+            {
+              description: Connector release control,
+              content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorReleaseControlEnvelope' } } },
+            },
+          '403': { $ref: '#/components/responses/SourceForbidden' },
+          '404': { $ref: '#/components/responses/SourceNotFound' },
+        }
+    patch:
+      summary: Switch a connector version between disabled, shadow, and enabled, optionally enabling stable source-level canary selection and automatic failure-rate stop
+      x-source-action: connector.release.manage
+      parameters:
+        - {
+            name: connectorId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+        - {
+            name: connectorVersion,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              { $ref: '#/components/schemas/ConnectorReleaseControlUpdate' }
+      responses:
+        {
+          '200':
+            {
+              description: Rollout control updated,
+              content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorReleaseControlUpdateResult' } } },
+            },
+          '400': { $ref: '#/components/responses/SourceBadRequest' },
+          '403': { $ref: '#/components/responses/SourceForbidden' },
+          '404': { $ref: '#/components/responses/SourceNotFound' },
+          '409': { $ref: '#/components/responses/SourceConflict' },
+          '422': { $ref: '#/components/responses/SourceValidationError' },
+        }
   /source-configs/{sourceId}:
-    get: {summary: Read one source configuration and recent health, parameters: [{name: sourceId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Source}, '404': {$ref: '#/components/responses/NotFound'}}}
-    patch: {summary: Version-guard a source schedule, rights status, configuration, or enabled state, parameters: [{name: sourceId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/ValidationError'}}}
+    get:
+      {
+        x-source-action: source.read,
+        summary: Read one source configuration and recent health,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200':
+              {
+                description: Source,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceConfigEnvelope' } } },
+              },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+          },
+      }
+    patch:
+      {
+        x-source-action: source.update,
+        summary: "Version-guard a source configuration, schedule, cost/budget policy change, or pause; identity/mapping changes invalidate prior tests and direct enable is forbidden",
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceConfigUpdate' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Updated or paused,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceConfigMutationEnvelope' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/{sourceId}/slo-exclusions:
+    get:
+      summary: List browser-safe manual-pause and planned-maintenance SLO exclusion windows
+      x-source-action: source.read
+      parameters:
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: SLO exclusion history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceSloExclusionCollection' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+    post:
+      summary: Register a future planned-maintenance SLO exclusion; manual pauses are opened by the source pause action
+      x-source-action: source.update
+      parameters:
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceSloExclusionCreate' }
+      responses:
+        '200':
+          description: Idempotent replay
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceSloExclusionMutationResult' }
+        '201':
+          description: Planned maintenance registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceSloExclusionMutationResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+    delete:
+      summary: Cancel a future planned-maintenance exclusion without deleting its audit history
+      x-source-action: source.update
+      parameters:
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceSloExclusionCancel' }
+      responses:
+        '200':
+          description: Planned maintenance cancelled or replayed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceSloExclusionCancelResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+  /source-configs/{sourceId}/rights:
+    get:
+      summary: List browser-safe provisional rights requests and decisions for one source
+      x-source-action: source.read
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Rights request history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRightsRequestCollection' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+    post:
+      summary: Approve or reject another actor's provisional rights request using an explicit rights-approver capability and immutable evidence hashes
+      x-source-action: source.rights.decide
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceRightsDecision' }
+      responses:
+        '200':
+          description: Rights request decided; sources remain disabled until the enable gate passes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRightsDecisionResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+    put:
+      summary: Submit or renew a provisional rights assertion; any active grant is revoked and the source is disabled pending an independent decision
+      x-source-action: source.update
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceRightsRequestSubmission' }
+      responses:
+        '200':
+          description: Idempotent replay
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRightsRequestSubmissionResult' }
+        '201':
+          description: Provisional rights request submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRightsRequestSubmissionResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+  /worker/source-configs/{sourceId}:
+    get:
+      summary: Read the workload-only source execution configuration; never exposed through an actor response
+      security: [{ sourceWorkerToken: [] }]
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Source execution configuration
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerSourceConfigEnvelope' }
+        '401': { $ref: '#/components/responses/SourceUnauthorized' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+  /source-configs/{sourceId}/ownership:
+    patch:
+      {
+        x-source-action: source.ownership.manage,
+        summary: "Transfer a source business owner, active-admin credential steward, and optional distinct backup admin using an expected version and audited reason",
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody:
+          {
+            required: true,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      { $ref: '#/components/schemas/SourceOwnershipUpdate' },
+                  },
+              },
+          },
+        responses:
+          {
+            '200':
+              {
+                description: Ownership transferred,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceOwnershipUpdateResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/{sourceId}/tests:
+    post:
+      {
+        x-source-action: source.test,
+        summary: Enqueue an asynchronous connector test bound to the current configuration hash,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            { $ref: '#/components/parameters/IdempotencyKey' },
+          ],
+        responses:
+          {
+            '200':
+              {
+                description: Existing idempotent test,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceTestQueueResult' } } },
+              },
+            '202':
+              {
+                description: Test queued,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceTestQueueResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+          },
+      }
+  /source-configs/{sourceId}/credentials:
+    post:
+      summary: Bind or rotate a server-preconfigured credential alias; disable and invalidate tests while preserving only an opaque ref/version and policy snapshot
+      x-source-action: source.credentials.manage
+      parameters:
+        [{ name: sourceId, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    { $ref: '#/components/schemas/SourceCredentialBinding' },
+                },
+            },
+        }
+      responses:
+        {
+          '200':
+            {
+              description: Credential bound or rotated,
+              content: { application/json: { schema: { $ref: '#/components/schemas/SourceCredentialBindingResult' } } },
+            },
+          '400': { $ref: '#/components/responses/SourceBadRequest' },
+          '403': { $ref: '#/components/responses/SourceForbidden' },
+          '404': { $ref: '#/components/responses/SourceNotFound' },
+          '409': { $ref: '#/components/responses/SourceConflict' },
+          '422': { $ref: '#/components/responses/SourceValidationError' },
+          '503': { $ref: '#/components/responses/SourceUnavailable' },
+        }
+    delete:
+      summary: Revoke the current credential immediately, disable the source, cancel unleased work, and invalidate in-flight commits by version
+      x-source-action: source.credentials.manage
+      parameters:
+        [{ name: sourceId, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    { $ref: '#/components/schemas/SourceCredentialRevocation' },
+                },
+            },
+        }
+      responses:
+        {
+          '200':
+            {
+              description: Credential revoked,
+              content: { application/json: { schema: { $ref: '#/components/schemas/SourceCredentialRevocationResult' } } },
+            },
+          '400': { $ref: '#/components/responses/SourceBadRequest' },
+          '403': { $ref: '#/components/responses/SourceForbidden' },
+          '404': { $ref: '#/components/responses/SourceNotFound' },
+          '409': { $ref: '#/components/responses/SourceConflict' },
+          '422': { $ref: '#/components/responses/SourceValidationError' },
+        }
+  /source-configs/{sourceId}/tests/{testId}:
+    get:
+      {
+        x-source-action: source.governance.read,
+        summary: Read a connector test preview or redacted structured error,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            {
+              name: testId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200':
+              {
+                description: Test result,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceTestEnvelope' } } },
+              },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+          },
+      }
+  /source-configs/{sourceId}/tests/{testId}/complete:
+    post:
+      {
+        summary: Commit a tested preview from the source worker that owns the live lease,
+        security: [{ sourceWorkerToken: [] }],
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            {
+              name: testId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceTestCompletion' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Test committed,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceTestCompletionResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '401': { $ref: '#/components/responses/SourceUnauthorized' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/{sourceId}/enable:
+    post:
+      {
+        x-source-action: source.enable,
+        summary: Enable only when a non-expired test hash matches the current config and a current rights grant exists,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceEnable' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Enabled,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceEnableResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
   /source-configs/{sourceId}/runs:
-    get: {summary: List ingestion runs, parameters: [{name: sourceId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Runs}}}
-    post: {summary: Trigger ingestion, parameters: [{name: sourceId, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], responses: {'202': {description: Queued}}}
+    get:
+      summary: List ingestion runs
+      x-source-action: source.read
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string, maxLength: 1024 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Runs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRunPage' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+    post:
+      summary: Trigger ingestion
+      x-source-action: source.run.request
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: Idempotent replay
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRunEnqueueResult' }
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRunEnqueueResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '429': { $ref: '#/components/responses/SourceRateLimited' }
+        '503': { $ref: '#/components/responses/SourceUnavailable' }
+  /source-configs/{sourceId}/runs/{runId}:
+    get:
+      x-source-action: source.read
+      summary: Read one browser-safe ingestion run belonging to the source
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Run detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceRunDetail' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+  /source-configs/{sourceId}/backfills:
+    post:
+      {
+        x-source-action: source.backfill.request,
+        summary: Enqueue a bounded historical pull with an isolated backfill checkpoint,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            { $ref: '#/components/parameters/IdempotencyKey' },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceBackfill' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Existing idempotent backfill,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceBackfillResult' } } },
+              },
+            '202':
+              {
+                description: Backfill queued,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceBackfillResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+            '429': { $ref: '#/components/responses/SourceRateLimited' },
+            '503': { $ref: '#/components/responses/SourceUnavailable' },
+          },
+      }
+  /source-configs/{sourceId}/backfills/estimates:
+    post:
+      x-source-action: source.backfill.estimate
+      summary: Estimate a bounded historical pull before confirmation
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceBackfillEstimateRequest' }
+      responses:
+        '200':
+          description: Conservative estimate bound to the current source version and range
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceBackfillEstimateResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+  /source-configs/{sourceId}/checkpoint-cutovers:
+    get:
+      {
+        x-source-action: source.governance.read,
+        summary: List immutable checkpoint cutover requests and decisions,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200':
+              {
+                description: Checkpoint cutovers,
+                content: { application/json: { schema: { $ref: '#/components/schemas/CheckpointCutoverCollection' } } },
+              },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+          },
+      }
+    post:
+      summary: Request a live or backfill checkpoint cutover while preserving the old snapshot for independent approval
+      x-source-action: source.checkpoint.request
+      parameters:
+        [
+          {
+            name: sourceId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          },
+          { $ref: '#/components/parameters/IdempotencyKey' },
+        ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckpointCutoverRequest' }
+      responses:
+        {
+          '200':
+            {
+              description: Existing idempotent cutover,
+              content: { application/json: { schema: { $ref: '#/components/schemas/CheckpointCutoverResult' } } },
+            },
+          '201':
+            {
+              description: Cutover pending approval,
+              content: { application/json: { schema: { $ref: '#/components/schemas/CheckpointCutoverResult' } } },
+            },
+          '400': { $ref: '#/components/responses/SourceBadRequest' },
+          '403': { $ref: '#/components/responses/SourceForbidden' },
+          '404': { $ref: '#/components/responses/SourceNotFound' },
+          '409': { $ref: '#/components/responses/SourceConflict' },
+          '422': { $ref: '#/components/responses/SourceValidationError' },
+        }
+  /source-configs/{sourceId}/checkpoint-cutovers/{cutoverId}:
+    patch:
+      summary: Independently approve and atomically apply, or reject, a checkpoint cutover
+      x-source-action: source.checkpoint.decide
+      parameters:
+        - { name: sourceId, in: path, required: true, schema: { type: string } }
+        - {
+            name: cutoverId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckpointCutoverDecision' }
+      responses:
+        {
+          '200':
+            {
+              description: Cutover decided,
+              content: { application/json: { schema: { $ref: '#/components/schemas/CheckpointCutoverResult' } } },
+            },
+          '400': { $ref: '#/components/responses/SourceBadRequest' },
+          '403': { $ref: '#/components/responses/SourceForbidden' },
+          '404': { $ref: '#/components/responses/SourceNotFound' },
+          '409': { $ref: '#/components/responses/SourceConflict' },
+          '422': { $ref: '#/components/responses/SourceValidationError' },
+        }
+  /source-configs/{sourceId}/disconnect:
+    post:
+      {
+        x-source-action: source.disconnect,
+        summary: "Revoke pending connection sessions, rotate the credential version, disable the source, cancel unstarted work, and audit the reason",
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceLifecycleAction' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Disconnected,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLifecycleResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/{sourceId}/archive:
+    post:
+      {
+        x-source-action: source.archive,
+        summary: "Archive a source, disable scheduling, cancel unstarted work, and retain minimum audit history",
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceLifecycleAction' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Archived,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLifecycleResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/{sourceId}/content-withdrawals:
+    get:
+      {
+        x-source-action: source.governance.read,
+        summary: List legal deletion requests and irreversible receipt hashes without exposing object keys,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200':
+              {
+                description: Deletion request history,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceDeletionRequestCollection' } } },
+              },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+          },
+      }
+    post:
+      {
+        x-source-actions: [source.withdraw, source.legal-delete],
+        summary: "Idempotently withdraw source content or request legal deletion; legal deletion stops collection, deletes storage objects with retry receipts, waits for confirmed external withdrawal, then removes exclusive normalized and derived content",
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            { $ref: '#/components/parameters/IdempotencyKey' },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceContentWithdrawal' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Replayed request or content withdrawn,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceContentWithdrawalResult' } } },
+              },
+            '202':
+              {
+                description: "Legal deletion pending, blocked, or awaiting external confirmation",
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLegalDeletionResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/{sourceId}/legal-holds:
+    get:
+      {
+        x-source-action: source.governance.read,
+        summary: List active and released legal holds for auditors and administrators,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200':
+              {
+                description: Legal hold history,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLegalHoldCollection' } } },
+              },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+          },
+      }
+    post:
+      {
+        x-source-action: source.legal-hold.create,
+        summary: "Create an active legal hold, block source deletion, and cancel unleased external withdrawal jobs",
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceLegalHoldCreate' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Existing active hold,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLegalHoldResult' } } },
+              },
+            '201':
+              {
+                description: Legal hold created,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLegalHoldResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/{sourceId}/legal-holds/{holdId}/release:
+    post:
+      {
+        x-source-action: source.legal-hold.release,
+        summary: Release a legal hold with an audited reason and resume blocked deletion work,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            {
+              name: holdId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceReasonAction' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Legal hold released,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLegalHoldResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
+  /source-configs/{sourceId}/content-withdrawals/{requestId}/retry:
+    post:
+      {
+        x-source-action: source.legal-delete,
+        summary: Explicitly retry dead-letter external withdrawal jobs after an administrator fixes the cause,
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            {
+              name: requestId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceReasonAction' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: External deletion retry queued,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLegalDeletionRetryResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
   /scheduler/run:
-    post: {summary: Run one bounded orchestration tick manually (the resident scheduler process runs the same engine), security: [{schedulerToken: []}], responses: {'200': {description: Automation tick result}}}
+    post:
+      {
+        summary: Run one bounded orchestration tick manually (the resident scheduler process runs the same engine),
+        security: [{ schedulerToken: [] }],
+        responses: { '200': { description: Automation tick result } },
+      }
   /projects/{projectId}/automation:
-    post: {summary: Pause or resume automation for one project with an audited reason, parameters: [{$ref: '#/components/parameters/ProjectId'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated project}, '409': {$ref: '#/components/responses/Conflict'}, '422': {$ref: '#/components/responses/ValidationError'}}}
+    post:
+      {
+        summary: Pause or resume automation for one project with an audited reason,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Updated project },
+            '409': { $ref: '#/components/responses/Conflict' },
+            '422': { $ref: '#/components/responses/ValidationError' },
+          },
+      }
   /automation/policies:
-    get: {summary: List automation policies and the default policy shape, responses: {'200': {description: Policies}}}
-    post: {summary: Create an automation policy (dual authorizers must be distinct active members), requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Policy}, '422': {$ref: '#/components/responses/ValidationError'}}}
+    get:
+      {
+        summary: List automation policies and the default policy shape,
+        responses: { '200': { description: Policies } },
+      }
+    post:
+      {
+        summary: Create an automation policy (dual authorizers must be distinct active members),
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '201': { description: Policy },
+            '422': { $ref: '#/components/responses/ValidationError' },
+          },
+      }
+  /automation/control:
+    get:
+      {
+        summary: Read the global automation pause state,
+        responses: { '200': { description: Global automation control } },
+      }
+    patch:
+      {
+        summary: Pause or resume every automation stage with an audited reason,
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Updated global automation control },
+            '422': { $ref: '#/components/responses/ValidationError' },
+          },
+      }
   /automation/policies/{policyId}:
-    get: {summary: Read one automation policy, parameters: [{name: policyId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Policy}, '404': {$ref: '#/components/responses/NotFound'}}}
-    patch: {summary: Update stages, pre-authorization, guardrails, or the enabled switch, parameters: [{name: policyId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Policy}, '422': {$ref: '#/components/responses/ValidationError'}}}
-    delete: {summary: Delete a policy and return its projects to manual, parameters: [{name: policyId, in: path, required: true, schema: {type: string}}], responses: {'200': {description: Deleted}, '404': {$ref: '#/components/responses/NotFound'}}}
+    get:
+      {
+        summary: Read one automation policy,
+        parameters:
+          [
+            {
+              name: policyId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200': { description: Policy },
+            '404': { $ref: '#/components/responses/NotFound' },
+          },
+      }
+    patch:
+      {
+        summary: "Update stages, pre-authorization, guardrails, or the enabled switch",
+        parameters:
+          [
+            {
+              name: policyId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Policy },
+            '422': { $ref: '#/components/responses/ValidationError' },
+          },
+      }
+    delete:
+      {
+        summary: Delete a policy and return its projects to manual,
+        parameters:
+          [
+            {
+              name: policyId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        responses:
+          {
+            '200': { description: Deleted },
+            '404': { $ref: '#/components/responses/NotFound' },
+          },
+      }
   /automation/runs:
-    get: {summary: List recent orchestration ticks with actions, errors, and breaker state, responses: {'200': {description: Runs}}}
+    get:
+      {
+        summary: "List recent orchestration ticks with actions, errors, and breaker state",
+        responses: { '200': { description: Runs } },
+      }
   /attention:
-    get: {summary: List inbox items that need a human, responses: {'200': {description: Attention items}}}
+    get:
+      {
+        summary: List inbox items that need a human,
+        responses: { '200': { description: Attention items } },
+      }
   /attention/{attentionId}:
-    patch: {summary: Resolve one inbox item with an audited note, parameters: [{name: attentionId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Resolved}, '404': {$ref: '#/components/responses/NotFound'}}}
+    patch:
+      {
+        summary: Resolve one inbox item with an audited note,
+        parameters:
+          [
+            {
+              name: attentionId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Resolved },
+            '404': { $ref: '#/components/responses/NotFound' },
+          },
+      }
   /workers:
-    get: {summary: List worker heartbeats, queue backlog, and jobs no online worker can execute, responses: {'200': {description: Worker and queue state}}}
-    post: {summary: Report a worker heartbeat (sent while idle too), security: [{workerToken: []}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Recorded}, '401': {description: Unauthorized}, '422': {$ref: '#/components/responses/ValidationError'}}}
+    get:
+      {
+        summary: "List worker heartbeats, queue backlog, and jobs no online worker can execute",
+        responses: { '200': { description: Worker and queue state } },
+      }
+    post:
+      {
+        summary: Report a worker heartbeat within the token scope implied by its declared kinds,
+        security:
+          [
+            { sourceWorkerToken: [] },
+            { renderWorkerToken: [] },
+            { workerToken: [] },
+          ],
+        requestBody:
+          {
+            required: true,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: '#/components/schemas/WorkerHeartbeat' } },
+              },
+          },
+        responses:
+          {
+            '200': { description: Recorded },
+            '401': { description: Unauthorized },
+            '422': { $ref: '#/components/responses/ValidationError' },
+          },
+      }
+  /worker/legal-deletion-withdrawals/{jobId}/authorize:
+    post:
+      summary: Fence a leased legal-deletion withdrawal against active or newer legal holds immediately before the external side effect
+      security: [{ renderWorkerToken: [] }]
+      parameters:
+        - { name: jobId, in: path, required: true, schema: { type: string, minLength: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceWithdrawalAuthorizationRequest' }
+      responses:
+        '200':
+          description: The current leased execution is authorized against the current legal-hold epoch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceWithdrawalAuthorizationResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '401': { $ref: '#/components/responses/SourceUnauthorized' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
   /diagnostics:
-    get: {summary: Self-check database, migrations, object storage, credentials, workers, queue, and last scheduler tick without echoing secrets, responses: {'200': {description: Diagnostics}, '403': {$ref: '#/components/responses/Forbidden'}}}
+    get:
+      {
+        summary: "Self-check database, migrations, object storage, credentials, workers, queue, and last scheduler tick without echoing secrets",
+        responses:
+          {
+            '200': { description: Diagnostics },
+            '403': { $ref: '#/components/responses/Forbidden' },
+          },
+      }
   /session:
-    get: {summary: Read the identity the server resolved for this request, responses: {'200': {description: Session actor}, '401': {description: No identity resolved}}}
+    get:
+      {
+        summary: Read the identity the server resolved for this request,
+        responses:
+          {
+            '200': { description: Session actor },
+            '401': { description: No identity resolved },
+          },
+      }
   /operations:
-    get: {summary: Read 30-day job, QC, ingestion, incident, latency, retry, DLQ, and cost indicators, responses: {'200': {description: Operational indicators}}}
+    get:
+      {
+        summary: "Read 30-day job indicators plus per-source and connector/version/platform/capability 7/28-day SLO, minimum-sample status, freshness, request/byte usage, estimated cost, monthly budget, and minute quota",
+        responses: { '200': { description: Operational indicators } },
+      }
   /health:
-    get: {summary: Check D1 and queue health, security: [], responses: {'200': {description: Healthy or degraded}, '503': {description: Unhealthy}}}
+    get:
+      {
+        summary: Check PostgreSQL and queue health,
+        security: [],
+        responses:
+          {
+            '200': { description: Healthy or degraded },
+            '503': { description: Unhealthy },
+          },
+      }
   /media:
     get:
       summary: Stream an R2 asset using a session, worker token, or short-lived object signature
       parameters:
-        - {name: objectKey, in: query, required: true, schema: {type: string}}
-        - {name: expires, in: query, required: false, schema: {type: integer}}
-        - {name: signature, in: query, required: false, schema: {type: string}}
-      responses: {'200': {description: Media object}, '403': {$ref: '#/components/responses/Forbidden'}, '404': {$ref: '#/components/responses/NotFound'}}
+        - {
+            name: objectKey,
+            in: query,
+            required: true,
+            schema: { type: string },
+          }
+        - {
+            name: expires,
+            in: query,
+            required: false,
+            schema: { type: integer },
+          }
+        - {
+            name: signature,
+            in: query,
+            required: false,
+            schema: { type: string },
+          }
+      responses:
+        {
+          '200': { description: Media object },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+        }
   /media-tokens:
-    post: {summary: Mint a 30 to 900 second object-level media URL for an authenticated team member, requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Signed media URL}, '404': {$ref: '#/components/responses/NotFound'}, '503': {description: Signing secret missing}}}
+    post:
+      {
+        summary: Mint a 30 to 900 second object-level media URL for an authenticated team member,
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Signed media URL },
+            '404': { $ref: '#/components/responses/NotFound' },
+            '503': { description: Signing secret missing },
+          },
+      }
   /contracts/migrate:
-    post: {summary: Validate and migrate one v1 project contract to v2 without persistence, requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Migrated contract}, '422': {$ref: '#/components/responses/ValidationError'}}}
+    post:
+      {
+        summary: Validate and migrate one v1 project contract to v2 without persistence,
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Migrated contract },
+            '422': { $ref: '#/components/responses/ValidationError' },
+          },
+      }
   /contracts/rehash:
-    post: {summary: Migrate legacy project fingerprints to SHA-256 and invalidate downstream approvals, responses: {'200': {description: Migration result}}}
+    post:
+      {
+        summary: Migrate legacy project fingerprints to SHA-256 and invalidate downstream approvals,
+        responses: { '200': { description: Migration result } },
+      }
   /ingestion-runs/{ingestionRunId}/commit:
-    post: {summary: Atomically commit normalized ingestion records, revisions, clustering, checkpoint, and run outcome, security: [{workerToken: []}], parameters: [{name: ingestionRunId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Ingestion committed}, '409': {$ref: '#/components/responses/Conflict'}}}
+    post:
+      {
+        summary: "Atomically commit normalized records, origins, revisions, rejections, checkpoint, and run outcome, then enqueue deterministic topic recomputation; a shadow release stores bounded statistics only",
+        security: [{ sourceWorkerToken: [] }],
+        parameters:
+          [
+            {
+              name: ingestionRunId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+            {
+              name: X-Job-Id,
+              in: header,
+              required: true,
+              schema: { type: string, minLength: 1 },
+            },
+            {
+              name: X-Worker-Id,
+              in: header,
+              required: true,
+              schema: { type: string, minLength: 1, maxLength: 160 },
+            },
+            {
+              name: X-Lease-Epoch,
+              in: header,
+              required: true,
+              schema: { type: integer, minimum: 1 },
+            },
+          ],
+        requestBody:
+          {
+            required: true,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: '#/components/schemas/IngestionRunCommit' } },
+              },
+          },
+        responses:
+          {
+            '200':
+              {
+                description: Ingestion committed or shadow summary stored,
+                content: { application/json: { schema: { $ref: '#/components/schemas/IngestionCommitResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '401': { $ref: '#/components/responses/SourceUnauthorized' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '413': { $ref: '#/components/responses/SourcePayloadTooLarge' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+            '503': { $ref: '#/components/responses/SourceUnavailable' },
+          },
+      }
+  /ingestion-runs/{ingestionRunId}/pages:
+    get:
+      summary: Read the last committed page checkpoint and bounded cumulative counters for recovery under the current lease epoch
+      security: [{ sourceWorkerToken: [] }]
+      parameters:
+        - { name: ingestionRunId, in: path, required: true, schema: { type: string } }
+        - { name: jobId, in: query, required: true, schema: { type: string } }
+        - { name: workerId, in: query, required: true, schema: { type: string } }
+        - { name: leaseEpoch, in: query, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Recovery checkpoint and cumulative counters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestionRunRecovery' }
+        '401': { $ref: '#/components/responses/SourceUnauthorized' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+  /ingestion-runs/{ingestionRunId}/pages/{pageKey}:
+    put:
+      summary: Idempotently commit one normalized ingestion page; the same page key and content hash replays while a different hash conflicts
+      security: [{ sourceWorkerToken: [] }]
+      parameters:
+        - { name: ingestionRunId, in: path, required: true, schema: { type: string } }
+        - { name: pageKey, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._:-]{1,160}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestionPageCommit' }
+      responses:
+        '200':
+          description: Page committed or identical replay returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestionPageCommitResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '401': { $ref: '#/components/responses/SourceUnauthorized' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '413': { $ref: '#/components/responses/SourcePayloadTooLarge' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+        '503': { $ref: '#/components/responses/SourceUnavailable' }
+  /ingestion-runs/{ingestionRunId}/complete:
+    post:
+      summary: Validate continuous committed ordinals, final page, cumulative counters and raw manifest before finalizing an ingestion run
+      security: [{ sourceWorkerToken: [] }]
+      parameters:
+        - { name: ingestionRunId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestionRunComplete' }
+      responses:
+        '200':
+          description: Run finalized or prior final result replayed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestionRunCompleteResult' }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '401': { $ref: '#/components/responses/SourceUnauthorized' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+        '503': { $ref: '#/components/responses/SourceUnavailable' }
+  /credential-broker/fetch:
+    post:
+      summary: Execute one bounded DNS-pinned GET while injecting a source/version/origin-bound Secret Header inside the dedicated broker workload; never returns credential material
+      security: [{ sourceWorkerToken: [] }]
+      requestBody:
+        {
+          required: true,
+          content:
+            {
+              application/json:
+                {
+                  schema:
+                    { $ref: '#/components/schemas/CredentialBrokerFetch' },
+                },
+            },
+        }
+      responses:
+        {
+          '200':
+            {
+              description: Bounded upstream response without request credentials,
+              content: { application/json: { schema: { $ref: '#/components/schemas/CredentialBrokerFetchResult' } } },
+            },
+          '400': { $ref: '#/components/responses/SourceBadRequest' },
+          '401': { $ref: '#/components/responses/SourceUnauthorized' },
+          '409': { $ref: '#/components/responses/SourceConflict' },
+          '422': { $ref: '#/components/responses/SourceValidationError' },
+          '503': { $ref: '#/components/responses/SourceUnavailable' },
+        }
+  /ingestion-runs/{ingestionRunId}/quarantine:
+    post:
+      summary: Hold, release, or irreversibly discard one completed ingestion batch and enqueue deterministic topic recomputation
+      x-source-action: source.quarantine.manage
+      parameters:
+        - {
+            name: ingestionRunId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, note]
+              properties:
+                action: { type: string, enum: [hold, release, discard] }
+                note: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        {
+          '200':
+            {
+              description: Quarantine state changed,
+              content: { application/json: { schema: { $ref: '#/components/schemas/IngestionQuarantineResult' } } },
+            },
+          '400': { $ref: '#/components/responses/SourceBadRequest' },
+          '403': { $ref: '#/components/responses/SourceForbidden' },
+          '404': { $ref: '#/components/responses/SourceNotFound' },
+          '409': { $ref: '#/components/responses/SourceConflict' },
+          '422': { $ref: '#/components/responses/SourceValidationError' },
+        }
+  /pipeline/recompute:
+    post:
+      {
+        summary: Idempotently recompute the rolling topic corpus for a leased source pipeline job,
+        security: [{ sourceWorkerToken: [] }],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PipelineRecompute' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Recomputed or replayed,
+                content: { application/json: { schema: { $ref: '#/components/schemas/PipelineRecomputeResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '401': { $ref: '#/components/responses/SourceUnauthorized' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+            '503': { $ref: '#/components/responses/SourceUnavailable' },
+          },
+      }
   /ingestion-runs/{ingestionRunId}/raw:
-    put: {summary: Store an authorized raw source payload with object-level retention metadata, security: [{workerToken: []}], parameters: [{name: ingestionRunId, in: path, required: true, schema: {type: string}}], requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, contentEncoding: binary}}}}, responses: {'201': {description: Raw payload stored}, '409': {$ref: '#/components/responses/Conflict'}, '413': {description: Too large}}}
+    put:
+      {
+        summary: Store an authorized raw source payload behind a one-hour durable upload session; an identical retry is idempotent and uncommitted objects are reclaimed after TTL,
+        security: [{ sourceWorkerToken: [] }],
+        parameters:
+          [
+            {
+              name: ingestionRunId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody:
+          {
+            required: true,
+            content:
+              {
+                application/octet-stream:
+                  { schema: { type: string, contentEncoding: binary } },
+              },
+          },
+        responses:
+          {
+            '201':
+              {
+                description: Raw payload upload session stored,
+                content:
+                  {
+                    application/json:
+                      {
+                        schema:
+                          { $ref: '#/components/schemas/RawPayloadUpload' },
+                      },
+                  },
+              },
+            '401': { $ref: '#/components/responses/SourceUnauthorized' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '413': { $ref: '#/components/responses/SourcePayloadTooLarge' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+            '503': { $ref: '#/components/responses/SourceUnavailable' },
+          },
+      }
   /webhooks/youtube:
-    post: {summary: Receive HMAC-signed replay-protected YouTube status callbacks, security: [{webhookSignature: []}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'202': {description: Processed}, '401': {description: Invalid signature}}}
+    post:
+      {
+        summary: Receive HMAC-signed replay-protected YouTube status callbacks,
+        security: [{ webhookSignature: [] }],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '202': { description: Processed },
+            '401': { description: Invalid signature },
+          },
+      }
   /team-members:
-    get: {summary: List server-authoritative memberships, responses: {'200': {description: Members}}}
-    post: {summary: Add a member, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Created}}}
+    get:
+      summary: List server-authoritative memberships and source governance capabilities
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeamMemberCollection' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: Add a member and explicitly assign source governance capabilities
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeamMemberCreate' }
+      responses:
+        '200':
+          description: Idempotent replay
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeamMemberMutationResult' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeamMemberMutationResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /team-members/{userId}:
-    patch: {summary: Change an existing member role or status, parameters: [{name: userId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated}, '404': {$ref: '#/components/responses/NotFound'}}}
+    patch:
+      summary: Change a member role, status, or source governance capabilities
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeamMemberUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeamMemberMutationResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /experiments:
-    get: {summary: List controlled content experiments, responses: {'200': {description: Experiments}}}
-    post: {summary: Create an experiment with deterministic allocation, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Experiment}}}
+    get:
+      {
+        summary: List controlled content experiments,
+        responses: { '200': { description: Experiments } },
+      }
+    post:
+      {
+        summary: Create an experiment with deterministic allocation,
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '201': { description: Experiment } },
+      }
   /experiments/{experimentId}:
-    patch: {summary: Start, complete, or cancel an experiment, parameters: [{name: experimentId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Updated}, '409': {$ref: '#/components/responses/Conflict'}}}
+    patch:
+      {
+        summary: "Start, complete, or cancel an experiment",
+        parameters:
+          [
+            {
+              name: experimentId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses:
+          {
+            '200': { description: Updated },
+            '409': { $ref: '#/components/responses/Conflict' },
+          },
+      }
   /projects/{projectId}/experiment-assignments:
-    get: {summary: List immutable experiment assignments, parameters: [{$ref: '#/components/parameters/ProjectId'}], responses: {'200': {description: Assignments}}}
-    post: {summary: Deterministically assign a project to a running experiment, parameters: [{$ref: '#/components/parameters/ProjectId'}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Assignment}}}
+    get:
+      {
+        summary: List immutable experiment assignments,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        responses: { '200': { description: Assignments } },
+      }
+    post:
+      {
+        summary: Deterministically assign a project to a running experiment,
+        parameters: [{ $ref: '#/components/parameters/ProjectId' }],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '201': { description: Assignment } },
+      }
   /calibration-runs:
-    get: {summary: List offline score calibration evidence, responses: {'200': {description: Calibration runs}}}
-    post: {summary: Register a candidate calibration from at least 100 labelled cases, requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'201': {description: Candidate}}}
+    get:
+      {
+        summary: List offline score calibration evidence,
+        responses: { '200': { description: Calibration runs } },
+      }
+    post:
+      {
+        summary: Register a candidate calibration from at least 100 labelled cases,
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '201': { description: Candidate } },
+      }
   /calibration-runs/{calibrationId}/decision:
-    post: {summary: Independently approve or reject calibration evidence, parameters: [{name: calibrationId, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/JsonBody'}, responses: {'200': {description: Decision}}}
+    post:
+      {
+        summary: Independently approve or reject calibration evidence,
+        parameters:
+          [
+            {
+              name: calibrationId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        responses: { '200': { description: Decision } },
+      }
 components:
   securitySchemes:
-    sitesSession: {type: apiKey, in: cookie, name: sites_session}
-    workerToken: {type: apiKey, in: header, name: X-Worker-Token}
-    schedulerToken: {type: apiKey, in: header, name: X-Worker-Token}
-    webhookSignature: {type: apiKey, in: header, name: X-Signal-Signature}
+    sitesSession: { type: apiKey, in: cookie, name: sites_session }
+    workerToken: { type: apiKey, in: header, name: X-Worker-Token }
+    sourceWorkerToken: { type: apiKey, in: header, name: X-Worker-Token }
+    renderWorkerToken: { type: apiKey, in: header, name: X-Worker-Token }
+    schedulerToken: { type: apiKey, in: header, name: X-Worker-Token }
+    webhookSignature: { type: apiKey, in: header, name: X-Signal-Signature }
   parameters:
-    ProjectId: {name: projectId, in: path, required: true, schema: {type: string}}
-    IfMatch: {name: If-Match, in: header, required: true, schema: {type: string, pattern: '^(W/)?"[0-9]+"$'}}
-    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 160}}
+    ProjectId:
+      { name: projectId, in: path, required: true, schema: { type: string } }
+    IfMatch:
+      {
+        name: If-Match,
+        in: header,
+        required: true,
+        schema: { type: string, pattern: '^(W/)?"[0-9]+"$' },
+      }
+    IdempotencyKey:
+      {
+        name: Idempotency-Key,
+        in: header,
+        required: true,
+        schema: { type: string, maxLength: 160 },
+      }
   requestBodies:
-    JsonBody: {required: true, content: {application/json: {schema: {type: object}}}}
+    JsonBody:
+      {
+        required: true,
+        content: { application/json: { schema: { type: object } } },
+      }
+  schemas:
+    TeamRole:
+      type: string
+      enum: [researcher, editor, producer, publisher, auditor, admin]
+    TeamMemberCreate:
+      type: object
+      additionalProperties: false
+      required: [userId, email, role]
+      properties:
+        userId: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email, maxLength: 320 }
+        role: { $ref: '#/components/schemas/TeamRole' }
+        canApproveSourceRights: { type: boolean, default: false }
+        canManageSourceLegal:
+          {
+            type: boolean,
+            default: false,
+            description: Admin-only capability for legal deletion and legal hold operations,
+          }
+    TeamMemberUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        role: { $ref: '#/components/schemas/TeamRole' }
+        status: { type: string, enum: [active, suspended] }
+        canApproveSourceRights: { type: boolean }
+        canManageSourceLegal:
+          {
+            type: boolean,
+            description: Admin-only capability; active holds retain at least two active operators,
+          }
+    TeamMemberListItem:
+      type: object
+      additionalProperties: false
+      required:
+        [user_id, email, role, status, can_approve_source_rights,
+         can_manage_source_legal, created_at, updated_at,
+         business_source_count, credential_source_count, backup_source_count]
+      properties:
+        user_id: { type: string }
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/TeamRole' }
+        status: { type: string, enum: [active, suspended] }
+        can_approve_source_rights: { type: integer, enum: [0, 1] }
+        can_manage_source_legal: { type: integer, enum: [0, 1] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        business_source_count: { type: integer, minimum: 0 }
+        credential_source_count: { type: integer, minimum: 0 }
+        backup_source_count: { type: integer, minimum: 0 }
+    TeamMemberCollection:
+      type: object
+      additionalProperties: false
+      required: [members]
+      properties:
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/TeamMemberListItem' }
+    TeamMemberMutation:
+      type: object
+      additionalProperties: false
+      required:
+        [userId, email, role, status, canApproveSourceRights,
+         canManageSourceLegal]
+      properties:
+        userId: { type: string }
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/TeamRole' }
+        status: { type: string, enum: [active, suspended] }
+        canApproveSourceRights: { type: boolean }
+        canManageSourceLegal: { type: boolean }
+    OwnershipReconciliation:
+      type: object
+      additionalProperties: false
+      required: [checked, issueCount, resolvedCount, truncated]
+      properties:
+        checked: { type: integer, minimum: 0, maximum: 500 }
+        issueCount: { type: integer, minimum: 0, maximum: 500 }
+        resolvedCount: { type: integer, minimum: 0 }
+        truncated: { type: boolean }
+    TeamMemberMutationResult:
+      type: object
+      additionalProperties: false
+      required: [member]
+      properties:
+        member: { $ref: '#/components/schemas/TeamMemberMutation' }
+        ownershipImpact: { $ref: '#/components/schemas/OwnershipReconciliation' }
+        replayed: { type: boolean }
+    SourceErrorCode:
+      type: string
+      enum:
+        [UNAUTHORIZED, FORBIDDEN, BAD_JSON, VALIDATION_ERROR, NOT_FOUND,
+         VERSION_CONFLICT, STATE_CONFLICT, IDEMPOTENCY_REQUIRED,
+         IDEMPOTENCY_CONFLICT, RATE_LIMITED, BUDGET_EXCEEDED,
+         CONNECTOR_UNAVAILABLE,
+         CONNECTOR_DISABLED, CONNECTOR_ROLLOUT_CHANGED, AUTH_REQUIRED,
+         RIGHTS_BLOCKED, LEGAL_HOLD_ACTIVE, LEASE_LOST,
+         POLICY_DRIFT, BROKER_CONFIG, SSRF_BLOCKED, NETWORK,
+         PERMANENT_UNSUPPORTED, SCHEMA_CHANGED, PAYLOAD_LIMIT,
+         REDIRECT_LIMIT, UPSTREAM_SECRET_REFLECTION, STORAGE_ERROR]
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, minLength: 1, maxLength: 1000 }
+        errorCode: { $ref: '#/components/schemas/SourceErrorCode' }
+        issues:
+          type: array
+          maxItems: 100
+          items:
+            oneOf:
+              - { type: string, maxLength: 1000 }
+              - { type: object }
+        retryable: { type: boolean }
+        retryAfterSeconds: { type: integer, minimum: 0, maximum: 86400 }
+    SourceErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error, errorCode, correlationId]
+      properties:
+        error: { type: string, minLength: 1, maxLength: 1000 }
+        errorCode: { $ref: '#/components/schemas/SourceErrorCode' }
+        correlationId: { type: string, format: uuid }
+        issues:
+          type: array
+          maxItems: 100
+          items:
+            oneOf:
+              - { type: string, maxLength: 1000 }
+              - { $ref: '#/components/schemas/SourceValidationIssue' }
+        retryable: { type: boolean }
+        retryAfterSeconds: { type: integer, minimum: 0, maximum: 86400 }
+        sourceId: { type: string, minLength: 1 }
+    SourceValidationIssue:
+      type: object
+      additionalProperties: false
+      required: [index, issue]
+      properties:
+        index: { type: integer, minimum: 0 }
+        issue: { type: string, minLength: 1, maxLength: 1000 }
+    SourceConfigRecord:
+      type: object
+      additionalProperties: false
+      required:
+        [id, name, adapter, platform, lifecycleStatus, healthStatus,
+         rightsStatus, enabled, version, ownerTeamId, businessOwnerId,
+         credentialStewardId, backupAdminId, hasCredential,
+         credentialVersion, scheduleCron, checkpointVersion, nextRunAt,
+         lastSuccessAt, lastTestedAt, publicErrorCode, publicErrorMessage,
+         consecutiveFailures, hasActiveRun, deletionStatus,
+         deletionRequestId, rateLimitPerMinute, costMicrosPerRequest,
+         pendingRightsRequestId, pendingRightsRequestedBy,
+         estimatedRequestsPerRun, monthlyBudgetMicros,
+         budgetSoftLimitPercent, schedulePriority, autoThrottleEnabled,
+         effectiveScheduleMultiplier, scheduleThrottleReason,
+         scheduleThrottleRecoveryAt, retention, publicConfig, createdAt, updatedAt]
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        adapter: { type: string, enum: [rss, http] }
+        platform:
+          { type: string, enum: [rss, http_json] }
+        lifecycleStatus: { $ref: '#/components/schemas/SourceLifecycleStatus' }
+        healthStatus: { $ref: '#/components/schemas/SourceHealthStatus' }
+        rightsStatus: { $ref: '#/components/schemas/SourceRightsStatus' }
+        enabled: { type: boolean }
+        version: { type: integer, minimum: 1 }
+        ownerTeamId: { type: [string, 'null'], maxLength: 200 }
+        businessOwnerId: { type: [string, 'null'], maxLength: 200 }
+        credentialStewardId: { type: [string, 'null'], maxLength: 200 }
+        backupAdminId: { type: [string, 'null'], maxLength: 200 }
+        hasCredential: { type: boolean }
+        credentialVersion: { type: integer, minimum: 0 }
+        scheduleCron: { type: [string, 'null'], maxLength: 200 }
+        checkpointVersion: { type: integer, minimum: 0 }
+        nextRunAt: { type: [string, 'null'], format: date-time }
+        lastSuccessAt: { type: [string, 'null'], format: date-time }
+        lastTestedAt: { type: [string, 'null'], format: date-time }
+        publicErrorCode: { oneOf: [{ $ref: '#/components/schemas/SourceErrorCode' }, { type: 'null' }] }
+        publicErrorMessage: { type: [string, 'null'], maxLength: 500 }
+        consecutiveFailures: { type: integer, minimum: 0 }
+        hasActiveRun: { type: boolean }
+        deletionStatus:
+          { type: [string, 'null'], enum: [pending, blocked, deleting, awaiting_external, failed, null] }
+        deletionRequestId: { type: [string, 'null'], maxLength: 200 }
+        pendingRightsRequestId: { type: [string, 'null'], maxLength: 200 }
+        pendingRightsRequestedBy: { type: [string, 'null'], maxLength: 200 }
+        rateLimitPerMinute: { type: integer, minimum: 1, maximum: 600 }
+        costMicrosPerRequest: { type: integer, minimum: 0 }
+        estimatedRequestsPerRun: { type: integer, minimum: 1 }
+        monthlyBudgetMicros: { type: integer, minimum: 0 }
+        budgetSoftLimitPercent: { type: integer, minimum: 0, maximum: 100 }
+        schedulePriority: { type: integer, minimum: 0, maximum: 100 }
+        autoThrottleEnabled: { type: boolean }
+        effectiveScheduleMultiplier: { type: integer, enum: [1, 2, 4] }
+        scheduleThrottleReason:
+          { type: [string, 'null'], enum: [budget_soft_limit, null] }
+        scheduleThrottleRecoveryAt:
+          { type: [string, 'null'], format: date-time }
+        retention: { $ref: '#/components/schemas/PublicSourceRetention' }
+        publicConfig: { $ref: '#/components/schemas/PublicSourceConfig' }
+        createdAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { type: [string, 'null'], format: date-time }
+    PublicSourceRetention:
+      type: object
+      additionalProperties: false
+      required: [mode, days]
+      properties:
+        mode: { type: string, enum: [metadata, raw] }
+        days: { type: integer, minimum: 1, maximum: 3650 }
+    PublicSourceMapping:
+      type: object
+      additionalProperties: false
+      properties:
+        items: { type: string, maxLength: 256 }
+        id: { type: string, maxLength: 256 }
+        kind: { type: string, maxLength: 256 }
+        title: { type: string, maxLength: 256 }
+        url: { type: string, maxLength: 256 }
+        publishedAt: { type: string, maxLength: 256 }
+        updatedAt: { type: string, maxLength: 256 }
+        deletedAt: { type: string, maxLength: 256 }
+        summary: { type: string, maxLength: 256 }
+        author: { type: string, maxLength: 256 }
+    PublicSourcePagination:
+      type: object
+      additionalProperties: false
+      properties:
+        mode: { type: string, enum: [none, page, cursor, since] }
+        maxPages: { type: integer, minimum: 1, maximum: 20 }
+        pageParameter: { type: string, maxLength: 64 }
+        startPage: { type: integer, minimum: 0, maximum: 1000000 }
+        pageSizeParameter: { type: string, maxLength: 64 }
+        pageSize: { type: integer, minimum: 1, maximum: 100 }
+        cursorParameter: { type: string, maxLength: 64 }
+        cursorPath: { type: string, maxLength: 256 }
+        sinceParameter: { type: string, maxLength: 64 }
+        hasMorePath: { type: string, maxLength: 256 }
+    PublicSourceConfig:
+      type: object
+      additionalProperties: false
+      required: [mapping]
+      properties:
+        sourceType: { type: string, enum: [social, media, market, filing, company] }
+        url: { type: string, format: uri, maxLength: 2000 }
+        mapping: { $ref: '#/components/schemas/PublicSourceMapping' }
+        pagination: { $ref: '#/components/schemas/PublicSourcePagination' }
+    SourceConfigMutationRecord:
+      type: object
+      additionalProperties: false
+      required: [id, lifecycleStatus, enabled, version]
+      properties:
+        id: { type: string, minLength: 1 }
+        lifecycleStatus: { $ref: '#/components/schemas/SourceLifecycleStatus' }
+        enabled: { type: boolean }
+        version: { type: integer, minimum: 1 }
+        rightsStatus: { $ref: '#/components/schemas/SourceRightsStatus' }
+        rightsRequestId: { type: [string, 'null'], maxLength: 200 }
+    SourceLifecycleStatus:
+      type: string
+      enum: [draft, connecting, tested, enabled, degraded, auth_required, paused, archived]
+    SourceProposalStatus:
+      type: string
+      enum: [proposal_pending, proposal_approved, proposal_rejected]
+    SourceHealthStatus:
+      type: string
+      enum: [unknown, healthy, degraded, auth_required, paused, waiting_capacity]
+    SourceRightsStatus:
+      type: string
+      enum: [pending, approved, revoked, expired]
+    IngestionRunStatus:
+      type: string
+      enum: [queued, running, succeeded, partial, failed, cancelled, rights_blocked]
+    IngestionQuarantineStatus:
+      type: string
+      enum: [none, held, released, discarded]
+    ConnectorReleaseMode:
+      type: string
+      enum: [disabled, shadow, enabled]
+    ConnectorAcceptanceState:
+      type: string
+      enum: [Proposed, Implemented locally, Delivered, Deployed, Integrated, Accepted, Blocked]
+    SourceProposalCreate:
+      type: object
+      additionalProperties: false
+      required: [name, adapter, platform, sourceType, url, requestNote]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        adapter: { type: string, enum: [rss, http] }
+        platform: { type: string, enum: [rss, http_json] }
+        sourceType: { type: string, enum: [social, media, market, filing, company] }
+        url: { type: string, format: uri, maxLength: 2000 }
+        scheduleCron: { type: [string, 'null'], maxLength: 160 }
+        requestNote: { type: string, minLength: 10, maxLength: 1000 }
+    SourceProposalDecision:
+      type: object
+      additionalProperties: false
+      required: [decision, note]
+      properties:
+        decision: { type: string, enum: [approve, reject] }
+        note: { type: string, minLength: 10, maxLength: 1000 }
+    SourceProposalRecord:
+      type: object
+      additionalProperties: false
+      required:
+        [id, name, adapter, platform, sourceType, url, scheduleCron, status,
+         requestedBy, requestNote, decidedBy, decisionNote, sourceConfigId,
+         createdAt, updatedAt, decidedAt]
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        adapter: { type: string, enum: [rss, http] }
+        platform: { type: string, enum: [rss, http_json] }
+        sourceType: { type: string, enum: [social, media, market, filing, company] }
+        url: { type: string, format: uri, maxLength: 2048 }
+        scheduleCron: { type: [string, 'null'], maxLength: 160 }
+        status: { $ref: '#/components/schemas/SourceProposalStatus' }
+        requestedBy: { type: string, minLength: 1, maxLength: 200 }
+        requestNote: { type: string, minLength: 1, maxLength: 1000 }
+        decidedBy: { type: [string, 'null'], maxLength: 200 }
+        decisionNote: { type: [string, 'null'], maxLength: 1000 }
+        sourceConfigId: { type: [string, 'null'], maxLength: 200 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+    SourceProposalEnvelope:
+      type: object
+      additionalProperties: false
+      required: [proposal, replayed]
+      properties:
+        proposal: { $ref: '#/components/schemas/SourceProposalRecord' }
+        replayed: { type: boolean }
+    SourceProposalCollection:
+      type: object
+      additionalProperties: false
+      required: [proposals]
+      properties:
+        proposals:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/SourceProposalRecord' }
+    SourceConfigCollection:
+      type: object
+      additionalProperties: false
+      required: [sources]
+      properties:
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/SourceConfigRecord' }
+    SourceConfigEnvelope:
+      type: object
+      additionalProperties: false
+      required: [source]
+      properties:
+        source: { $ref: '#/components/schemas/SourceConfigRecord' }
+    SourceConfigMutationEnvelope:
+      type: object
+      additionalProperties: false
+      required: [source]
+      properties:
+        source: { $ref: '#/components/schemas/SourceConfigMutationRecord' }
+    WorkerSourceConfigRecord:
+      type: object
+      additionalProperties: false
+      required:
+        [id, name, adapter, platform, enabled, rights_status, config_hash,
+         credential_ref, credential_version, rate_limit_per_minute,
+         retention_mode, retention_days, config]
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        adapter: { type: string, enum: [rss, http] }
+        platform: { type: string, enum: [rss, http_json] }
+        enabled: { type: boolean }
+        rights_status: { $ref: '#/components/schemas/SourceRightsStatus' }
+        config_hash: { type: string, minLength: 1 }
+        credential_ref: { type: [string, 'null'] }
+        credential_version: { type: integer, minimum: 0 }
+        rate_limit_per_minute: { type: integer, minimum: 1, maximum: 600 }
+        retention_mode: { type: string, enum: [metadata, raw] }
+        retention_days: { type: integer, minimum: 1, maximum: 3650 }
+        config: { type: object }
+    WorkerSourceConfigEnvelope:
+      type: object
+      additionalProperties: false
+      required: [source]
+      properties:
+        source: { $ref: '#/components/schemas/WorkerSourceConfigRecord' }
+    SourceCreateReplay:
+      type: object
+      additionalProperties: false
+      required: [sourceId, replayed]
+      properties:
+        sourceId: { type: string, minLength: 1 }
+        replayed: { type: boolean, const: true }
+        rightsRequestId: { type: [string, 'null'], maxLength: 200 }
+    SourceRightsRequestStatus:
+      type: string
+      enum: [pending, approved, rejected, superseded]
+    SourceRightsRequestRecord:
+      type: object
+      additionalProperties: false
+      required:
+        [id, sourceConfigId, requestedBy, status, assertionRef, sourceVersion,
+         decision, decisionNote, dossierHash, decidedBy, createdAt, updatedAt,
+         decidedAt]
+      properties:
+        id: { type: string, minLength: 1 }
+        sourceConfigId: { type: string, minLength: 1 }
+        requestedBy: { type: string, minLength: 1, maxLength: 200 }
+        status: { $ref: '#/components/schemas/SourceRightsRequestStatus' }
+        assertionRef: { type: string, minLength: 1, maxLength: 500 }
+        sourceVersion: { type: integer, minimum: 1 }
+        decision: { type: [string, 'null'], enum: [approve, reject, null] }
+        decisionNote: { type: [string, 'null'], maxLength: 1000 }
+        dossierHash: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$' }
+        decidedBy: { type: [string, 'null'], maxLength: 200 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+    SourceRightsRequestCollection:
+      type: object
+      additionalProperties: false
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/SourceRightsRequestRecord' }
+    SourceRightsDossier:
+      type: object
+      additionalProperties: false
+      required:
+        [principal, sourceType, permittedFields, territory, evidenceRef, evidenceSha256,
+         termsVersion, termsSnapshotSha256, grantedAt, expiresAt]
+      properties:
+        principal: { type: string, minLength: 1, maxLength: 300 }
+        sourceType: { type: string, enum: [social, media, market, filing, company] }
+        permittedFields:
+          type: array
+          minItems: 3
+          uniqueItems: true
+          items: { type: string, enum: [id, title, summary, url, publishedAt, updatedAt, author, kind, deletedAt] }
+        territory: { type: string, minLength: 1, maxLength: 200 }
+        evidenceRef: { type: string, minLength: 1, maxLength: 1000 }
+        evidenceSha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        termsVersion: { type: string, minLength: 1, maxLength: 200 }
+        termsSnapshotSha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        grantedAt: { type: string, format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time }
+    SourceRightsDecision:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [requestId, expectedSourceVersion, decision, note, dossier]
+          properties:
+            requestId: { type: string, minLength: 1 }
+            expectedSourceVersion: { type: integer, minimum: 1 }
+            decision: { type: string, const: approve }
+            note: { type: string, minLength: 10, maxLength: 1000 }
+            dossier: { $ref: '#/components/schemas/SourceRightsDossier' }
+        - type: object
+          additionalProperties: false
+          required: [requestId, expectedSourceVersion, decision, note]
+          properties:
+            requestId: { type: string, minLength: 1 }
+            expectedSourceVersion: { type: integer, minimum: 1 }
+            decision: { type: string, const: reject }
+            note: { type: string, minLength: 10, maxLength: 1000 }
+    SourceRightsDecisionResult:
+      type: object
+      additionalProperties: false
+      required: [status, request, sourceVersion, replayed]
+      properties:
+        status: { type: integer, const: 200 }
+        request: { $ref: '#/components/schemas/SourceRightsRequestRecord' }
+        sourceVersion: { type: integer, minimum: 2 }
+        rightsGrantId: { type: [string, 'null'] }
+        replayed: { type: boolean }
+    SourceRightsRequestSubmission:
+      type: object
+      additionalProperties: false
+      required: [expectedSourceVersion, assertionRef, note]
+      properties:
+        expectedSourceVersion: { type: integer, minimum: 1 }
+        assertionRef:
+          type: string
+          minLength: 3
+          maxLength: 982
+          pattern: '^[A-Za-z][A-Za-z0-9+.-]{1,80}:[^\s]{1,900}$'
+          description: Opaque non-HTTP reference to the provisional evidence record
+        note: { type: string, minLength: 10, maxLength: 1000 }
+    SourceRightsRequestSubmissionResult:
+      type: object
+      additionalProperties: false
+      required: [status, requestId, sourceVersion, replayed]
+      properties:
+        status: { type: integer, enum: [200, 201] }
+        requestId: { type: string, minLength: 1 }
+        sourceVersion: { type: integer, minimum: 1 }
+        replayed: { type: boolean }
+    SourceImportIssue:
+      type: object
+      additionalProperties: false
+      required: [row, message]
+      properties:
+        row: { type: integer, minimum: 1 }
+        message: { type: string, minLength: 1, maxLength: 1000 }
+    SourceImportPreviewResult:
+      type: object
+      additionalProperties: false
+      required: [candidates, issues, total]
+      properties:
+        candidates:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/SourceImportCandidate' }
+        issues:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/SourceImportIssue' }
+        total: { type: integer, minimum: 0, maximum: 100 }
+    SourceImportCreatedItem:
+      type: object
+      additionalProperties: false
+      required: [row, sourceId, name]
+      properties:
+        row: { type: integer, minimum: 1 }
+        sourceId: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+    SourceImportSkippedItem:
+      type: object
+      additionalProperties: false
+      required: [row, sourceId, name, reason]
+      properties:
+        row: { type: integer, minimum: 1 }
+        sourceId: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        reason: { type: string, enum: [already_exists] }
+    SourceImportCommitResult:
+      type: object
+      additionalProperties: false
+      required: [created, skipped]
+      properties:
+        created:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/SourceImportCreatedItem' }
+        skipped:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/SourceImportSkippedItem' }
+    SourceTestQueueResult:
+      type: object
+      additionalProperties: false
+      required: [testId, testStatus, created]
+      properties:
+        testId: { type: string, minLength: 1 }
+        testStatus: { type: string, enum: [queued, running, succeeded, failed] }
+        created: { type: boolean }
+    PublicSourcePreviewItem:
+      type: object
+      additionalProperties: false
+      required: [title, url, publishedAt]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 500 }
+        url: { type: string, format: uri, maxLength: 2000 }
+        publishedAt: { type: string, format: date-time }
+        author: { type: string, minLength: 1, maxLength: 200 }
+        summary: { type: string, minLength: 1, maxLength: 2000 }
+    PublicSourceTestCapabilities:
+      type: object
+      additionalProperties: false
+      properties:
+        conditionalRequests: { type: boolean }
+        contentType: { type: string, minLength: 1, maxLength: 500 }
+        finalUrl: { type: string, format: uri, maxLength: 2000 }
+    SourceTestRecord:
+      type: object
+      additionalProperties: false
+      required: [id, status, preview, capabilities, errorCode, errorMessage,
+                 expiresAt, createdAt, finishedAt]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [queued, running, succeeded, failed] }
+        preview:
+          type: array
+          maxItems: 5
+          items: { $ref: '#/components/schemas/PublicSourcePreviewItem' }
+        capabilities: { $ref: '#/components/schemas/PublicSourceTestCapabilities' }
+        errorCode: { oneOf: [{ $ref: '#/components/schemas/SourceErrorCode' }, { type: 'null' }] }
+        errorMessage: { type: [string, 'null'], maxLength: 500 }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: [string, 'null'], format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+    SourceTestEnvelope:
+      type: object
+      additionalProperties: false
+      required: [test]
+      properties:
+        test: { $ref: '#/components/schemas/SourceTestRecord' }
+    SourceTestCompletionResult:
+      type: object
+      additionalProperties: false
+      required: [completed, replayed]
+      properties:
+        completed: { type: boolean, const: true }
+        replayed: { type: boolean }
+    SourceEnableResult:
+      type: object
+      additionalProperties: false
+      required: [enabled, version, nextRunAt]
+      properties:
+        enabled: { type: boolean, const: true }
+        version: { type: integer, minimum: 2 }
+        nextRunAt: { type: string, format: date-time }
+    SourceRunRecord:
+      type: object
+      additionalProperties: false
+      required: [id, status, quarantineStatus, trigger, acceptedCount,
+                 rejectedCount, duplicateCount, createdAt, finishedAt,
+                 errorCode, errorMessage]
+      properties:
+        id: { type: string, minLength: 1 }
+        status: { $ref: '#/components/schemas/IngestionRunStatus' }
+        quarantineStatus: { $ref: '#/components/schemas/IngestionQuarantineStatus' }
+        trigger: { type: string }
+        acceptedCount: { type: integer, minimum: 0 }
+        rejectedCount: { type: integer, minimum: 0 }
+        duplicateCount: { type: integer, minimum: 0 }
+        createdAt: { type: [string, 'null'], format: date-time }
+        finishedAt: { type: [string, 'null'], format: date-time }
+        errorCode: { oneOf: [{ $ref: '#/components/schemas/SourceErrorCode' }, { type: 'null' }] }
+        errorMessage: { type: [string, 'null'], maxLength: 500 }
+    SourceRunPage:
+      type: object
+      additionalProperties: false
+      required: [runs, nextCursor]
+      properties:
+        runs:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/SourceRunRecord' }
+        nextCursor: { type: [string, 'null'], maxLength: 1024 }
+    SourceRunDetail:
+      type: object
+      additionalProperties: false
+      required: [run]
+      properties:
+        run: { $ref: '#/components/schemas/SourceRunRecord' }
+    SourceRunEnqueueResult:
+      type: object
+      additionalProperties: false
+      required: [ingestionRunId, created]
+      properties:
+        ingestionRunId: { type: string, minLength: 1 }
+        created: { type: boolean }
+    SourceBackfillResult:
+      type: object
+      additionalProperties: false
+      required: [ingestionRunId, created, checkpointScope]
+      properties:
+        ingestionRunId: { type: string, minLength: 1 }
+        created: { type: boolean }
+        checkpointScope: { type: string, const: backfill }
+    SourceBackfillEstimate:
+      type: object
+      additionalProperties: false
+      required:
+        [basisVersion, sourceId, sourceVersion, from, to, maxItems,
+         itemUpperBound, estimatedRequests, estimatedCostMicros,
+         estimatedDurationSeconds, lookbackDays, costMode,
+         requiresConfirmation, confirmationHash]
+      properties:
+        basisVersion: { type: string, const: 2026-09-09.v1 }
+        sourceId: { type: string, minLength: 1 }
+        sourceVersion: { type: integer, minimum: 1 }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        maxItems: { type: integer, minimum: 1, maximum: 100 }
+        itemUpperBound: { type: integer, minimum: 1, maximum: 100 }
+        estimatedRequests: { type: integer, minimum: 1 }
+        estimatedCostMicros: { type: integer, minimum: 0 }
+        estimatedDurationSeconds: { type: integer, minimum: 1 }
+        lookbackDays: { type: number, exclusiveMinimum: 0 }
+        costMode: { type: string, enum: [modeled, unmodeled] }
+        requiresConfirmation: { type: boolean }
+        confirmationHash: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+    SourceBackfillEstimateResult:
+      type: object
+      additionalProperties: false
+      required: [estimate]
+      properties:
+        estimate: { $ref: '#/components/schemas/SourceBackfillEstimate' }
+    SourceConnectorDescriptor:
+      type: object
+      additionalProperties: false
+      required:
+        [id, version, platform, adapter, label, availability, authMode,
+         requiredCapability, capabilityProtocolVersion, minimumIntervalMinutes,
+         supports]
+      properties:
+        id: { type: string, minLength: 1 }
+        version: { type: string, minLength: 1 }
+        platform:
+          { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
+        adapter: { type: string, enum: [rss, http, opencli, csv] }
+        label: { type: string, minLength: 1 }
+        availability: { type: string, enum: [available, blocked] }
+        unavailableReason: { type: string, minLength: 1, maxLength: 1000 }
+        authMode:
+          { type: string, enum: [public-confirmation, public-or-secret, secret, account-login, none] }
+        requiredCapability: { type: string, pattern: '^source:[a-z0-9-]{1,40}$' }
+        capabilityProtocolVersion: { type: integer, minimum: 1, maximum: 100 }
+        minimumIntervalMinutes: { type: integer, minimum: 1 }
+        supports:
+          type: object
+          additionalProperties: false
+          required: [test, backfill, pagination, edits, deletions, metrics]
+          properties:
+            test: { type: boolean }
+            backfill: { type: boolean }
+            pagination: { type: boolean }
+            edits: { type: boolean }
+            deletions: { type: boolean }
+            metrics: { type: boolean }
+    SourceConnectorRuntime:
+      type: object
+      additionalProperties: false
+      required:
+        [id, version, platform, adapter, label, availability, authMode,
+         requiredCapability, capabilityProtocolVersion, minimumIntervalMinutes,
+         supports, rolloutMode, rolloutReason, rolloutVersion,
+         rolloutUpdatedAt, canaryEnabled, canaryPercent,
+         canaryFailureRateBps, canaryMinRuns, canaryStartedAt,
+         canaryStoppedAt, effectiveAvailability]
+      properties:
+        id: { type: string, minLength: 1 }
+        version: { type: string, minLength: 1 }
+        platform:
+          { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
+        adapter: { type: string, enum: [rss, http, opencli, csv] }
+        label: { type: string, minLength: 1 }
+        availability: { type: string, enum: [available, blocked] }
+        unavailableReason: { type: string, minLength: 1, maxLength: 1000 }
+        authMode:
+          { type: string, enum: [public-confirmation, public-or-secret, secret, account-login, none] }
+        requiredCapability: { type: string, pattern: '^source:[a-z0-9-]{1,40}$' }
+        capabilityProtocolVersion: { type: integer, minimum: 1, maximum: 100 }
+        minimumIntervalMinutes: { type: integer, minimum: 1 }
+        supports:
+          type: object
+          additionalProperties: false
+          required: [test, backfill, pagination, edits, deletions, metrics]
+          properties:
+            test: { type: boolean }
+            backfill: { type: boolean }
+            pagination: { type: boolean }
+            edits: { type: boolean }
+            deletions: { type: boolean }
+            metrics: { type: boolean }
+        rolloutMode: { $ref: '#/components/schemas/ConnectorReleaseMode' }
+        rolloutReason: { type: string, minLength: 1, maxLength: 1000 }
+        rolloutVersion: { type: integer, minimum: 0 }
+        rolloutUpdatedAt: { type: [string, 'null'], format: date-time }
+        canaryEnabled: { type: boolean }
+        canaryPercent: { type: integer, minimum: 1, maximum: 100 }
+        canaryFailureRateBps: { type: integer, minimum: 1, maximum: 10000 }
+        canaryMinRuns: { type: integer, minimum: 1, maximum: 10000 }
+        canaryStartedAt: { type: [string, 'null'], format: date-time }
+        canaryStoppedAt: { type: [string, 'null'], format: date-time }
+        effectiveAvailability: { type: string, enum: [available, blocked] }
+    SourceConnectorCollection:
+      type: object
+      additionalProperties: false
+      required: [connectors]
+      properties:
+        connectors:
+          type: array
+          items: { $ref: '#/components/schemas/SourceConnectorRuntime' }
+    SourceCredentialPolicyPublic:
+      type: object
+      additionalProperties: false
+      required: [alias, targetOrigins, headerName]
+      properties:
+        alias: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$' }
+        targetOrigins:
+          { type: array, minItems: 1, maxItems: 20, items: { type: string, format: uri } }
+        headerName: { type: string, pattern: '^[A-Za-z][A-Za-z0-9-]{0,79}$' }
+    SourceCredentialPolicyCollection:
+      type: object
+      additionalProperties: false
+      required: [policies]
+      properties:
+        policies:
+          type: array
+          items: { $ref: '#/components/schemas/SourceCredentialPolicyPublic' }
+    ConnectorReleaseControl:
+      type: object
+      additionalProperties: false
+      required:
+        [id, connectorId, connectorVersion, rolloutMode, canaryEnabled,
+         canaryPercent, canaryFailureRateBps, canaryMinRuns,
+         canaryStartedAt, canaryStoppedAt, reason, version, updatedBy,
+         createdAt, updatedAt]
+      properties:
+        id: { type: string, minLength: 1 }
+        connectorId: { type: string, minLength: 1 }
+        connectorVersion: { type: string, minLength: 1 }
+        rolloutMode: { $ref: '#/components/schemas/ConnectorReleaseMode' }
+        canaryEnabled: { type: boolean }
+        canaryPercent: { type: integer, minimum: 1, maximum: 100 }
+        canaryFailureRateBps: { type: integer, minimum: 1, maximum: 10000 }
+        canaryMinRuns: { type: integer, minimum: 1, maximum: 10000 }
+        canaryStartedAt: { type: [string, 'null'], format: date-time }
+        canaryStoppedAt: { type: [string, 'null'], format: date-time }
+        reason: { type: string, maxLength: 500 }
+        version: { type: integer, minimum: 1 }
+        updatedBy: { type: string, minLength: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ConnectorReleaseControlEnvelope:
+      type: object
+      additionalProperties: false
+      required: [connector, control]
+      properties:
+        connector: { $ref: '#/components/schemas/SourceConnectorDescriptor' }
+        control: { $ref: '#/components/schemas/ConnectorReleaseControl' }
+    ConnectorReleaseControlUpdateResult:
+      type: object
+      additionalProperties: false
+      required: [status, control, cancelledJobs, cancelledRuns]
+      properties:
+        status: { type: integer, const: 200 }
+        control: { $ref: '#/components/schemas/ConnectorReleaseControl' }
+        cancelledJobs: { type: integer, minimum: 0 }
+        cancelledRuns: { type: integer, minimum: 0 }
+    SourceOwnershipAssignment:
+      type: object
+      additionalProperties: false
+      required: [ownerTeamId, businessOwnerId, credentialStewardId, backupAdminId]
+      properties:
+        ownerTeamId: { type: string, minLength: 1 }
+        businessOwnerId: { type: string, minLength: 1 }
+        credentialStewardId: { type: string, minLength: 1 }
+        backupAdminId: { type: [string, 'null'] }
+    SourceOwnershipUpdateResult:
+      type: object
+      additionalProperties: false
+      required: [assignment, version]
+      properties:
+        assignment: { $ref: '#/components/schemas/SourceOwnershipAssignment' }
+        version: { type: integer, minimum: 2 }
+    SourceCredentialBindingResult:
+      type: object
+      additionalProperties: false
+      required: [status, credentialVersion, sourceVersion, cancelledJobs]
+      properties:
+        status: { type: integer, const: 200 }
+        credentialVersion: { type: integer, minimum: 1 }
+        sourceVersion: { type: integer, minimum: 2 }
+        cancelledJobs: { type: integer, minimum: 0 }
+    SourceCredentialRevocationResult:
+      type: object
+      additionalProperties: false
+      required: [status, credentialVersion, sourceVersion, cancelledJobs]
+      properties:
+        status: { type: integer, const: 200 }
+        credentialVersion: { type: integer, minimum: 1 }
+        sourceVersion: { type: integer, minimum: 2 }
+        cancelledJobs: { type: integer, minimum: 0 }
+    CheckpointCutoverRecord:
+      type: object
+      additionalProperties: false
+      required:
+        [id, sourceConfigId, scope, status, sourceVersion,
+         checkpointVersionBefore, requestedBy, approvedBy, reason,
+         decisionNote, createdAt, decidedAt, appliedAt]
+      properties:
+        id: { type: string, minLength: 1 }
+        sourceConfigId: { type: string, minLength: 1 }
+        scope: { type: string, enum: [live, backfill] }
+        status: { type: string, enum: [pending, applied, rejected] }
+        sourceVersion: { type: integer, minimum: 1 }
+        checkpointVersionBefore: { type: integer, minimum: 0 }
+        requestedBy: { type: [string, 'null'], maxLength: 200 }
+        approvedBy: { type: [string, 'null'], maxLength: 200 }
+        reason: { type: [string, 'null'], maxLength: 500 }
+        decisionNote: { type: [string, 'null'], maxLength: 500 }
+        createdAt: { type: [string, 'null'], format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        appliedAt: { type: [string, 'null'], format: date-time }
+    CheckpointCutoverCollection:
+      type: object
+      additionalProperties: false
+      required: [cutovers]
+      properties:
+        cutovers:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CheckpointCutoverRecord' }
+    CheckpointCutoverResult:
+      type: object
+      additionalProperties: false
+      required: [status, cutoverId, cutoverStatus]
+      properties:
+        status: { type: integer, enum: [200, 201] }
+        cutoverId: { type: string, minLength: 1 }
+        cutoverStatus: { type: string, enum: [pending, applied, rejected] }
+        replayed: { type: boolean }
+        checkpointVersion: { type: integer, minimum: 1 }
+        sourceVersion: { type: integer, minimum: 2 }
+    SourceLifecycleResult:
+      type: object
+      additionalProperties: false
+      required: [status, sourceId, version, cancelledRuns]
+      properties:
+        status: { type: integer, const: 200 }
+        sourceId: { type: string, minLength: 1 }
+        version: { type: integer, minimum: 1 }
+        cancelledRuns: { type: integer, minimum: 0 }
+    SourceDeletionRequestRecord:
+      type: object
+      additionalProperties: false
+      required: [id, sourceVersion, status, stage, receiptHash, errorMessage,
+                 createdAt, updatedAt, completedAt]
+      properties:
+        id: { type: string, minLength: 1 }
+        sourceVersion: { type: integer, minimum: 1 }
+        status:
+          { type: string, enum: [pending, deleting, awaiting_external, blocked, failed, completed] }
+        stage: { type: string, enum: [requested, executing] }
+        receiptHash: { type: [string, 'null'], maxLength: 128 }
+        errorMessage: { type: [string, 'null'], maxLength: 500 }
+        createdAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { type: [string, 'null'], format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+    SourceDeletionRequestCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/SourceDeletionRequestRecord' }
+    SourceContentWithdrawalResult:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required:
+            [status, sourceId, version, withdrawnOrigins, cancelledRuns,
+             replayed]
+          properties:
+            status: { type: integer, const: 200 }
+            sourceId: { type: string, minLength: 1 }
+            version: { type: integer, minimum: 1 }
+            withdrawnOrigins: { type: integer, minimum: 0 }
+            cancelledRuns: { type: integer, minimum: 0 }
+            replayed: { type: boolean }
+        - { $ref: '#/components/schemas/SourceLegalDeletionResult' }
+    SourceLegalDeletionResult:
+      type: object
+      additionalProperties: false
+      required: [status, deletionRequestId, deletionStatus, replayed]
+      properties:
+        status: { type: integer, enum: [200, 202] }
+        deletionRequestId: { type: string, minLength: 1 }
+        deletionStatus:
+          { type: string, enum: [pending, deleting, awaiting_external, blocked, failed, completed] }
+        legalHoldId: { type: string, minLength: 1 }
+        replayed: { type: boolean }
+    SourceLegalHoldRecord:
+      type: object
+      additionalProperties: false
+      required: [id, status, reason, authority_ref, hold_epoch, created_by, created_at]
+      properties:
+        id: { type: string, minLength: 1 }
+        status: { type: string, enum: [active, released] }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        authority_ref: { type: string, minLength: 1, maxLength: 500 }
+        hold_epoch: { type: integer, minimum: 1 }
+        created_by: { type: string, minLength: 1 }
+        released_by: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        released_at: { type: [string, 'null'], format: date-time }
+    SourceLegalHoldCollection:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/SourceLegalHoldRecord' }
+    SourceLegalHoldResult:
+      type: object
+      additionalProperties: false
+      required: [status, legalHoldId, holdEpoch, replayed]
+      properties:
+        status: { type: integer, enum: [200, 201] }
+        legalHoldId: { type: string, minLength: 1 }
+        holdEpoch: { type: integer, minimum: 1 }
+        replayed: { type: boolean }
+    SourceWithdrawalAuthorizationRequest:
+      type: object
+      additionalProperties: false
+      required: [workerId, leaseEpoch]
+      properties:
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+    SourceWithdrawalAuthorizationResult:
+      type: object
+      additionalProperties: false
+      required: [authorized, sourceId, legalHoldEpoch]
+      properties:
+        authorized: { type: boolean, const: true }
+        sourceId: { type: string, minLength: 1 }
+        legalHoldEpoch: { type: integer, minimum: 0 }
+    SourceLegalDeletionRetryResult:
+      type: object
+      additionalProperties: false
+      required: [status, deletionRequestId, deletionStatus, retriedJobs]
+      properties:
+        status: { type: integer, const: 200 }
+        deletionRequestId: { type: string, minLength: 1 }
+        deletionStatus: { type: string, const: pending }
+        retriedJobs: { type: integer, minimum: 0 }
+    IngestionQuarantineResult:
+      type: object
+      additionalProperties: false
+      required:
+        [status, replayed, ingestionRunId, action, quarantineStatus,
+         affectedOrigins]
+      properties:
+        status: { type: integer, const: 200 }
+        replayed: { type: boolean }
+        ingestionRunId: { type: string, minLength: 1 }
+        sourceConfigId: { type: string, minLength: 1 }
+        action: { type: string, enum: [hold, release, discard] }
+        quarantineStatus: { $ref: '#/components/schemas/IngestionQuarantineStatus' }
+        affectedOrigins: { type: integer, minimum: 0 }
+    IngestionCounters:
+      type: object
+      additionalProperties: false
+      required:
+        [fetchedCount, acceptedCount, rejectedCount, duplicateCount,
+         requestCount, byteCount]
+      properties:
+        fetchedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        acceptedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        rejectedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        duplicateCount: { type: integer, minimum: 0, maximum: 1000000 }
+        requestCount: { type: integer, minimum: 0, maximum: 100000 }
+        byteCount: { type: integer, minimum: 0, maximum: 1000000000 }
+    IngestionPageCommitResult:
+      type: object
+      additionalProperties: false
+      required:
+        [ingestionRunId, pageKey, pageOrdinal, finalPage, status,
+         acceptedCount, rejectedCount, duplicateCount, fetchedCount,
+         requestCount, byteCount, checkpoint, checkpointJson,
+         checkpointScope, checkpointVersion, leaseEpoch]
+      properties:
+        ingestionRunId: { type: string, minLength: 1 }
+        pageKey: { type: string, pattern: '^[A-Za-z0-9._:-]{1,160}$' }
+        pageOrdinal: { type: integer, minimum: 0, maximum: 9999 }
+        finalPage: { type: boolean }
+        status: { type: string, const: committed }
+        acceptedCount: { type: integer, minimum: 0, maximum: 1000 }
+        rejectedCount: { type: integer, minimum: 0, maximum: 1000 }
+        duplicateCount: { type: integer, minimum: 0, maximum: 1000 }
+        fetchedCount: { type: integer, minimum: 0, maximum: 1000 }
+        requestCount: { type: integer, minimum: 0, maximum: 100 }
+        byteCount: { type: integer, minimum: 0, maximum: 10000000 }
+        checkpoint: { type: [string, 'null'] }
+        checkpointJson: { type: object }
+        checkpointScope: { type: string, enum: [live, backfill] }
+        checkpointVersion: { type: integer, minimum: 1 }
+        leaseEpoch: { type: integer, minimum: 1 }
+    IngestionRunLevelCommitResult:
+      type: object
+      additionalProperties: false
+      required:
+        [ingestionRunId, status, pipelineJobId, acceptedCount, rejectedCount,
+         duplicateCount, checkpoint, checkpointScope, checkpointVersion,
+         fetchOutcome]
+      properties:
+        ingestionRunId: { type: string, minLength: 1 }
+        status: { type: string, enum: [partial, succeeded] }
+        fetchOutcome: { type: string, enum: [unknown, modified, not_modified] }
+        pipelineJobId: { type: string, minLength: 1 }
+        acceptedCount: { type: integer, minimum: 0, maximum: 1000 }
+        rejectedCount: { type: integer, minimum: 0, maximum: 1000 }
+        duplicateCount: { type: integer, minimum: 0, maximum: 1000 }
+        checkpoint: { type: [string, 'null'] }
+        checkpointScope: { type: string, enum: [live, backfill] }
+        checkpointVersion: { type: integer, minimum: 1 }
+    IngestionShadowCommitResult:
+      type: object
+      additionalProperties: false
+      required:
+        [shadow, fetchedCount, acceptedCount, rejectedCount, duplicateCount,
+         requestCount, byteCount, connectorId, connectorVersion]
+      properties:
+        shadow: { type: boolean, const: true }
+        fetchedCount: { type: integer, minimum: 0, maximum: 1000 }
+        acceptedCount: { type: integer, const: 0 }
+        rejectedCount: { type: integer, minimum: 0, maximum: 1000 }
+        duplicateCount: { type: integer, const: 0 }
+        requestCount: { type: integer, minimum: 0, maximum: 100 }
+        byteCount: { type: integer, minimum: 0, maximum: 10000000 }
+        connectorId: { type: string, minLength: 1 }
+        connectorVersion: { type: string, minLength: 1 }
+    IngestionCommitResult:
+      oneOf:
+        - { $ref: '#/components/schemas/IngestionPageCommitResult' }
+        - { $ref: '#/components/schemas/IngestionRunLevelCommitResult' }
+        - { $ref: '#/components/schemas/IngestionShadowCommitResult' }
+    IngestionRunRecovery:
+      type: object
+      additionalProperties: false
+      required:
+        [ingestionRunId, pageCount, nextPageOrdinal, lastPageKey,
+         finalPageCommitted, resumeCheckpointJson, totals]
+      properties:
+        ingestionRunId: { type: string, minLength: 1 }
+        pageCount: { type: integer, minimum: 0, maximum: 10000 }
+        nextPageOrdinal: { type: integer, minimum: 0, maximum: 10000 }
+        lastPageKey:
+          { type: [string, 'null'], pattern: '^[A-Za-z0-9._:-]{1,160}$' }
+        finalPageCommitted: { type: boolean }
+        resumeCheckpointJson: { type: object }
+        totals: { $ref: '#/components/schemas/IngestionCounters' }
+    IngestionRunCompleteResult:
+      type: object
+      additionalProperties: false
+      required:
+        [protocol, ingestionRunId, status, pageCount, lastPageKey,
+         fetchedCount, acceptedCount, rejectedCount, duplicateCount,
+         requestCount, byteCount, checkpoint, checkpointJson,
+         checkpointScope, pipelineJobId, leaseEpoch, fetchOutcome]
+      properties:
+        protocol: { type: string, const: page-v1-complete }
+        ingestionRunId: { type: string, minLength: 1 }
+        status: { type: string, enum: [partial, succeeded] }
+        fetchOutcome: { type: string, enum: [unknown, modified, not_modified] }
+        pageCount: { type: integer, minimum: 1, maximum: 10000 }
+        lastPageKey: { type: string, pattern: '^[A-Za-z0-9._:-]{1,160}$' }
+        fetchedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        acceptedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        rejectedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        duplicateCount: { type: integer, minimum: 0, maximum: 1000000 }
+        requestCount: { type: integer, minimum: 0, maximum: 100000 }
+        byteCount: { type: integer, minimum: 0, maximum: 1000000000 }
+        checkpoint: { type: [string, 'null'] }
+        checkpointJson: { type: object }
+        checkpointScope: { type: string, enum: [live, backfill] }
+        pipelineJobId: { type: string, minLength: 1 }
+        leaseEpoch: { type: integer, minimum: 1 }
+    CredentialBrokerFetchResult:
+      type: object
+      additionalProperties: false
+      required:
+        [url, contentType, text, byteCount, requestCount, notModified,
+         etag, lastModified]
+      properties:
+        url: { type: string, format: uri }
+        contentType: { type: string }
+        text:
+          {
+            type: string,
+            maxLength: 5000000,
+            description: Bounded upstream response body; never request credentials,
+          }
+        byteCount: { type: integer, minimum: 0, maximum: 5000000 }
+        requestCount: { type: integer, minimum: 1, maximum: 4 }
+        notModified: { type: boolean }
+        etag: { type: [string, 'null'] }
+        lastModified: { type: [string, 'null'] }
+    PipelineRecomputeResult:
+      type: object
+      additionalProperties: false
+      required: [pipelineRunId, articleCount, topicCount, replayed]
+      properties:
+        pipelineRunId: { type: string, minLength: 1 }
+        articleCount: { type: integer, minimum: 0 }
+        topicCount: { type: integer, minimum: 0 }
+        replayed: { type: boolean }
+    CapabilityProtocolVersions:
+      type: object
+      additionalProperties: { type: integer, minimum: 1, maximum: 100 }
+      propertyNames: { pattern: '^source:[a-z0-9-]{1,40}$' }
+    JobLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [workerId, kinds]
+      properties:
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        kinds:
+          { type: array, minItems: 1, maxItems: 6, items: { type: string } }
+        capabilities:
+          { type: array, maxItems: 20, items: { type: string, pattern: '^source:[a-z0-9-]{1,40}$' } }
+        capabilityProtocolVersions:
+          { $ref: '#/components/schemas/CapabilityProtocolVersions' }
+        maxPayloadSchemaVersion: { type: integer, minimum: 1, maximum: 100 }
+        leaseSeconds: { type: integer, minimum: 30, maximum: 1800 }
+    WorkerHeartbeat:
+      type: object
+      additionalProperties: false
+      required: [workerId, kinds]
+      properties:
+        workerId: { type: string, pattern: '^[A-Za-z0-9_.-]{1,128}$' }
+        hostname: { type: string, maxLength: 160 }
+        kinds:
+          { type: array, minItems: 1, maxItems: 7, items: { type: string } }
+        capabilities:
+          { type: array, maxItems: 20, items: { type: string, pattern: '^source:[a-z0-9-]{1,40}$' } }
+        capabilityProtocolVersions:
+          { $ref: '#/components/schemas/CapabilityProtocolVersions' }
+        version: { type: string, maxLength: 40 }
+    JobLeaseHeartbeat:
+      type: object
+      additionalProperties: false
+      required: [workerId, leaseEpoch]
+      properties:
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+        leaseSeconds: { type: integer, minimum: 30, maximum: 1800 }
+    JobLeaseFinish:
+      type: object
+      additionalProperties: false
+      required: [workerId, leaseEpoch, succeeded]
+      properties:
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+        succeeded: { type: boolean }
+        result: {}
+        error: { type: string, maxLength: 4000 }
+        errorCode: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,79}$' }
+        retryDelaySeconds: { type: integer, minimum: 0 }
+        terminal: { type: boolean }
+    SourceItemProvenance:
+      type: object
+      additionalProperties: false
+      required: [connectorId, connectorVersion, observedAt]
+      properties:
+        connectorId: { type: string, minLength: 1, maxLength: 80 }
+        connectorVersion: { type: string, minLength: 1, maxLength: 40 }
+        observedAt: { type: string, format: date-time }
+    NormalizedSourceUpsert:
+      type: object
+      additionalProperties: false
+      required:
+        [kind, namespace, platformItemId, title, url, publishedAt,
+         provenance, identityStrategy, identityConfidence,
+         canonicalUrlVersion, contentFingerprintVersion]
+      properties:
+        kind: { type: string, const: upsert }
+        namespace: { type: string, minLength: 1, maxLength: 80 }
+        platformItemId: { type: string, minLength: 1, maxLength: 500 }
+        title: { type: string, minLength: 1, maxLength: 500 }
+        url: { type: string, format: uri, maxLength: 2048 }
+        publishedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        author: { type: string, maxLength: 160 }
+        summary: { type: string, maxLength: 4000 }
+        metrics:
+          type: object
+          additionalProperties: false
+          properties:
+            views: { type: integer, minimum: 0 }
+            likes: { type: integer, minimum: 0 }
+            recommends: { type: integer, minimum: 0 }
+        provenance: { $ref: '#/components/schemas/SourceItemProvenance' }
+        identityStrategy:
+          { type: string, enum: [platform_id, guid, canonical_url, content_fingerprint] }
+        identityConfidence: { type: string, enum: [high, medium, low] }
+        canonicalUrlVersion: { type: string, minLength: 1, maxLength: 40 }
+        contentFingerprintVersion: { type: string, minLength: 1, maxLength: 40 }
+    NormalizedSourceTombstone:
+      type: object
+      additionalProperties: false
+      required:
+        [kind, namespace, platformItemId, deletedAt, provenance,
+         identityStrategy, identityConfidence]
+      properties:
+        kind: { type: string, const: tombstone }
+        namespace: { type: string, minLength: 1, maxLength: 80 }
+        platformItemId: { type: string, minLength: 1, maxLength: 500 }
+        deletedAt: { type: string, format: date-time }
+        provenance: { $ref: '#/components/schemas/SourceItemProvenance' }
+        identityStrategy:
+          { type: string, enum: [platform_id, guid, canonical_url, content_fingerprint] }
+        identityConfidence: { type: string, enum: [high, medium, low] }
+    NormalizedSourceItem:
+      oneOf:
+        - { $ref: '#/components/schemas/NormalizedSourceUpsert' }
+        - { $ref: '#/components/schemas/NormalizedSourceTombstone' }
+      discriminator:
+        propertyName: kind
+        mapping:
+          upsert: '#/components/schemas/NormalizedSourceUpsert'
+          tombstone: '#/components/schemas/NormalizedSourceTombstone'
+    IngestionRunCommit:
+      type: object
+      additionalProperties: false
+      anyOf:
+        - { required: [items] }
+        - { required: [articles] }
+      required: [jobId, workerId, leaseEpoch, fetchedCount, requestCount, byteCount]
+      properties:
+        jobId: { type: string, minLength: 1 }
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+        items:
+          { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/NormalizedSourceItem' } }
+        articles:
+          { type: array, maxItems: 1000, items: { type: object }, deprecated: true, x-deprecated-at: '2026-09-09', x-sunset-at: '2026-12-08' }
+        fetchedCount: { type: integer, minimum: 0, maximum: 1000 }
+        skippedCount: { type: integer, minimum: 0, maximum: 1000 }
+        checkpoint: { type: [string, 'null'] }
+        checkpointJson: { type: object }
+        rawObjectKey: { type: [string, 'null'], pattern: '^sources/[^/]+/raw/[^/]+/' }
+        origins: { type: array, maxItems: 1000, items: { type: object }, deprecated: true, x-deprecated-at: '2026-09-09', x-sunset-at: '2026-12-08' }
+        rejections: { type: array, maxItems: 1000, items: { type: object } }
+        requestCount: { type: integer, minimum: 0, maximum: 100 }
+        byteCount: { type: integer, minimum: 0, maximum: 10000000 }
+        notModified: { type: boolean }
+    IngestionPageCommit:
+      type: object
+      additionalProperties: false
+      anyOf:
+        - { required: [items] }
+        - { required: [articles] }
+      required:
+        [jobId, workerId, leaseEpoch, pageOrdinal, finalPage,
+         checkpointBeforeJson, checkpointJson, fetchedCount,
+         requestCount, byteCount]
+      properties:
+        jobId: { type: string, minLength: 1 }
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+        pageOrdinal: { type: integer, minimum: 0, maximum: 9999 }
+        finalPage: { type: boolean }
+        checkpointBeforeJson: { type: object }
+        checkpoint: { type: [string, 'null'] }
+        checkpointJson: { type: object }
+        items:
+          { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/NormalizedSourceItem' } }
+        articles:
+          { type: array, maxItems: 1000, items: { type: object }, deprecated: true, x-deprecated-at: '2026-09-09', x-sunset-at: '2026-12-08' }
+        fetchedCount: { type: integer, minimum: 0, maximum: 1000 }
+        skippedCount: { type: integer, minimum: 0, maximum: 1000 }
+        origins:
+          { type: array, maxItems: 1000, items: { type: object }, deprecated: true, x-deprecated-at: '2026-09-09', x-sunset-at: '2026-12-08' }
+        rejections:
+          { type: array, maxItems: 1000, items: { type: object } }
+        requestCount: { type: integer, minimum: 0, maximum: 100 }
+        byteCount: { type: integer, minimum: 0, maximum: 10000000 }
+    IngestionRunComplete:
+      type: object
+      additionalProperties: false
+      required:
+        [jobId, workerId, leaseEpoch, pageCount, lastPageKey, fetchedCount,
+         acceptedCount, rejectedCount, duplicateCount, requestCount, byteCount]
+      properties:
+        jobId: { type: string, minLength: 1 }
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+        pageCount: { type: integer, minimum: 1, maximum: 10000 }
+        lastPageKey: { type: string, pattern: '^[A-Za-z0-9._:-]{1,160}$' }
+        fetchedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        acceptedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        rejectedCount: { type: integer, minimum: 0, maximum: 1000000 }
+        duplicateCount: { type: integer, minimum: 0, maximum: 1000000 }
+        requestCount: { type: integer, minimum: 0, maximum: 100000 }
+        byteCount: { type: integer, minimum: 0, maximum: 1000000000 }
+        rawObjectKey:
+          { type: [string, 'null'], pattern: '^sources/[^/]+/raw/[^/]+/' }
+    SourceRetention:
+      type: object
+      additionalProperties: false
+      required: [mode, days]
+      properties:
+        mode: { type: string, enum: [metadata, raw] }
+        days: { type: integer, minimum: 1, maximum: 3650 }
+    SourceBillingPolicy:
+      type: object
+      additionalProperties: false
+      required:
+        [costMicrosPerRequest, estimatedRequestsPerRun, monthlyBudgetMicros,
+         softLimitPercent]
+      properties:
+        costMicrosPerRequest:
+          { type: integer, minimum: 0, maximum: 2000000000 }
+        estimatedRequestsPerRun:
+          { type: integer, minimum: 1, maximum: 100 }
+        monthlyBudgetMicros:
+          { type: integer, minimum: 0, maximum: 9000000000000000 }
+        softLimitPercent: { type: integer, minimum: 1, maximum: 99 }
+    SourceSchedulePolicy:
+      type: object
+      additionalProperties: false
+      required: [schedulePriority, autoThrottleEnabled]
+      properties:
+        schedulePriority:
+          { type: integer, minimum: 0, maximum: 100, description: Lower-priority sources are throttled more aggressively after the budget soft limit }
+        autoThrottleEnabled:
+          { type: boolean, description: Preserve the configured cron while auditing every occurrence skipped by budget throttling }
+    HttpJsonPagination:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [none, page, cursor, since] }
+        maxPages: { type: integer, minimum: 1, maximum: 20 }
+        pageParameter:
+          { type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$' }
+        startPage: { type: integer, minimum: 0, maximum: 1000000 }
+        pageSizeParameter:
+          { type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$' }
+        pageSize: { type: integer, minimum: 1, maximum: 100 }
+        cursorParameter:
+          { type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$' }
+        cursorPath:
+          { type: string, pattern: '^[A-Za-z0-9_$-]+(?:\.[A-Za-z0-9_$-]+)*$' }
+        sinceParameter:
+          { type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$' }
+        hasMorePath:
+          { type: string, pattern: '^[A-Za-z0-9_$-]+(?:\.[A-Za-z0-9_$-]+)*$' }
+    SourceConfigCreate:
+      type: object
+      additionalProperties: false
+      required:
+        [name, adapter, sourceType, rightsStatus, publicUseConfirmed]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        adapter: { type: string, enum: [rss, http, opencli, csv] }
+        platform:
+          { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
+        sourceType:
+          { type: string, enum: [social, media, market, filing, company] }
+        url: { type: string, format: uri, maxLength: 2048 }
+        scheduleCron: { type: [string, 'null'], maxLength: 160 }
+        rightsStatus: { type: string, const: pending, description: Creation only records a provisional assertion }
+        publicUseConfirmed:
+          { type: boolean, const: true, description: Per-source rights confirmation }
+        rateLimitPerMinute: { type: integer, minimum: 1, maximum: 600 }
+        retention: { $ref: '#/components/schemas/SourceRetention' }
+        mapping:
+          { type: object, additionalProperties: { type: string } }
+        pagination: { $ref: '#/components/schemas/HttpJsonPagination' }
+        billingPolicy: { $ref: '#/components/schemas/SourceBillingPolicy' }
+        schedulePolicy: { $ref: '#/components/schemas/SourceSchedulePolicy' }
+        businessOwnerId: { type: string, minLength: 1 }
+        credentialStewardId: { type: string, minLength: 1 }
+        backupAdminId: { type: [string, 'null'] }
+    SourceConfigUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        [expectedVersion, enabled, name, adapter, sourceType, rightsStatus]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        enabled:
+          { type: boolean, const: false, description: Enable uses the gated action }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        adapter: { type: string, enum: [rss, http, opencli, csv] }
+        platform:
+          { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
+        sourceType:
+          { type: string, enum: [social, media, market, filing, company] }
+        url: { type: string, format: uri, maxLength: 2048 }
+        scheduleCron: { type: [string, 'null'], maxLength: 160 }
+        rightsStatus: { $ref: '#/components/schemas/SourceRightsStatus', description: Echo the current state; this endpoint cannot approve rights }
+        publicUseConfirmed:
+          { type: boolean, description: Required by the server when grant-affecting fields change }
+        rateLimitPerMinute: { type: integer, minimum: 1, maximum: 600 }
+        retention: { $ref: '#/components/schemas/SourceRetention' }
+        mapping:
+          { type: object, additionalProperties: { type: string } }
+        pagination: { $ref: '#/components/schemas/HttpJsonPagination' }
+        billingPolicy: { $ref: '#/components/schemas/SourceBillingPolicy' }
+        schedulePolicy: { $ref: '#/components/schemas/SourceSchedulePolicy' }
+        pauseReason:
+          { type: string, minLength: 3, maxLength: 500, description: Required when an enabled source is explicitly paused without a config change; opens an auditable SLO exclusion window }
+    SourceSloExclusion:
+      type: object
+      additionalProperties: false
+      required: [id, kind, startsAt, endsAt, reason, cancelledAt]
+      properties:
+        id: { type: string, minLength: 1 }
+        kind: { type: string, enum: [manual_pause, planned_maintenance] }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: [string, 'null'], format: date-time }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+        cancelledAt: { type: [string, 'null'], format: date-time }
+    SourceSloExclusionCollection:
+      type: object
+      additionalProperties: false
+      required: [exclusions]
+      properties:
+        exclusions:
+          { type: array, maxItems: 200, items: { $ref: '#/components/schemas/SourceSloExclusion' } }
+    SourceSloExclusionCreate:
+      type: object
+      additionalProperties: false
+      required: [startsAt, endsAt, reason]
+      properties:
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    SourceSloExclusionMutationResult:
+      type: object
+      additionalProperties: false
+      required: [exclusion, replayed]
+      properties:
+        exclusion: { $ref: '#/components/schemas/SourceSloExclusion' }
+        replayed: { type: boolean }
+    SourceSloExclusionCancel:
+      type: object
+      additionalProperties: false
+      required: [exclusionId, reason]
+      properties:
+        exclusionId: { type: string, minLength: 1 }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+    SourceSloExclusionCancelResult:
+      type: object
+      additionalProperties: false
+      required: [exclusionId, replayed]
+      properties:
+        exclusionId: { type: string, minLength: 1 }
+        replayed: { type: boolean }
+    SourceImportCandidate:
+      type: object
+      additionalProperties: false
+      required:
+        [row, name, adapter, platform, sourceType, url, scheduleCron]
+      properties:
+        row: { type: integer, minimum: 1 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        adapter: { type: string, enum: [rss, http] }
+        platform: { type: string, enum: [rss, http_json] }
+        sourceType:
+          { type: string, enum: [social, media, market, filing, company] }
+        url: { type: string, format: uri, maxLength: 2048 }
+        scheduleCron: { type: [string, 'null'], maxLength: 160 }
+    SourceImportConfirmedCandidate:
+      type: object
+      additionalProperties: false
+      required:
+        [row, name, adapter, platform, sourceType, url, scheduleCron,
+         publicUseConfirmed]
+      properties:
+        row: { type: integer, minimum: 1 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        adapter: { type: string, enum: [rss, http] }
+        platform: { type: string, enum: [rss, http_json] }
+        sourceType:
+          { type: string, enum: [social, media, market, filing, company] }
+        url: { type: string, format: uri, maxLength: 2048 }
+        scheduleCron: { type: [string, 'null'], maxLength: 160 }
+        publicUseConfirmed: { type: boolean, const: true }
+    SourceImportPreview:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        mode: { type: string, enum: [preview] }
+        content: { type: string, minLength: 1, maxLength: 1000000 }
+        defaultPlatform: { type: string, enum: [rss, http_json] }
+        defaultSourceType:
+          { type: string, enum: [social, media, market, filing, company] }
+        scheduleCron: { type: [string, 'null'], maxLength: 160 }
+    SourceImportCommit:
+      type: object
+      additionalProperties: false
+      required: [mode, candidates]
+      properties:
+        mode: { type: string, const: commit }
+        candidates:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/SourceImportConfirmedCandidate' }
+    SourceImportRequest:
+      oneOf:
+        - { $ref: '#/components/schemas/SourceImportPreview' }
+        - { $ref: '#/components/schemas/SourceImportCommit' }
+    SourceEnable:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+    SourceBackfillEstimateRequest:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        maxItems: { type: integer, minimum: 1, maximum: 100, default: 100 }
+    SourceBackfill:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        maxItems: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        confirmed:
+          {
+            type: boolean,
+            description: Required when the range exceeds the default 7-day or 20-item scope,
+          }
+        confirmationHash:
+          {
+            type: string,
+            pattern: '^sha256:[a-f0-9]{64}$',
+            description: Hash returned by the estimate endpoint for the same source version and range,
+          }
+    SourceTestCompletion:
+      type: object
+      additionalProperties: false
+      required: [jobId, workerId, leaseEpoch, configHash, preview]
+      properties:
+        jobId: { type: string, minLength: 1 }
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+        configHash: { type: string, minLength: 1, maxLength: 160 }
+        preview: { type: array, maxItems: 5, items: {} }
+        capabilities: {}
+    PipelineRecompute:
+      type: object
+      additionalProperties: false
+      required: [jobId, workerId, leaseEpoch, derivationKey]
+      properties:
+        jobId: { type: string, minLength: 1 }
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+        derivationKey: { type: string, minLength: 1, maxLength: 500 }
+    SourceLifecycleAction:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    CheckpointCutoverRequest:
+      type: object
+      additionalProperties: false
+      required: [scope, checkpointAfter, expectedSourceVersion, reason]
+      properties:
+        scope: { type: string, enum: [live, backfill] }
+        checkpointAfter: { type: object }
+        expectedSourceVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    CheckpointCutoverDecision:
+      type: object
+      additionalProperties: false
+      required: [decision, note]
+      properties:
+        decision: { type: string, enum: [approve, reject] }
+        note: { type: string, minLength: 1, maxLength: 500 }
+    SourceContentWithdrawal:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 10, maxLength: 2000 }
+        mode:
+          { type: string, enum: [withdraw, legal_delete], default: withdraw }
+    SourceLegalHoldCreate:
+      type: object
+      additionalProperties: false
+      required: [reason, authorityRef]
+      properties:
+        reason: { type: string, minLength: 10, maxLength: 2000 }
+        authorityRef: { type: string, minLength: 1, maxLength: 500 }
+    SourceReasonAction:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 10, maxLength: 2000 }
+    SourceOwnershipUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        [expectedVersion, businessOwnerId, credentialStewardId, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        businessOwnerId: { type: string, minLength: 1 }
+        credentialStewardId: { type: string, minLength: 1 }
+        backupAdminId: { type: [string, 'null'] }
+        reason: { type: string, minLength: 5, maxLength: 500 }
+    SourceCredentialBinding:
+      type: object
+      additionalProperties: false
+      required: [alias, expectedVersion, reason]
+      properties:
+        alias: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$' }
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    SourceCredentialRevocation:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    CredentialBrokerFetch:
+      type: object
+      additionalProperties: false
+      required:
+        [sourceConfigId, credentialRef, credentialVersion, url, workerId, jobId,
+         leaseEpoch]
+      properties:
+        sourceConfigId: { type: string }
+        credentialRef:
+          {
+            type: string,
+            description: "Opaque ref, never provider Secret material",
+          }
+        credentialVersion: { type: integer, minimum: 1 }
+        url: { type: string, format: uri }
+        workerId: { type: string }
+        jobId: { type: string }
+        leaseEpoch: { type: integer, minimum: 1 }
+        conditional:
+          type: object
+          additionalProperties: false
+          properties:
+            etag: { type: string, maxLength: 500 }
+            lastModified: { type: string, maxLength: 500 }
+    ConnectorReleaseControlUpdate:
+      type: object
+      additionalProperties: false
+      required: [rolloutMode, expectedVersion, reason]
+      properties:
+        rolloutMode: { $ref: '#/components/schemas/ConnectorReleaseMode' }
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        canary: { $ref: '#/components/schemas/ConnectorCanaryConfig' }
+    ConnectorCanaryConfig:
+      type: object
+      additionalProperties: false
+      required: [enabled, percent, failureRateBps, minRuns]
+      properties:
+        enabled: { type: boolean }
+        percent: { type: integer, minimum: 1, maximum: 100 }
+        failureRateBps: { type: integer, minimum: 1, maximum: 10000 }
+        minRuns: { type: integer, minimum: 1, maximum: 10000 }
+    RawPayloadUpload:
+      type: object
+      required:
+        [id, objectKey, sha256, byteSize, expiresAt, deleteAfter, replayed]
+      properties:
+        id: { type: string }
+        objectKey: { type: string, pattern: '^sources/[^/]+/raw/[^/]+/' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        byteSize: { type: integer, minimum: 1, maximum: 11000000 }
+        expiresAt:
+          {
+            type: string,
+            format: date-time,
+            description: Uncommitted upload-session TTL,
+          }
+        deleteAfter:
+          {
+            type: string,
+            format: date-time,
+            description: Retention deadline after a successful ingestion commit,
+          }
+        replayed: { type: boolean }
   responses:
-    Forbidden: {description: Authenticated user lacks an active membership or role}
-    NotFound: {description: Resource not found}
-    Conflict: {description: State, gate, hash, lease, or ETag conflict}
-    ValidationError: {description: Invalid request payload}
-    PreconditionRequired: {description: If-Match is required}
+    BadRequest:
+      description: Request body or required request metadata is malformed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    SourceBadRequest:
+      description: Source request is malformed or missing an idempotency key
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourceUnauthorized:
+      description: Source workload authentication failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourceForbidden:
+      description: Actor lacks source-management membership or role
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourceNotFound:
+      description: Source resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourceConflict:
+      description: Source state, version, rights, credential, lease, checkpoint, or idempotency conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourcePayloadTooLarge:
+      description: Source request or upstream payload exceeds its bounded limit
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourceValidationError:
+      description: Source request fields violate the operation contract
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourceRateLimited:
+      description: Source trigger or upstream provider is rate limited
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourceTooEarly:
+      description: An identical source request is still being processed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    SourceUnavailable:
+      description: Source provider, storage, broker, or upstream dependency is unavailable
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
+    Forbidden:
+      description: Authenticated user lacks an active membership or role
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: State, gate, hash, lease, or ETag conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    ValidationError:
+      description: Invalid request payload
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    PreconditionRequired:
+      description: If-Match is required
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }

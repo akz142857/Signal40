@@ -1,15 +1,15 @@
 # Signal 40 实施与验收矩阵
 
-更新时间：2026-09-08（含当日代码审查修复）
+更新时间：2026-09-09（含数据源订阅、来源维护责任与本地验收账本）
 
-`Implemented` 表示代码和本地自动化证据存在；`Accepted` 还要求目标环境、真实供应商、渠道和责任人完成验收。
+交付状态统一为 `Implemented locally → Delivered → Deployed → Integrated → Accepted`；`Blocked/Experimental` 是正交标签。`Implemented locally` 只表示代码和本地自动化证据存在，`Accepted` 还要求目标环境、真实上游、渠道和责任人完成验收。不使用“Integrated locally”。
 
 | 阶段 | 能力 | 实现状态 | 代码/本地证据 | 外部验收 |
 | --- | --- | --- | --- | --- |
-| P0 | 角色、G0–G8、状态机、ETag、SHA-256 审批 | Implemented | `lib/workflow.ts`、工作台、状态机测试 | Sites 身份与团队成员实测 |
+| P0 | 角色、G0–G8、状态机、ETag、SHA-256 审批 | Implemented | `lib/workflow.ts`、工作台、状态机测试 | 认证反向代理与团队成员实测 |
 | P0 | project.json 2.0 / 1.0 兼容 | Implemented | Schema、迁移脚本、协议测试 | 历史项目批量演练 |
-| P0 | 数据库/对象存储/作业/审计 | Implemented | PostgreSQL 32 表、直接/分片上传、对象级短时读取、`FOR UPDATE SKIP LOCKED` 租约与心跳续约/DLQ、项目级声明 ID | 托管 PostgreSQL/S3 与保留策略 |
-| P1 | 来源、调度、滚动聚类、修订 | Implemented | RSS/Atom、HTTP JSON、CSV/OpenCLI、UTC Cron、滚动限流、72h 语料、article revisions、显式授权确认、精确幂等重放、授权原文保留与自动清理 | 至少三类真实授权来源 |
+| P0 | 数据库/对象存储/作业/审计 | Implemented locally | PostgreSQL 57 表、直接/分片上传、对象级短时读取、`FOR UPDATE SKIP LOCKED` 租约、lease epoch、legal-hold epoch、整数 capability protocol、心跳续约/DLQ、项目级声明 ID | 托管 PostgreSQL/S3 与保留策略、混合 Worker 部署演练；`0023`–`0029` 尚未在开发/生产 PostgreSQL 升级 |
+| P1 | 来源、调度、滚动聚类、修订 | Foundation 整体 In progress；RSS connector core 有 `Implemented locally` 证据，Public JSON 为 Partial/local；均未 Delivered/Deployed/Integrated/Accepted | draft/test/enable、proposal→provisional request→异人 rights-capable admin 决策与 `sourceType` 确认、独立 legal capability、两人 hold 存续门禁与异人解除 UI/API/OAS/审计、action×role 矩阵、Actor/Worker allowlist DTO、公开 DTO/脱敏制品敏感值 canary scanner 与 Broker 回显门禁、全状态契约、RSS/Atom、HTTP JSON 分页与 staged visibility、upsert/tombstone 联合及防旧回放复活、稳定游标与来源范围运行详情、服务端补采条数/请求/成本/时间估算及版本绑定的二次确认、lease fence 与 running ingestion 过期租约接管、legal hold epoch 与外部撤回执行前复核、connector/version canary 独立开关、稳定来源分桶、未命中 shadow、切换时取消未领取运行、在途正式提交复核与失败阈值自动停用、固定 seed 的两 Scheduler/三 Worker 本地故障演练、固定 IANA 2025-10-09 网络语料、权利/凭据/原载荷/批次隔离、版本化来源 SLO/304 分类/暂停与来源卡片计划维护排除/预算/owner、来源优先级与可关闭 1x/2x/4x 自动降频、逐 occurrence 审计及不掩盖漏调度的分母规则、独立本地镜像/env allowlist、四镜像 Secret layer canary、五 workload runtime env 5/5 与 CI SBOM/Trivy 矩阵，以及 30 项迁移 checksum、Redocly 和兼容 checker；当前完整回归为 249 pass、0 fail、3 远程存储 skip | 先轮换已暴露的对象存储凭据并恢复 skip=0；仍缺真实身份跨角色浏览器与 Security/Legal sign-off、真实 publisher/evidence-family 目录、目标 egress/packet 证据、真实浏览器 HAR/录像与目标 log/trace/export canary 实扫、远端 SBOM/Trivy artifact、已发布 OpenAPI baseline、开发/生产 `0023`–`0029` 升级与恢复；P0C 仍需目标环境 canary/自动停止/恢复/并发演练，SLO 仍需真实来源/告警清单和签字、真实账单触发降频演练、真实 RSS/Public JSON、目标环境进程/网络/对象存储 chaos、真实上游删除/重现、28 天观察；credentialed JSON 另需云 Secret Manager/workload identity/受限数据库角色；公众号/小红书/网页仍为 Blocked 或 Spike |
 | P1 | Claim/Evidence/ResearchSnapshot | Implemented | 支持/反驳、冲突、快照、独立批准 | 财经编辑真实题材验收 |
 | P2 | 脚本与分镜 | Implemented | 逐句声明、版本比较、评论/锁定、读音、连续帧、动态图表 | 品牌规范和模板冻结 |
 | P3 | 资产、TTS、字幕 | Implemented | 版权元数据、OpenAI TTS、逐词对齐、字幕安全区、可选版权音乐与音量混合 | API key、授权声音与素材政策 |
@@ -18,18 +18,18 @@
 | P4 | 发布、更正和下架 | Implemented | 发布包（已端到端验证：真实成片 → 清单落对象存储 → 人工确认分发 → PUBLISHED）、YouTube 续传与 private fail-safe（**尚未端到端验证**）、HMAC 回调、事件与下架 | YouTube 测试频道实测；`SIGNAL40_ALLOW_PUBLIC_PUBLISH` 的开放决策 |
 | P5 | 指标与实验 | Implemented | 2h/24h/7d 快照、版本/实验归因、确定性 A/B、校准审批及 `/governance` 操作台 | 真实指标口径与四周阈值校准 |
 | P5/P6 | SLO、成本、容量、灾备 | Implemented locally | `/operations`、`/health`、DLQ 重放、CI、备份恢复和运行手册 | 托管告警、远端恢复和季度演练 |
-| UI-P0 | 常驻 Worker、系统自检、无 Worker 告警、脚本时长前置校验 | Implemented | compose 的 `control-plane`/`render-worker`/`scheduler` 服务、`workers` 心跳表、`/settings/diagnostics` 与 `GET /api/v1/diagnostics`、项目页孤儿作业告警、`lib/script-duration.ts` | 目标环境的常驻部署与告警接入 |
-| UI-P1a | 选题质量指标 | Implemented | `lib/topic-quality.ts`（簇内一致性、证据对应唯一性、语言与词表匹配度）写入 `topics.quality_json`，不达标进待办箱 | 有授权的中文来源上的阈值校准 |
-| UI-P1b | 调度器进程与编排引擎 | Implemented | `scripts/scheduler.ts` + `lib/orchestrator.ts`（短锁选集合、每轮有界、幂等键、熔断、只走状态机）、`automation_runs`、`test/orchestrator.test.ts` | 连续无人值守运行的观察期 |
-| UI-P2 | 自动化策略、待办箱、控制台、通知 | Implemented | `automation_policies`（双授权人互斥、预先授权有效期）、`attention_items` 与 HMAC 通知、`/automation`、`/inbox`、人工编辑与内容事件自动暂停 | 组织指定的授权人与通知渠道 |
-| UI-P3 | 生产身份 | Implemented（依赖外部代理） | 身份头可配（`SIGNAL40_IDENTITY_HEADER_*`）、`SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS=false` 关闭本机伪造、界面改用 `/api/v1/session` 的真实身份 | **认证反向代理或 OIDC 身份源本身不在本仓库内**；G7 的两个批准人必须是不同真实账号 |
+| UI-P0 | 常驻 Worker、系统自检、无 Worker 告警、脚本时长前置校验 | Implemented locally | compose 常驻服务、独立 Worker 注册心跳、诊断页、项目页定时刷新孤儿作业、自动脚本按 `narrationBudget` 生成 | 目标环境的常驻部署与告警接入 |
+| UI-P1a | 选题质量指标 | Implemented locally | 质量 JSON 会在选题更新时失效重算；雷达显示一致性、区分度、语言、词表覆盖和 0–100 综合分；策略支持数值下限 | 有授权的中文来源上的阈值校准 |
+| UI-P1b | 调度器进程与编排引擎 | Implemented locally | 项目行锁覆盖完整推进事务；作业/发布/API 单轮上限、阶段熔断、分窗口指标提醒、过期策略转人工及回归测试 | 连续无人值守运行的观察期 |
+| UI-P2 | 自动化策略、待办箱、控制台、通知 | Implemented locally | 可审计全局暂停、创建时策略成本归因、强制 HMAC 通知、自动/人工比例、按类型积压、内容事件创建/关闭与人工写入自动暂停 | 组织指定的授权人与通知渠道 |
+| UI-P3 | 生产身份 | Application ready; not accepted | 所有选题路由统一走服务端身份策略；身份头可配，本机角色模拟可关闭，界面读取 `/api/v1/session` | **认证反向代理或 OIDC 身份源本身不在本仓库内**；需两个不同真实账号完成 G7 回归 |
 
 ## 真实数据端到端验证（2026-09-08）
 
 用 6 个公开财经 RSS 源的 100 篇真实文章跑通了 G0–G8 全流程：选题聚类与核验、项目创建、
 OpenAI TTS 配音与逐词字幕、Remotion 渲染、24 项自动 QC 全通过、独立发布人批准、
 `package` 渠道发布包产出、人工确认分发、指标回流至 `MEASURED`。产物（音轨、成片、封面、
-发布包清单）全部落在 Cloudflare R2。
+发布包清单）全部落在 Cloudflare R2。**该批次通过历史脚本/手工 ingest 路径准备语料，不是新的 source draft/test/enable/scheduler/checkpoint 订阅链路验收**；没有绑定新链路的可追溯 run IDs 时，只能作为历史本地流水线演示。
 
 这次验证覆盖的是**流水线**，不是选题质量。当次选题聚类把 97 篇英文文章合并成了一个话题，
 三条声明的证据没有区分度——`lib/domain.ts` 的分词与财经词表是按中文语料调的，
@@ -49,11 +49,12 @@ OpenAI TTS 配音与逐词字幕、Remotion 渲染、24 项自动 QC 全通过�
 
 ## 当前不能宣称 Accepted 的项目
 
-- 没有获得 Sites 源码上传/发布授权；远端迁移、访问控制和浏览器回归未执行。
+- 生产认证反向代理、远端迁移、访问控制和浏览器回归未执行。
+- 来源平台尚未完成真实 RSS/无凭据 Public JSON、生产 egress、成员离职恢复、目标环境双 Scheduler/多 Worker 进程与网络 chaos（本地固定 seed 前置演练已有）和 chaos 后 28 天观察；带凭据 JSON 另需云 Secret Manager/workload identity；公众号、小红书与网页连接器不能宣称可用。
 - 没有生产 OpenAI Secret、声音权利证明、YouTube OAuth 测试账号和实际渠道返回 ID。
 - 没有组织指定的财经终审、品牌/素材权利、Remotion 商业许可、月预算与保留期限决策。
 - 备份/恢复脚本（`pg_dump`/`pg_restore` + 隔离库演练）已交付，但生产库的时间点恢复、对象存储生命周期、供应商切换和季度演练需要目标环境。
 
-作业队列的租约、续约、重复领取、终态失败与损坏 payload 隔离由 `test/control-plane.test.ts` 覆盖，测试直接在进程内的真 PostgreSQL（PGlite）上重放 `drizzle/` 迁移，schema 与迁移漂移、以及 SQL 方言问题都会在测试里暴露。
+作业队列的租约、续约、lease epoch、整数 capability protocol、重复领取、终态失败与损坏 payload 隔离由 `test/control-plane.test.ts` 覆盖；逐页 key/ordinal 唯一、checkpoint/final/累计数和跨重试完成由 `test/source-page-protocol.test.ts` 覆盖；来源运行稳定游标与所有 Worker 写路径租约身份分别由 `test/source-run-pagination.test.ts`、`test/job-lease.test.ts` 覆盖。测试直接在进程内的真 PostgreSQL（PGlite）上重放 `drizzle/` 迁移，schema 与迁移漂移、以及 SQL 方言问题都会在测试里暴露。
 
 当前 Worker 作业层使用 PostgreSQL 事务化租约（`SELECT ... FOR UPDATE SKIP LOCKED`）、心跳续约、退避和死信状态，已经满足本地与单团队部署的至少一次执行语义。若目标环境改用专用消息队列，需要在 staging 加入队列/DLQ 适配器和远端投递验收；本文不把尚未创建的队列资源描述为已实现。

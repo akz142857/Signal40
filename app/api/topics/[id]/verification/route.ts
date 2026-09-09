@@ -1,4 +1,4 @@
-import { config, db } from '@/lib/runtime';
+import { db, resolveRequestActor } from '@/lib/runtime';
 import { recordVerification } from '@/lib/persistence';
 import type { VerificationStatus } from '@/lib/domain';
 import {
@@ -7,7 +7,7 @@ import {
   completeIdempotencyStatement,
   validIdempotencyKey,
 } from '@/lib/idempotency';
-import { resolveActor, stableHash } from '@/lib/workflow';
+import { stableHash } from '@/lib/workflow';
 
 const STATUSES = ['unreviewed', 'verified', 'rejected'] as const;
 
@@ -15,11 +15,7 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const actor = await resolveActor(
-    request,
-    db,
-    config.bootstrapAdminEmails,
-  );
+  const actor = await resolveRequestActor(request);
   if (!actor)
     return Response.json(
       { error: '用户未加入 Signal 40 团队。' },

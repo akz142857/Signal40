@@ -10,33 +10,37 @@ Signal 40 是证据优先的财经短视频生产系统。它覆盖授权采集�
 控制面依赖 PostgreSQL 与 Cloudflare R2。
 
 ```bash
-npm install
-cp .env.example .env          # 填 R2 端点与凭据；已有自己的 PostgreSQL 就只改 DATABASE_URL
-docker compose up -d          # 可选：本地 PostgreSQL（宿主端口 55432）
-npm run db:migrate            # 把 drizzle/ 下的迁移应用到 $DATABASE_URL
-npm run dev -- --host 127.0.0.1 --port 3001
+cp .env.example .env          # 填对象存储配置；已有 PostgreSQL 就只改 DATABASE_URL
+docker compose up -d postgres # 可选：本地 PostgreSQL（宿主端口 55432）
+make setup                     # npm ci + PostgreSQL 幂等迁移
+make dev                       # 再次确认迁移后启动 127.0.0.1:3001
 ```
 
 R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com`，`S3_REGION=auto`，
 凭据用 R2 API Token）。本地开发不起对象存储替身——分片上传、用户元数据、校验和这几处
 行为差异用替身测不出真结论，所以开发和 CI 都对着真实 R2 桶跑。
 
-生产运行是 `npm run build && npm run start`（普通 Node 进程），或者用仓库根目录的 `Dockerfile`
-构建控制面镜像。迁移不会在启动时自动执行——部署流程要显式跑 `npm run db:migrate`，
+生产运行可使用 `npm run build && make start`（默认监听 `127.0.0.1:3001` 的普通 Node 进程），
+或者用仓库根目录的 `Dockerfile` 构建控制面镜像。迁移不会在启动时自动执行——部署流程要显式跑 `npm run db:migrate`，
 避免多副本同时启动时并发改 schema。
 
 ### 配置放哪里
 
-所有配置只有一个文件：仓库根目录的 `.env`（已被 `.gitignore` 忽略，模板见 `.env.example`）。
-控制面、Render Worker 和各个脚本都读它——`vinext` 原生加载，node 脚本靠 `--env-file-if-exists=.env`，
-shell 脚本在 `scripts/lib-pg.sh` 里加载。已经导出到环境里的变量优先，`.env` 不会覆盖它们。
+本机开发配置集中在仓库根目录的 `.env`（已被 `.gitignore` 忽略，模板见 `.env.example`）。
+`vinext` 原生加载，直接运行的 node 脚本靠 `--env-file-if-exists=.env`，shell 脚本在
+`scripts/lib-pg.sh` 里加载；已经导出到环境里的变量优先。Compose 不再向服务注入整份 `.env`，
+而是按工作负载显式列出允许变量；生产必须用部署平台的 Secret 注入与身份机制，不能把开发 `.env` 挂进容器。
 
 | 变量 | 谁读 | 说明 |
 | --- | --- | --- |
 | `DATABASE_URL` | 控制面 + 脚本 | PostgreSQL 连接串 |
 | `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 控制面 | R2 的 S3 端点与 API Token；`S3_REGION` 固定 `auto` |
 | `BOOTSTRAP_ADMIN_EMAILS` / `MEDIA_SIGNING_SECRET` / `SCHEDULER_TOKEN` / `WEBHOOK_SECRET` | 控制面 | 鉴权与签名 |
-| `SIGNAL40_CONTROL_URL` / `SIGNAL40_WORKER_TOKEN` | Worker | 本机开发填 `local-development` |
+| `SIGNAL40_CONTROL_URL` / `SIGNAL40_WORKER_TOKEN` | Worker | 本机开发填 `local-development`；共享令牌只用于兼容 combined profile |
+| `SIGNAL40_SOURCE_WORKER_TOKEN` / `SIGNAL40_RENDER_WORKER_TOKEN` | 对应 Worker + 控制面 | 生产必须为两个 profile 配置不同值，控制面按作业类型和端点拒绝越界令牌 |
+| `SIGNAL40_CREDENTIAL_BROKER_URL` | Source Worker | 独立 Broker 地址；本机未另启 Broker 时可省略并回退到控制面兼容路由 |
+| `SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON` | 控制面 + Broker | alias、目标 origin、Header 与 provider 环境变量名；不含 Secret 值 |
+| `SIGNAL40_*_KEY`（策略引用的 provider Secret） | **部署时只有 Credential Broker** | 示例为 `SIGNAL40_MARKET_DATA_KEY`；不得注入控制面或 Worker |
 | `SIGNAL40_IDENTITY_HEADER_ID` / `SIGNAL40_IDENTITY_HEADER_EMAIL` | 控制面 | 认证反向代理注入的身份头名 |
 | `SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS` | 控制面 | 生产必须 `false`，否则本机请求可伪造角色 |
 | `SIGNAL40_AUTOMATION_ACTOR_ID` | 控制面 + 调度器 | 自动化服务账号；必须是 `team_members` 里 active 的 admin，不配则引擎不写入 |
@@ -50,24 +54,31 @@ shell 脚本在 `scripts/lib-pg.sh` 里加载。已经导出到环境里的变�
 
 ```bash
 npm run db:migrate      # schema
-npm test                # 59 项；填了 R2 凭据才会跑那 3 项对象存储契约测试
+npm test                # 当前 252 项；未配安全可用的对象存储测试凭据时有 3 项远程契约测试跳过
+npm run source:chaos   # 固定 seed 的本地采集事务/租约故障演练（不代表目标环境验收）
+npm run source:sensitive-canary # 扫描公开 DTO；可重复传 --artifact 扫描 HAR/log/trace/export
 npm run test:evaluation # 100 个门禁回归场景
 npm run drill:restore   # 备份 → 隔离库恢复 → 逐表比对行数 → 自动清理
 npm run test:render     # 三个模板 + 预览成片（需要 FFmpeg/Chromium）
 ```
 
-三个进程分开跑：控制面 `npm run dev`（或 `npm run build && npm run start`）、
-Render Worker `npm run worker`、调度器 `npm run scheduler`。
+五类工作负载分开跑：控制面 `npm run dev`（或 `npm run build && npm run start`）、
+Source Worker `npm run worker:source`、Render Worker `npm run worker:render`、
+Credential Broker `npm run credential-broker`、调度器 `npm run scheduler`。
 Worker 启动后会打印 `connected to <控制面地址>`，并在空闲轮询时上报心跳，
 界面据此判断「入队的作业有没有人会执行」。
-部署时这三个进程都由 `docker compose` 常驻拉起（`control-plane` / `render-worker` / `scheduler`，
-`restart: unless-stopped`），日常使用不需要手工启动它们。
-注意 `npm run dev` 只监听 IPv6 回环，`SIGNAL40_CONTROL_URL` 用 `http://localhost:3001`；
-`npm run start` 监听 `0.0.0.0`，两种写法都行。
+来源 Worker 还会上报每项 capability 支持的最大整数协议版本；HTTP JSON
+metadata 采集使用 v2 逐页提交/恢复协议，旧 v1 Worker 不会误领该类作业。
+本地 Compose 会常驻拉起 `control-plane` / `source-worker` / `render-worker` / `credential-broker` / `scheduler`，
+均设置 `restart: unless-stopped`，日常使用不需要手工启动它们。
+按上述 Makefile 命令，`npm run dev` 监听 `127.0.0.1:3001`；
+`SIGNAL40_CONTROL_URL` 可使用 `http://127.0.0.1:3001`。
 
 页面：`/` 选题雷达，`/sources` 来源与调度，`/projects/{id}` 全流程工作台，`/operations` SLO、成本和 DLQ，
 `/governance` 成员、实验和评分校准，`/automation` 自动化策略与近期自动动作，`/inbox` 待办箱，
 `/settings/diagnostics` 系统自检（数据库、迁移版本、对象存储读写、各类凭据、Worker 在线数、队列积压、调度器上次 tick）。
+
+首次接入来源前，先在 `/governance` 登记至少两个 active admin，并只给其中需要审核来源权利的人开启“来源权利审批”能力。创建、批量导入或批准来源 proposal 只会生成 provisional request；请求人不能自批，必须由另一位具备该能力的 active admin 核验主体、允许字段、地域、证据与条款快照后形成 verified grant。每个来源还必须明确业务负责人、凭据管理员和可选备用管理员；负责人失效时系统产生 `/inbox` 待办，重新分配前禁止绑定凭据或启用来源。历史 draft 不会被迁移脚本擅自分配给不存在的成员。
 
 日常流程全部在界面里完成，命令行只保留部署与排障：
 `db:migrate`、`drill:restore`、备份恢复属于运维流程；
@@ -142,7 +153,7 @@ npm run worker
 
 `G5` 要求旁白时长落在成片目标时长的 60%–110%，自动 QC 还会拒绝超过 3 秒的连续静音。
 中文 TTS 实测约 **3.86 字/秒**，45 秒时间轴对应约 **174 字**。
-默认从标题生成的脚本通常偏短，需要在 `SCRIPT_DRAFT` 状态补写到相应长度。
+自动模板会用 `narrationBudget` 按目标时长分配脚本长度；人工修改后仍可能超出区间，需要在 `SCRIPT_DRAFT` 状态调整。
 脚本编辑器会实时显示「预计旁白 X 秒 / 目标 Y 秒」（`lib/script-duration.ts`），
 超出区间时标红并给出还差多少字，不必等配音生成后才在 G5 或自动 QC 上失败。
 **不要为了凑数缩短 `render.durationSeconds`** —— 那是发布阻断项，不是可以绕过的告警。
@@ -188,8 +199,8 @@ npm audit --omit=dev
 
 ## 自动化
 
-系统默认全自动推进机械步骤（采集、聚类、建项目、配音、渲染、自动 QC、发布执行、指标回流），
-四道问责门禁（G3 研究、G4 脚本、G6 终审、G7 发布）默认仍需人确认。
+系统默认自动推进已开启的机械步骤（采集、质量评估、配音、渲染、发布执行、指标回流），
+四道问责门禁（G3 研究、G4 脚本、G6 终审、G7 发布）默认仍需人确认；自动建项目因当前质量闸门默认关闭。
 
 打开自动化的顺序：
 
@@ -229,4 +240,4 @@ npm audit --omit=dev
 
 ## 发布状态
 
-本地实现与 Docker 真渲染已具备全链路候选能力。Sites 源码上传、staging、OpenAI 真实声音、YouTube 测试账号、真实历史金标和生产灾备演练均是独立外部门禁；本仓库不会在没有项目所有者授权时执行外部上传或发布。
+本地实现与 Docker 真渲染已具备全链路候选能力。生产认证代理、托管 PostgreSQL/S3、staging、OpenAI 真实声音、YouTube 测试账号、真实历史金标和生产灾备演练均是独立外部门禁；本仓库不会在没有项目所有者授权时执行外部上传或发布。

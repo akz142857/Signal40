@@ -1,0 +1,1 @@
+ALTER TABLE "jobs" ADD COLUMN "minimum_worker_version" text DEFAULT '' NOT NULL;

@@ -100,6 +100,51 @@ void test('Worker 心跳决定在线状态，超期心跳被清理，孤儿作�
   assert.equal(pruned.deleted, 1);
 });
 
+void test('Worker 在线判定同时检查每项能力的协议版本', async () => {
+  const db = await createMemoryPg();
+  await recordWorkerHeartbeat(
+    db,
+    {
+      id: 'source-worker-v1',
+      kinds: ['ingestion'],
+      capabilities: ['source:http-json'],
+      capabilityProtocolVersions: { 'source:http-json': 1 },
+    },
+    now,
+  );
+  const workers = await listWorkers(db, new Date(now.valueOf() + 30_000));
+  assert.deepEqual(workers[0].capabilityProtocolVersions, {
+    'source:http-json': 1,
+  });
+  await db.client.query(
+    `INSERT INTO jobs
+      (id, kind, required_capability, required_capability_protocol_version,
+       payload_json, status, idempotency_key, available_at, created_at, updated_at)
+     VALUES ('job_protocol_v2', 'ingestion', 'source:http-json', 2,
+       '{}', 'queued', 'protocol-v2', $1, $1, $1)`,
+    [now.toISOString()],
+  );
+
+  const orphans = await orphanedJobs(
+    db,
+    {},
+    new Date(now.valueOf() + 61_000),
+  );
+  assert.deepEqual(
+    orphans.map((job) => ({
+      id: job.id,
+      requiredCapabilityProtocolVersion:
+        job.requiredCapabilityProtocolVersion,
+    })),
+    [
+      {
+        id: 'job_protocol_v2',
+        requiredCapabilityProtocolVersion: 2,
+      },
+    ],
+  );
+});
+
 void test('同一件事只产生一条待办，处理后再次出现会重新打开', async () => {
   const db = await createMemoryPg();
   const first = await raiseAttentionItem(db, { kind: 'gate_blocked', dedupeKey: 'gate:project_1', reason: 'G4 未通过', projectId: 'project_1' }, now);
@@ -143,8 +188,11 @@ void test('待办通知带 HMAC 签名，推送失败只记录原因不丢条目
   assert.match(seen[0].headers['x-signal40-signature'], /^sha256=[0-9a-f]{64}$/);
 
   await raiseAttentionItem(db, { kind: 'dead_letter', dedupeKey: 'dlq:job_2', reason: '第二条' }, now);
+  const unsigned = await notifyPendingAttention(db, { url: 'https://hooks.example/signal40' }, now);
+  assert.equal(unsigned.skipped, 'notify_secret_missing', '不能向外发送无法验真的未签名通知');
   const failed = await notifyPendingAttention(db, {
     url: 'https://hooks.example/signal40',
+    secret: 'test-secret',
     fetchImpl: (async () => new Response('nope', { status: 500 })) as unknown as typeof fetch,
   }, now);
   assert.deepEqual({ sent: failed.sent, failed: failed.failed }, { sent: 0, failed: 1 });
@@ -165,6 +213,12 @@ void test('自检把「值填错」和「没配」分开报，且不回显密钥
   assert.equal(result.checks.find((check) => check.id === 'workers')?.status, 'failed');
   assert.equal(result.checks.find((check) => check.id === 'scheduler')?.status, 'failed');
   assert.equal(result.checks.find((check) => check.id === 'automation_actor')?.status, 'unconfigured');
+  assert.equal(result.checks.find((check) => check.id === 'worker_token_scope')?.status, 'unconfigured');
+
+  const separated = await runDiagnostics({ db, env: { sourceWorkerToken: 'source-only', renderWorkerToken: 'render-only' }, now });
+  assert.equal(separated.checks.find((check) => check.id === 'worker_token_scope')?.status, 'ok');
+  const shared = await runDiagnostics({ db, env: { workerToken: 'legacy-shared' }, now });
+  assert.equal(shared.checks.find((check) => check.id === 'worker_token_scope')?.status, 'degraded');
 });
 
 void test('表达合规只挡自动放行：荐股与收益承诺被识别，正常事实陈述不被误伤', () => {

@@ -25,6 +25,11 @@ export const ATTENTION_KINDS = [
   'incident_open',
   'metrics_due',
   'automation_actor_missing',
+  'source_rights',
+  'source_connector',
+  'source_slo',
+  'source_budget',
+  'source_ownership',
 ] as const;
 
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
@@ -36,6 +41,7 @@ export type AttentionInput = {
   projectId?: string | null;
   topicId?: string | null;
   policyId?: string | null;
+  sourceConfigId?: string | null;
   dedupeKey: string;
   reason: string;
   detail?: unknown;
@@ -54,12 +60,14 @@ export async function raiseAttentionItem(db: SqlDatabase, input: AttentionInput,
   const row = await db
     .prepare(`
       INSERT INTO attention_items
-        (id, kind, severity, project_id, topic_id, policy_id, dedupe_key, reason, detail_json, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+        (id, kind, severity, project_id, topic_id, policy_id, source_config_id,
+         dedupe_key, reason, detail_json, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
       ON CONFLICT (dedupe_key) DO UPDATE SET
         reason = excluded.reason,
         detail_json = excluded.detail_json,
         severity = excluded.severity,
+        source_config_id = COALESCE(excluded.source_config_id, attention_items.source_config_id),
         updated_at = excluded.updated_at,
         -- 重新打开时才清掉处置痕迹；reopen = 0 的来源（例如一直挂着的死信作业行）
         -- 原样保留已处理状态，否则每轮 tick 都会把处理过的事再翻出来。
@@ -76,6 +84,7 @@ export async function raiseAttentionItem(db: SqlDatabase, input: AttentionInput,
       input.projectId ?? null,
       input.topicId ?? null,
       input.policyId ?? null,
+      input.sourceConfigId ?? null,
       input.dedupeKey,
       input.reason.slice(0, 2000),
       JSON.stringify(input.detail ?? {}),
@@ -97,6 +106,7 @@ export type AttentionRow = {
   project_id: string | null;
   topic_id: string | null;
   policy_id: string | null;
+  source_config_id: string | null;
   dedupe_key: string;
   reason: string;
   status: 'open' | 'resolved';
@@ -116,7 +126,8 @@ export async function listAttentionItems(
   const limit = Math.min(200, Math.max(1, options.limit ?? 100));
   const result = await db
     .prepare(`
-      SELECT id, kind, severity, project_id, topic_id, policy_id, dedupe_key, reason, detail_json,
+      SELECT id, kind, severity, project_id, topic_id, policy_id, source_config_id,
+             dedupe_key, reason, detail_json,
              status, notified_at, notify_error, resolved_by, resolved_at, created_at, updated_at
       FROM attention_items
       WHERE (? = 'all' OR status = ?) AND (? = '' OR project_id = ?)
@@ -171,9 +182,10 @@ export async function notifyPendingAttention(
   now = new Date(),
 ) {
   if (!options.url) return { sent: 0, failed: 0, skipped: 'notify_url_missing' as const };
+  if (!options.secret) return { sent: 0, failed: 0, skipped: 'notify_secret_missing' as const };
   const doFetch = options.fetchImpl ?? fetch;
   const pending = await db
-    .prepare("SELECT id, kind, severity, project_id, topic_id, policy_id, reason, detail_json, created_at FROM attention_items WHERE status = 'open' AND notified_at IS NULL ORDER BY created_at ASC LIMIT ?")
+    .prepare("SELECT id, kind, severity, project_id, topic_id, policy_id, source_config_id, reason, detail_json, created_at FROM attention_items WHERE status = 'open' AND notified_at IS NULL ORDER BY created_at ASC LIMIT ?")
     .bind(Math.min(50, Math.max(1, options.limit ?? 20)))
     .all<Record<string, unknown>>();
   let sent = 0;
@@ -187,13 +199,14 @@ export async function notifyPendingAttention(
       projectId: item.project_id,
       topicId: item.topic_id,
       policyId: item.policy_id,
+      sourceConfigId: item.source_config_id,
       reason: item.reason,
       createdAt: item.created_at,
     });
     const timestamp = Math.floor(now.valueOf() / 1000).toString();
     try {
       const headers: Record<string, string> = { 'content-type': 'application/json', 'x-signal40-timestamp': timestamp };
-      if (options.secret) headers['x-signal40-signature'] = await signPayload(options.secret, timestamp, body);
+      headers['x-signal40-signature'] = await signPayload(options.secret, timestamp, body);
       const response = await doFetch(options.url, { method: 'POST', headers, body, signal: AbortSignal.timeout(10_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       await db.prepare('UPDATE attention_items SET notified_at = ?, notify_error = NULL, updated_at = ? WHERE id = ?').bind(now.toISOString(), now.toISOString(), item.id).run();

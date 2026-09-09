@@ -158,7 +158,14 @@ export function parseIfMatch(value: string | null) {
 
 export { stableHash } from './hash.ts';
 
-export type Actor = { id: string; email: string; role: Role };
+export type Actor = {
+  id: string;
+  email: string;
+  role: Role;
+  /** Source-rights and legal capabilities remain independent from the broad admin role. */
+  canApproveSourceRights?: boolean;
+  canManageSourceLegal?: boolean;
+};
 
 function isLocalRequest(request: Request) {
   const hostname = new URL(request.url).hostname;
@@ -192,18 +199,46 @@ export async function resolveActor(
       id: request.headers.get('x-signal-actor-id') || 'local-developer',
       email: request.headers.get('x-signal-actor-email') || 'local@signal40.test',
       role,
+      ...(role === 'admin'
+        ? {
+            canManageSourceLegal:
+              request.headers.get('x-signal-can-manage-source-legal') !== 'false',
+          }
+        : {}),
     };
   }
   const id = request.headers.get(headerNames.id);
   const email = request.headers.get(headerNames.email)?.trim().toLowerCase();
   if (!id || !email) return null;
-  const member = await db.prepare('SELECT role, status FROM team_members WHERE user_id = ? OR email = ? LIMIT 1').bind(id, email).first<{ role: Role; status: string }>();
-  if (member?.status === 'active' && ROLES.includes(member.role)) return { id, email, role: member.role };
+  const member = await db.prepare(`
+    SELECT role, status, can_approve_source_rights, can_manage_source_legal
+    FROM team_members WHERE user_id = ? OR email = ? LIMIT 1
+  `).bind(id, email).first<{
+    role: Role;
+    status: string;
+    can_approve_source_rights: number;
+    can_manage_source_legal: number;
+  }>();
+  if (member?.status === 'active' && ROLES.includes(member.role)) {
+    return {
+      id,
+      email,
+      role: member.role,
+      canApproveSourceRights: Boolean(member.can_approve_source_rights),
+      canManageSourceLegal: Boolean(member.can_manage_source_legal),
+    };
+  }
   const bootstrap = new Set((settings.bootstrapAdminEmails ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean));
   if (!member && bootstrap.has(email)) {
     const now = new Date().toISOString();
     await db.prepare("INSERT INTO team_members (user_id, email, role, status, created_at, updated_at) VALUES (?, ?, 'admin', 'active', ?, ?)").bind(id, email, now, now).run();
-    return { id, email, role: 'admin' };
+    return {
+      id,
+      email,
+      role: 'admin',
+      canApproveSourceRights: false,
+      canManageSourceLegal: false,
+    };
   }
   return null;
 }
