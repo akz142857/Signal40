@@ -46,7 +46,7 @@
 - 双 Scheduler/多 Worker 强杀和恢复演练、冻结后的 7/28 天 SLI/burn-rate 查询，以及 chaos 通过后的连续 28 天真实观察；第 7 天仅作 pre-GA review；
 - Secret scan、SAST/依赖/镜像扫描、远端 CI、制品签名与目标环境批准。
 
-Foundation GA 只由 release manifest 中实际启用并验收的公开来源决定，必须关闭浏览器/API 脱敏、生产 egress、Worker 最小权限、来源范围删除与真实 E2E。网页/热榜、公众号 Feed 和小红书 Feed 的本地代码已经就绪，但仍按真实 URL/Feed 独立验收；Social Evidence 按真实语料和生产抽样独立验收。
+Foundation GA 只由 release manifest 中实际启用并验收的来源决定，必须关闭浏览器/API 脱敏、生产 egress、Worker 最小权限、来源范围删除与真实 E2E。网页/热榜以及微信/小红书 OpenCLI/第三方 RSS 的本地代码已经就绪，但仍按真实环境或 Feed 独立验收；搜索词不得作为 publisher 身份，Social Evidence 按真实语料和生产抽样独立验收。
 
 ## 4. 滥用场景与响应
 

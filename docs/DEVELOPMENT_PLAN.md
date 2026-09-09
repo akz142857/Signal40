@@ -237,7 +237,7 @@ VideoProject 2.0
 ### 8.1 来源采集
 
 - 适配器统一实现 `discover/checkpoint/fetch/normalize/health`。
-- 支持 RSS、Public JSON、公开网页/热榜、公众号与小红书公开 Feed、公司公告、交易所/市场数据和手工导入。
+- 支持 RSS、Public JSON、公开网页/热榜、公众号与小红书 OpenCLI 候选搜索或第三方 RSS、公司公告、交易所/市场数据和手工导入。
 - 保存游标、速率限制、重试原因和字段质量；来源失效不能静默返回空成功。
 - 原文内容是否保存由授权和保留规则决定；默认只保留必要元数据、哈希和定位信息。
 - 定时任务与手工运行共用相同管道，所有任务可回放。
@@ -503,7 +503,7 @@ G3、G6、G7 是独立审批事件，不能由任务成功状态替代。
 | 能力 | 当前状态 | 完整目标 |
 | --- | --- | --- |
 | 选题发现 | 已实现 | 确定性算法版本、72 小时回放语料、100 场景自动回归；真实历史金标待编辑标注 |
-| 数据导入 | 已实现 | RSS/Atom、HTTP JSON、公开 HTML/JSON-LD、平台公开 Feed、JSON/CSV、Cron 补跑、检查点、修订历史、显式授权确认、精确幂等重放和健康度 |
+| 数据导入 | 已实现 | RSS/Atom、HTTP JSON、公开 HTML/JSON-LD、微信/小红书 OpenCLI 候选搜索或第三方 RSS、JSON/CSV、Cron 补跑、检查点、修订历史、显式授权确认、精确幂等重放和健康度 |
 | 证据 | 已实现 | 声明级支持/反驳、冲突解决、冻结快照和哈希绑定审批 |
 | 审批 | 已实现 | 六角色、G0–G8、独立研究/QC/发布批准、ETag 和审计 |
 | 脚本 | 已实现 | 逐句声明覆盖、不可变版本、上一版比较、评论、锁定与读音提示 |
@@ -535,4 +535,4 @@ G3、G6、G7 是独立审批事件，不能由任务成功状态替代。
 - [Cloudflare Workers 限制](https://developers.cloudflare.com/workers/platform/limits/)规定每个 isolate 的内存上限为 128 MB，因此这里只承担控制面工作。
 - [Cloudflare Queues](https://developers.cloudflare.com/queues/reference/delivery-guarantees/)默认至少投递一次，作业必须通过唯一 ID 和幂等键去重，并配置[死信队列](https://developers.cloudflare.com/queues/configuration/dead-letter-queues/)。
 - [Cloudflare R2](https://developers.cloudflare.com/r2/objects/upload-objects/)适合保存视频等大对象；大文件采用可恢复的分片上传，短时[签名 URL](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)按 bearer token 管理。
-- 公众号和小红书只接入经权利确认的公开 RSS/Atom Feed；系统不托管登录状态，也不绕过平台访问限制。
+- 公众号和小红书可用 OpenCLI 做候选搜索，或接入经权利确认的第三方 RSS/Atom Feed；系统不托管登录状态，也不绕过平台访问限制。OpenCLI 未提供作者时发布主体保持 unknown。

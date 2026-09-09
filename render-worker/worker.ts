@@ -20,6 +20,7 @@ import {
   parseRetryAfterSeconds,
 } from '../lib/source-pagination.ts';
 import { resolveWorkerEnvironment } from '../lib/workload-env.ts';
+import { openCliSocialArgs, parseOpenCliSocialSearch } from '../lib/opencli-social.ts';
 
 // 控制面地址：优先 SIGNAL40_CONTROL_URL，否则按本机 PORT 推导。
 // Worker 与控制面通常同机开发，端口只在 .env 里配一次。
@@ -186,6 +187,7 @@ type SourceCheckpoint = {
   maxItems?: unknown;
   completed?: unknown;
   acceptedThrough?: unknown;
+  fingerprints?: unknown;
 };
 
 type RuntimeSource = {
@@ -204,8 +206,71 @@ type RuntimeSource = {
     url?: string;
     mapping?: Record<string, string>;
     pagination?: HttpJsonPaginationConfig;
+    discoveryMode?: 'opencli' | 'rss';
+    accountName?: string;
+    searchLimit?: number;
   };
 };
+
+async function fetchOpenCliSocial(source: RuntimeSource) {
+  if (source.platform !== 'wechat' && source.platform !== 'xiaohongshu') {
+    throw new TerminalJobError('OpenCLI 社交连接器只支持微信和小红书。');
+  }
+  const accountName = source.config.accountName?.trim();
+  if (!accountName) throw new TerminalJobError('OpenCLI 社交来源缺少账号名称。');
+  const platformMaximum = source.platform === 'wechat' ? 10 : 20;
+  const limit = Math.max(1, Math.min(platformMaximum, source.config.searchLimit ?? platformMaximum));
+  const executable = process.env.SIGNAL40_OPENCLI_BIN?.trim() || 'opencli';
+  const args = openCliSocialArgs(source.platform, accountName, limit);
+  return new Promise<{ articles: ArticleInput[]; raw: string; byteCount: number }>((resolve, reject) => {
+    const child = spawn(executable, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      finish(() => reject(new RetryableJobError('OpenCLI 查询超过 90 秒。', 'OPENCLI_TIMEOUT', 300)));
+    }, 90_000);
+    child.stdout.on('data', (data) => {
+      stdout += String(data);
+      if (Buffer.byteLength(stdout) > 5_000_000) {
+        child.kill('SIGTERM');
+        finish(() => reject(new TerminalJobError('OpenCLI 输出超过 5 MB。', 'PAYLOAD_LIMIT')));
+      }
+    });
+    child.stderr.resume();
+    child.on('error', (error: NodeJS.ErrnoException) => finish(() => reject(
+      error.code === 'ENOENT'
+        ? new TerminalJobError('OpenCLI 未安装；请在来源 Worker 主机安装 opencli，或设置 SIGNAL40_OPENCLI_BIN。', 'OPENCLI_UNAVAILABLE')
+        : new RetryableJobError(`OpenCLI 启动失败：${error.message.slice(0, 200)}`, 'OPENCLI_UNAVAILABLE', 300),
+    )));
+    child.on('exit', (code) => finish(() => {
+      if (code !== 0) {
+        if (code === 77) return reject(new TerminalJobError('OpenCLI 需要登录或授权。', 'OPENCLI_AUTH_REQUIRED'));
+        if (code === 69 || code === 78) return reject(new TerminalJobError('OpenCLI 或 Browser Bridge 尚未就绪。', 'OPENCLI_UNAVAILABLE'));
+        return reject(new RetryableJobError(`OpenCLI 查询失败（退出码 ${code}）。`, 'NETWORK', 300));
+      }
+      let payload: unknown;
+      try { payload = JSON.parse(stdout) as unknown; }
+      catch { return reject(new TerminalJobError('OpenCLI 没有返回有效 JSON。', 'SCHEMA_CHANGED')); }
+      resolve({
+        articles: parseOpenCliSocialSearch(payload, {
+          platform: source.platform as 'wechat' | 'xiaohongshu',
+          name: source.name,
+          sourceType: source.config.sourceType,
+          accountName,
+        }),
+        raw: stdout,
+        byteCount: Buffer.byteLength(stdout),
+      });
+    }));
+  });
+}
 
 async function fetchPublicSource(initialUrl: string, checkpoint: SourceCheckpoint = {}) {
   let url: string;
@@ -545,18 +610,24 @@ async function workIngestion(job: WorkerJob) {
   if (!sourceConfigId || !ingestionRunId) throw new Error('采集作业缺少 sourceConfigId 或 ingestionRunId。');
   const { source } = await json<{ source: RuntimeSource }>(await fetch(`${controlUrl}/api/v1/worker/source-configs/${encodeURIComponent(sourceConfigId)}`, { headers: { 'x-worker-token': requiredWorkerToken } }));
   if (!source.enabled || source.rights_status !== 'approved') throw new Error('来源未启用或授权未批准。');
-  if (!source.config.url || !['rss', 'http', 'web'].includes(source.adapter)) throw new Error(`后台 Worker 暂不支持 ${source.adapter} 适配器自动拉取。`);
+  if (!['rss', 'http', 'web', 'social'].includes(source.adapter)) throw new Error(`后台 Worker 暂不支持 ${source.adapter} 适配器自动拉取。`);
+  if (source.adapter === 'social' && !['opencli', 'rss'].includes(source.config.discoveryMode ?? '')) throw new Error('社交来源缺少有效发现方式。');
+  if (source.adapter !== 'social' && !source.config.url) throw new Error('来源缺少 URL。');
+  if (source.adapter === 'social' && source.config.discoveryMode === 'rss' && !source.config.url) throw new Error('社交 RSS 来源缺少 Feed URL。');
   const checkpointBefore = job.payload.checkpointJson && typeof job.payload.checkpointJson === 'object' && !Array.isArray(job.payload.checkpointJson)
     ? job.payload.checkpointJson as SourceCheckpoint
     : {};
   const config: SourceConfigInput = {
     name: source.name,
-    adapter: source.adapter as 'rss' | 'http' | 'web',
+    adapter: source.adapter as 'rss' | 'http' | 'web' | 'social',
     sourceType: source.config.sourceType,
     url: source.config.url,
     rightsStatus: 'approved',
     mapping: source.config.mapping,
     pagination: source.config.pagination,
+    discoveryMode: source.config.discoveryMode,
+    accountName: source.config.accountName,
+    searchLimit: source.config.searchLimit,
     rateLimitPerMinute: source.rate_limit_per_minute,
     retention: { mode: source.retention_mode, days: source.retention_days },
     namespace: source.platform || source.adapter,
@@ -579,8 +650,16 @@ async function workIngestion(job: WorkerJob) {
   const rawPages: string[] = [];
   let paginationCursor: string | null = null;
   let paginationMode: HttpJsonPaginationConfig['mode'] = 'none';
-  if (source.adapter === 'rss' || source.adapter === 'web') {
-    const response = await fetchPublicSource(source.config.url, checkpointBefore);
+  if (source.adapter === 'social' && source.config.discoveryMode === 'opencli') {
+    const response = await fetchOpenCliSocial(source);
+    articles = response.articles;
+    fetchedCount = articles.length;
+    requestCount = 1;
+    byteCount = response.byteCount;
+    responseContentType = 'application/json';
+    rawPages.push(response.raw);
+  } else if (source.adapter === 'rss' || source.adapter === 'web' || source.adapter === 'social') {
+    const response = await fetchPublicSource(source.config.url!, checkpointBefore);
     requestCount = response.requestCount;
     byteCount = response.byteCount;
     responseEtag = response.etag;
@@ -589,7 +668,7 @@ async function workIngestion(job: WorkerJob) {
     notModified = response.notModified;
     if (!response.notModified) {
       rawPages.push(response.text);
-      articles = source.adapter === 'rss'
+      articles = source.adapter === 'rss' || source.adapter === 'social'
         ? parseRssFeed(response.text, { ...config, url: response.url })
         : parsePublicWebPage(response.text, { ...config, url: response.url }, new Date().toISOString());
       fetchedCount = articles.length;
@@ -601,7 +680,7 @@ async function workIngestion(job: WorkerJob) {
     paginationCursor = state.cursor;
     const seenCursors = new Set<string>(state.cursor ? [state.cursor] : []);
     for (let pageIndex = 0; pageIndex < pagination.maxPages; pageIndex += 1) {
-      const pageUrl = buildHttpJsonPageUrl(source.config.url, pagination, checkpointBefore, state);
+      const pageUrl = buildHttpJsonPageUrl(source.config.url!, pagination, checkpointBefore, state);
       const response = await fetchPublicSource(pageUrl, pageIndex === 0 && pagination.mode === 'none' ? checkpointBefore : {});
       requestCount += response.requestCount;
       byteCount += response.byteCount;
@@ -700,6 +779,21 @@ async function workIngestion(job: WorkerJob) {
     checkpoint = incremental.watermark;
     tieBreakerIds = incremental.tieBreakerIds;
   }
+  let fingerprints = Array.isArray(checkpointBefore.fingerprints)
+    ? checkpointBefore.fingerprints.filter((value): value is string => typeof value === 'string').slice(-500)
+    : [];
+  if (!backfillRange && source.adapter === 'social') {
+    const previous = new Set(fingerprints);
+    const current = validArticles.map((article) => sha256Hex([
+      // OpenCLI 的部分搜索结果没有发布时间，此时解析器会使用观察时间。
+      // 指纹不包含该回退字段，避免同一搜索结果在每次轮询时被当成新文章。
+      article.url, article.title, article.summary, article.author,
+    ].join('\u0000')));
+    const fresh = validArticles.filter((_article, index) => !previous.has(current[index]));
+    skippedCount += validArticles.length - fresh.length;
+    validArticles = fresh;
+    fingerprints = [...new Set([...fingerprints, ...current])].slice(-500);
+  }
   const checkpointJson = backfillRange ? {
     ...checkpointBefore,
     connector: source.adapter,
@@ -710,6 +804,7 @@ async function workIngestion(job: WorkerJob) {
     etag: responseEtag,
     lastModified: responseLastModified,
     lastFetchOutcome: notModified ? 'not_modified' : 'modified',
+    ...(source.adapter === 'social' ? { fingerprints } : {}),
   } : {
     schemaVersion: source.adapter === 'http' ? 2 : 1,
     connector: source.adapter,
@@ -721,6 +816,7 @@ async function workIngestion(job: WorkerJob) {
     etag: responseEtag,
     lastModified: responseLastModified,
     lastFetchOutcome: notModified ? 'not_modified' : 'modified',
+    ...(source.adapter === 'social' ? { fingerprints } : {}),
   };
   let rawObjectKey: string | null = null;
   if (source.retention_mode === 'raw' && !notModified && rawPages.length) {
@@ -773,19 +869,37 @@ async function workSourceTest(job: WorkerJob) {
     headers: { 'x-worker-token': requiredWorkerToken },
   }));
   if (source.config_hash !== configHash) throw new TerminalJobError('来源配置已在测试排队期间变更。');
-  if (!source.config.url || !['rss', 'http', 'web'].includes(source.adapter)) throw new TerminalJobError(`连接器不支持测试 ${source.adapter}。`);
+  if (!['rss', 'http', 'web', 'social'].includes(source.adapter)) throw new TerminalJobError(`连接器不支持测试 ${source.adapter}。`);
+  if (source.adapter === 'social' && !['opencli', 'rss'].includes(source.config.discoveryMode ?? '')) throw new TerminalJobError('社交来源缺少有效发现方式。');
+  if (source.adapter !== 'social' && !source.config.url) throw new TerminalJobError('来源缺少 URL。');
+  if (source.adapter === 'social' && source.config.discoveryMode === 'rss' && !source.config.url) throw new TerminalJobError('社交 RSS 来源缺少 Feed URL。');
+  if (source.adapter === 'social' && source.config.discoveryMode === 'opencli') {
+    const result = await fetchOpenCliSocial(source);
+    const preview = result.articles.filter((article) => validateArticleInput(article) === null).slice(0, 5);
+    if (!preview.length) throw new TerminalJobError('OpenCLI 查询成功，但没有解析出有效内容；请核对账号名称和浏览器登录状态。');
+    return json(await fetch(
+      `${controlUrl}/api/v1/source-configs/${encodeURIComponent(sourceConfigId)}/tests/${encodeURIComponent(testId)}/complete`,
+      {
+        method: 'POST', headers: workerHeaders,
+        body: JSON.stringify({
+          jobId: job.id, workerId, leaseEpoch: job.lease_epoch, configHash, preview,
+          capabilities: { discoveryMode: 'opencli', accountName: source.config.accountName },
+        }),
+      },
+    ));
+  }
   const testUrl = source.adapter === 'http'
     ? buildHttpJsonPageUrl(
-        source.config.url,
+        source.config.url!,
         normalizeHttpJsonPagination(source.config.pagination),
         {},
         initialHttpJsonPageState(normalizeHttpJsonPagination(source.config.pagination), {}),
       )
-    : source.config.url;
+    : source.config.url!;
   const response = await fetchPublicSource(testUrl, {});
   const sourceConfig: SourceConfigInput = {
     name: source.name,
-    adapter: source.adapter as 'rss' | 'http' | 'web',
+    adapter: source.adapter as 'rss' | 'http' | 'web' | 'social',
     sourceType: source.config.sourceType,
     url: response.url,
     rightsStatus: 'approved',
@@ -796,7 +910,7 @@ async function workSourceTest(job: WorkerJob) {
   };
   let articles: ArticleInput[];
   try {
-    if (source.adapter === 'rss') {
+    if (source.adapter === 'rss' || source.adapter === 'social') {
       articles = parseRssFeed(response.text, sourceConfig);
     } else if (source.adapter === 'web') {
       articles = parsePublicWebPage(response.text, { ...sourceConfig, url: response.url });
@@ -1092,13 +1206,15 @@ const WORKER_KINDS = workerProfile === 'source'
   : workerProfile === 'render'
     ? ['voice', 'preview', 'render', 'publish']
     : ['ingestion', 'voice', 'preview', 'render', 'publish'];
-const WORKER_CAPABILITIES = workerProfile === 'render' ? [] : ['source:rss', 'source:http-json', 'source:pipeline'];
+const WORKER_CAPABILITIES = workerProfile === 'render' ? [] : ['source:rss', 'source:http-json', 'source:web', 'source:social', 'source:pipeline'];
 const WORKER_CAPABILITY_PROTOCOL_VERSIONS: Record<string, number> =
   workerProfile === 'render'
     ? {}
     : {
         'source:rss': 1,
         'source:http-json': 2,
+        'source:web': 1,
+        'source:social': 1,
         'source:pipeline': 1,
       };
 /** 空闲轮询每 2 秒一次，心跳没必要跟着那么密；控制面按 90 秒判定离线。 */

@@ -146,3 +146,20 @@ void test('connector rollout changes have a stable public error without internal
     '来源连接器发布范围已变更，本次结果未被接纳。',
   );
 });
+
+void test('social source projection exposes only bounded discovery settings', () => {
+  const projected = projectPublicSourceRecord({
+    id: 'source-social', name: '聚大模型前言', adapter: 'social', platform: 'wechat',
+    lifecycle_status: 'draft', health_status: 'unknown', rights_status: 'pending',
+    enabled: 0, version: 1, config_json: {
+      sourceType: 'social', discoveryMode: 'opencli', accountName: '聚大模型前言',
+      searchLimit: 20, browserCookie: 'must-not-leak',
+    },
+  });
+  assert.deepEqual(projected.publicConfig, {
+    sourceType: 'social', discoveryMode: 'opencli', accountName: '聚大模型前言',
+    searchLimit: 20, mapping: {},
+  });
+  assert.equal(JSON.stringify(projected).includes('must-not-leak'), false);
+  assert.equal(publicSourceErrorMessage('OPENCLI_UNAVAILABLE')?.includes('OpenCLI'), true);
+});

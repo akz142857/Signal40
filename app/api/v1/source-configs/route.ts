@@ -2,6 +2,8 @@ import { db, resolveRequestActor } from '@/lib/runtime';
 import { sourceApiError } from '@/lib/source-api-error';
 import {
   assertPublicHttpUrl,
+  normalizeSourceRuntimeConfig,
+  sourceLocatorForConfig,
   validateSourceConfig,
   type SourceConfigInput,
 } from '@/lib/source-adapters';
@@ -70,7 +72,7 @@ export async function POST(request: Request) {
   } catch {
     return sourceApiError('请求体必须是 JSON。', 400);
   }
-  const validation = validateSourceConfig(input, false);
+  const validation = validateSourceConfig({ ...input, namespace: input.platform }, false);
   if (!validation.valid)
     return sourceApiError('来源配置无效。', 422, { issues: validation.errors });
   const billing = parseSourceBillingPolicy(input.billingPolicy);
@@ -98,6 +100,9 @@ export async function POST(request: Request) {
     if (!publisher) return sourceApiError('publisher entity 不存在。', 422);
   }
 
+  if (input.adapter === 'social' && !input.platform) {
+    return sourceApiError('社交来源必须明确选择微信公众号或小红书平台。', 422);
+  }
   const platform = input.platform ?? platformForAdapter(input.adapter);
   const connector = sourceConnectorByPlatform(platform);
   if (!connector || connector.adapter !== input.adapter) {
@@ -112,17 +117,10 @@ export async function POST(request: Request) {
   const id = `source_${crypto.randomUUID()}`;
   const now = new Date().toISOString();
   const normalizedUrl = input.url ? assertPublicHttpUrl(input.url) : '';
-  const config = {
-    sourceType: input.sourceType,
-    url: normalizedUrl,
-    mapping: input.mapping ?? {},
-    pagination:
-      input.adapter === 'http'
-        ? (input.pagination ?? { mode: 'none' as const })
-        : undefined,
-  };
+  const normalizedInput = { ...input, namespace: platform };
+  const config = normalizeSourceRuntimeConfig(normalizedInput);
   const configHash = stableHash({ platform, adapter: input.adapter, config });
-  const locator = { kind: 'url', url: normalizedUrl };
+  const locator = sourceLocatorForConfig(normalizedInput);
   const locatorHash = stableHash({ teamId: 'default', platform, locator });
   const rateLimitPerMinute = input.rateLimitPerMinute ?? 30;
   const retention = input.retention ?? { mode: 'metadata' as const, days: 30 };
@@ -151,10 +149,10 @@ export async function POST(request: Request) {
       .prepare(`
       SELECT id FROM source_configs
       WHERE team_id = ? AND platform = ?
-        AND (locator_hash = ? OR locator_json ->> 'url' = ?)
+        AND (locator_hash = ? OR (? <> '' AND locator_json ->> 'url' = ?))
       LIMIT 1
     `)
-      .bind('default', platform, locatorHash, normalizedUrl)
+      .bind('default', platform, locatorHash, normalizedUrl, normalizedUrl)
       .first<{ id: string }>();
     if (duplicate) return { id: duplicate.id, duplicate: true };
 

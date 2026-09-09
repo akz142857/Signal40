@@ -248,12 +248,15 @@ export const sourceProposals = pgTable(
     id: text('id').primaryKey(),
     teamId: text('team_id').notNull().default('default'),
     name: text('name').notNull(),
-    adapter: text('adapter', { enum: ['rss', 'http', 'web'] }).notNull(),
+    adapter: text('adapter', { enum: ['rss', 'http', 'web', 'social'] }).notNull(),
     platform: text('platform', { enum: ['rss', 'http_json', 'web_page', 'wechat', 'xiaohongshu'] }).notNull(),
     sourceType: text('source_type', {
       enum: ['social', 'media', 'market', 'filing', 'company'],
     }).notNull(),
     url: text('url').notNull(),
+    discoveryMode: text('discovery_mode', { enum: ['opencli', 'rss'] }),
+    accountName: text('account_name'),
+    searchLimit: integer('search_limit'),
     scheduleCron: text('schedule_cron'),
     status: text('status', { enum: SOURCE_PROPOSAL_STATUSES })
       .notNull()

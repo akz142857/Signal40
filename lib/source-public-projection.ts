@@ -52,6 +52,9 @@ const PUBLIC_ERROR_MESSAGES: Record<string, string> = {
   REDIRECT_LIMIT: '来源重定向超过安全限制。',
   UPSTREAM_SECRET_REFLECTION: '来源响应未通过敏感信息检查。',
   STORAGE_ERROR: '来源数据暂时无法安全保存。',
+  OPENCLI_UNAVAILABLE: 'OpenCLI 未安装或不可执行；请先在采集 Worker 主机安装并配置。',
+  OPENCLI_AUTH_REQUIRED: 'OpenCLI 需要浏览器登录或 Browser Bridge 授权。',
+  OPENCLI_TIMEOUT: 'OpenCLI 查询超时，系统会在后续调度中重试。',
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -158,6 +161,15 @@ export function projectPublicSourceConfig(value: unknown) {
   }
   const url = projectPublicHttpUrl(input.url);
   if (url) output.url = url;
+  if (input.discoveryMode === 'opencli' || input.discoveryMode === 'rss') {
+    output.discoveryMode = input.discoveryMode;
+  }
+  if (typeof input.accountName === 'string') {
+    output.accountName = input.accountName.trim().slice(0, 100);
+  }
+  if (Number.isInteger(input.searchLimit) && Number(input.searchLimit) >= 1 && Number(input.searchLimit) <= 50) {
+    output.searchLimit = Number(input.searchLimit);
+  }
   output.mapping = publicMapping(input.mapping);
   const pagination = publicPagination(input.pagination);
   if (pagination) output.pagination = pagination;

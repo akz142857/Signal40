@@ -43,7 +43,7 @@ import type {
 type SourceRow = {
   id: string;
   name: string;
-  adapter: 'rss' | 'http' | 'web';
+  adapter: 'rss' | 'http' | 'web' | 'social';
   platform: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
   lifecycleStatus: Exclude<SourceLifecycleStatus, 'archived'>;
   healthStatus: SourceHealthStatus;
@@ -99,6 +99,9 @@ type SourceRow = {
       sinceParameter?: string;
       hasMorePath?: string;
     };
+    discoveryMode?: 'opencli' | 'rss';
+    accountName?: string;
+    searchLimit?: number;
   };
 };
 
@@ -153,7 +156,7 @@ type ConnectorRelease = {
   id: string;
   version: string;
   platform: string;
-  adapter: 'rss' | 'http' | 'web';
+  adapter: 'rss' | 'http' | 'web' | 'social';
   label: string;
   availability: 'available' | 'blocked';
   rolloutMode: ConnectorReleaseMode;
@@ -209,10 +212,13 @@ type MaintenanceDraft = {
 type SourceProposal = {
   id: string;
   name: string;
-  adapter: 'rss' | 'http';
-  platform: 'rss' | 'http_json';
+  adapter: 'rss' | 'http' | 'web' | 'social';
+  platform: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
   sourceType: 'social' | 'media' | 'market' | 'filing' | 'company';
-  url: string;
+  url: string | null;
+  discoveryMode: 'opencli' | 'rss' | null;
+  accountName: string | null;
+  searchLimit: number | null;
   scheduleCron: string | null;
   status: 'proposal_pending' | 'proposal_approved' | 'proposal_rejected';
   requestedBy: string;
@@ -339,7 +345,11 @@ function ProposalList({
               {proposalLabels[proposal.status]}
             </Badge>
           </div>
-          <p className="mt-2 break-all text-sm text-muted-foreground">{proposal.url}</p>
+          <p className="mt-2 break-all text-sm text-muted-foreground">
+            {proposal.discoveryMode === 'opencli'
+              ? `OpenCLI 搜索：${proposal.accountName}`
+              : proposal.url}
+          </p>
           <p className="mt-2 text-sm">{proposal.requestNote}</p>
           <p className="mt-2 text-xs text-muted-foreground">
             发起人 {proposal.requestedBy} · {new Date(proposal.createdAt).toLocaleString('zh-CN')}
@@ -368,7 +378,11 @@ function ReadOnlySourceList({ sources }: { sources: SourceRow[] }) {
             <Badge variant="secondary">{source.platform}</Badge>
             <Badge variant={source.enabled ? 'default' : 'outline'}>{lifecycleLabels[source.lifecycleStatus]}</Badge>
           </div>
-          <p className="mt-2 break-all text-sm text-muted-foreground">{source.publicConfig.url}</p>
+          <p className="mt-2 break-all text-sm text-muted-foreground">
+            {source.publicConfig.discoveryMode === 'opencli'
+              ? `OpenCLI 搜索：${source.publicConfig.accountName}`
+              : source.publicConfig.url}
+          </p>
           <p className="mt-2 text-xs text-muted-foreground">
             健康 {healthLabels[source.healthStatus]} · 权利 {rightsLabels[source.rightsStatus]} · 调度 {source.scheduleCron || '手动'}
           </p>
@@ -383,6 +397,8 @@ function SourceProposalWorkspace() {
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
+  const [discoveryMode, setDiscoveryMode] = useState<'opencli' | 'rss'>('opencli');
+  const [accountName, setAccountName] = useState('');
   const [platform, setPlatform] = useState<'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu'>('rss');
   const [sourceType, setSourceType] = useState<SourceProposal['sourceType']>('media');
   const [scheduleCron, setScheduleCron] = useState('0 */2 * * *');
@@ -412,12 +428,15 @@ function SourceProposalWorkspace() {
     try {
       const response = await fetch('/api/v1/source-proposals', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': `proposal:${platform}:${url}` },
+        headers: { 'content-type': 'application/json', 'idempotency-key': `proposal:${platform}:${discoveryMode}:${accountName || url}` },
         body: JSON.stringify({
           name,
-          url,
+          url: (platform === 'wechat' || platform === 'xiaohongshu') && discoveryMode === 'opencli' ? undefined : url,
           platform,
-          adapter: platform === 'http_json' ? 'http' : platform === 'web_page' ? 'web' : 'rss',
+          adapter: platform === 'http_json' ? 'http' : platform === 'web_page' ? 'web' : platform === 'wechat' || platform === 'xiaohongshu' ? 'social' : 'rss',
+          discoveryMode: platform === 'wechat' || platform === 'xiaohongshu' ? discoveryMode : undefined,
+          accountName: platform === 'wechat' || platform === 'xiaohongshu' ? accountName : undefined,
+          searchLimit: platform === 'wechat' ? 10 : platform === 'xiaohongshu' ? 20 : undefined,
           sourceType,
           scheduleCron: scheduleCron || null,
           requestNote,
@@ -426,6 +445,7 @@ function SourceProposalWorkspace() {
       if (!response.ok) throw new Error(await errorText(response));
       setName('');
       setUrl('');
+      setAccountName('');
       setRequestNote('');
       await refresh();
       setMessage('提案已提交；需由不同管理员审批后才会建立待配置来源。');
@@ -442,12 +462,13 @@ function SourceProposalWorkspace() {
           <p className="mt-2 text-sm text-muted-foreground">这里只提交建议，不会自动授权或启用采集。</p>
           <div className="mt-5 grid gap-4">
             <div className="grid gap-2"><Label htmlFor="proposal-name">来源名称</Label><Input id="proposal-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
-            <div className="grid gap-2"><Label htmlFor="proposal-url">公网 URL</Label><Input id="proposal-url" type="url" value={url} onChange={(event) => setUrl(event.target.value)} /></div>
-            <div className="grid gap-2"><Label htmlFor="proposal-platform">来源类型</Label><NativeSelect id="proposal-platform" value={platform} onChange={(event) => setPlatform(event.target.value as typeof platform)}><NativeSelectOption value="rss">RSS / Atom</NativeSelectOption><NativeSelectOption value="http_json">Public JSON</NativeSelectOption><NativeSelectOption value="web_page">公开网页 / 热榜</NativeSelectOption><NativeSelectOption value="wechat">微信公众号公开 Feed</NativeSelectOption><NativeSelectOption value="xiaohongshu">小红书公开 Feed</NativeSelectOption></NativeSelect></div>
+            <div className="grid gap-2"><Label htmlFor="proposal-platform">来源类型</Label><NativeSelect id="proposal-platform" value={platform} onChange={(event) => { const value = event.target.value as typeof platform; setPlatform(value); if (value === 'wechat' || value === 'xiaohongshu') setSourceType('social'); }}><NativeSelectOption value="rss">RSS / Atom</NativeSelectOption><NativeSelectOption value="http_json">Public JSON</NativeSelectOption><NativeSelectOption value="web_page">公开网页 / 热榜</NativeSelectOption><NativeSelectOption value="wechat">微信公众号监控</NativeSelectOption><NativeSelectOption value="xiaohongshu">小红书监控</NativeSelectOption></NativeSelect></div>
+            {(platform === 'wechat' || platform === 'xiaohongshu') && <div className="grid gap-2"><Label htmlFor="proposal-discovery">发现方式</Label><NativeSelect id="proposal-discovery" value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as 'opencli' | 'rss')}><NativeSelectOption value="opencli">OpenCLI 按账号搜索</NativeSelectOption><NativeSelectOption value="rss">第三方 RSS / RSSHub</NativeSelectOption></NativeSelect></div>}
+            {(platform === 'wechat' || platform === 'xiaohongshu') && discoveryMode === 'opencli' ? <div className="grid gap-2"><Label htmlFor="proposal-account">账号名称</Label><Input id="proposal-account" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder={platform === 'wechat' ? '例如：聚大模型前言' : '小红书账号名称'} /></div> : <div className="grid gap-2"><Label htmlFor="proposal-url">公网 URL</Label><Input id="proposal-url" type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder={platform === 'wechat' || platform === 'xiaohongshu' ? '第三方 RSSHub / Feed URL' : undefined} /></div>}
             <div className="grid gap-2"><Label htmlFor="proposal-source-type">内容类型</Label><NativeSelect id="proposal-source-type" value={sourceType} onChange={(event) => setSourceType(event.target.value as SourceProposal['sourceType'])}>{['social', 'media', 'market', 'filing', 'company'].map((value) => <NativeSelectOption key={value} value={value}>{value}</NativeSelectOption>)}</NativeSelect></div>
             <div className="grid gap-2"><Label htmlFor="proposal-cron">建议频率</Label><Input id="proposal-cron" value={scheduleCron} onChange={(event) => setScheduleCron(event.target.value)} /></div>
             <div className="grid gap-2"><Label htmlFor="proposal-note">业务理由（至少 10 字）</Label><Textarea id="proposal-note" value={requestNote} onChange={(event) => setRequestNote(event.target.value)} /></div>
-            <Button disabled={busy || !name.trim() || !url.trim() || requestNote.trim().length < 10} onClick={() => void submit()}>{busy ? <LoaderCircle className="animate-spin" /> : <ListPlus />}提交提案</Button>
+            <Button disabled={busy || !name.trim() || ((platform === 'wechat' || platform === 'xiaohongshu') && discoveryMode === 'opencli' ? !accountName.trim() : !url.trim()) || requestNote.trim().length < 10} onClick={() => void submit()}>{busy ? <LoaderCircle className="animate-spin" /> : <ListPlus />}提交提案</Button>
             {message && <p className="text-sm text-muted-foreground">{message}</p>}
           </div>
         </section>
@@ -571,6 +592,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
   >({});
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
+  const [discoveryMode, setDiscoveryMode] = useState<'opencli' | 'rss'>('opencli');
+  const [accountName, setAccountName] = useState('');
+  const [searchLimit, setSearchLimit] = useState('20');
   const [platform, setPlatform] = useState<'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu'>('rss');
   const [sourceType, setSourceType] = useState('media');
   const [publisherEntityId, setPublisherEntityId] = useState('');
@@ -829,7 +853,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'idempotency-key': `source:${platform}:${url}`,
+          'idempotency-key': `source:${platform}:${discoveryMode}:${accountName || url}`,
           ...adminHeaders(),
         },
         body: JSON.stringify({
@@ -837,7 +861,10 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
           adapter,
           platform,
           sourceType,
-          url,
+          url: (platform === 'wechat' || platform === 'xiaohongshu') && discoveryMode === 'opencli' ? undefined : url,
+          discoveryMode: platform === 'wechat' || platform === 'xiaohongshu' ? discoveryMode : undefined,
+          accountName: platform === 'wechat' || platform === 'xiaohongshu' ? accountName : undefined,
+          searchLimit: platform === 'wechat' || platform === 'xiaohongshu' ? Number(searchLimit) : undefined,
           mapping,
           pagination,
           scheduleCron: cron || null,
@@ -1064,6 +1091,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       if (!response.ok) throw new Error(await errorText(response));
       setName('');
       setUrl('');
+      setAccountName('');
       setPublisherEntityId('');
       setRightsConfirmed(false);
       setPreview([]);
@@ -1105,6 +1133,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
             url: source.publicConfig.url,
             mapping: source.publicConfig.mapping,
             pagination: source.publicConfig.pagination,
+            discoveryMode: source.publicConfig.discoveryMode,
+            accountName: source.publicConfig.accountName,
+            searchLimit: source.publicConfig.searchLimit,
             scheduleCron: source.scheduleCron,
             rightsStatus: source.rightsStatus,
             rateLimitPerMinute: source.rateLimitPerMinute,
@@ -1863,7 +1894,10 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                       onChange={(event) => {
                         const next = event.target.value as typeof platform;
                         setPlatform(next);
-                        if (next === 'wechat' || next === 'xiaohongshu') setSourceType('social');
+                        if (next === 'wechat' || next === 'xiaohongshu') {
+                          setSourceType('social');
+                          setSearchLimit(next === 'wechat' ? '10' : '20');
+                        }
                       }}
                     >
                       <NativeSelectOption value="rss">
@@ -1873,10 +1907,10 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                         HTTP JSON API
                       </NativeSelectOption>
                       <NativeSelectOption value="wechat">
-                        微信公众号公开 Feed
+                        微信公众号监控
                       </NativeSelectOption>
                       <NativeSelectOption value="xiaohongshu">
-                        小红书公开 Feed
+                        小红书监控
                       </NativeSelectOption>
                       <NativeSelectOption value="web_page">
                         公开网页 / 热榜
@@ -1889,8 +1923,27 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                       {selectedConnector.rolloutReason}
                     </p>
                   )}
-                  <div className="grid gap-2">
-                    <Label htmlFor="source-url">Feed / API / 网页 URL</Label>
+                  {(platform === 'wechat' || platform === 'xiaohongshu') && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="social-discovery">发现方式</Label>
+                      <NativeSelect id="social-discovery" value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as 'opencli' | 'rss')}>
+                        <NativeSelectOption value="opencli">OpenCLI 按公众号/账号名称搜索</NativeSelectOption>
+                        <NativeSelectOption value="rss">第三方 RSS / RSSHub Feed</NativeSelectOption>
+                      </NativeSelect>
+                      <p className="text-xs text-muted-foreground">
+                        OpenCLI 搜索是候选发现，不保证平台级 canonical 订阅；未返回作者时不会冒充该账号。需要严格账号订阅时请选择可核验的第三方 RSS。
+                      </p>
+                    </div>
+                  )}
+                  {(platform === 'wechat' || platform === 'xiaohongshu') && discoveryMode === 'opencli' ? (
+                    <div className="grid gap-2">
+                      <Label htmlFor="account-name">账号名称</Label>
+                      <Input id="account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder={platform === 'wechat' ? '例如：聚大模型前言' : '小红书账号名称'} />
+                      <Label htmlFor="search-limit">每次搜索条数（1–{platform === 'wechat' ? '10' : '20'}）</Label>
+                      <Input id="search-limit" type="number" min="1" max={platform === 'wechat' ? 10 : 20} value={searchLimit} onChange={(event) => setSearchLimit(event.target.value)} />
+                    </div>
+                  ) : <div className="grid gap-2">
+                    <Label htmlFor="source-url">{platform === 'wechat' || platform === 'xiaohongshu' ? '第三方 RSS / RSSHub URL' : 'Feed / API / 网页 URL'}</Label>
                     <Input
                       id="source-url"
                       value={url}
@@ -1903,7 +1956,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                             : 'https://api.example.com/news'
                       }
                     />
-                  </div>
+                  </div>}
                   <div className="grid gap-2">
                     <Label htmlFor="source-name">显示名称</Label>
                     <Input
@@ -2344,7 +2397,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                     disabled={
                       busy ||
                       !name ||
-                      !url ||
+                      ((platform === 'wechat' || platform === 'xiaohongshu') && discoveryMode === 'opencli' ? !accountName.trim() : !url.trim()) ||
                       !rightsConfirmed ||
                       !businessOwnerId ||
                       selectedConnector?.rolloutMode === 'disabled'
@@ -2544,7 +2597,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                 ? 'source:rss'
                 : source.adapter === 'web'
                   ? 'source:web'
-                  : 'source:http-json';
+                  : source.adapter === 'social'
+                    ? 'source:social'
+                    : 'source:http-json';
               const workerOnline = onlineCapabilities.has(capability);
               const recentRuns = runsBySource[source.id];
               const ownershipDraft = ownershipDrafts[source.id] ?? {
@@ -2601,7 +2656,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                         </Badge>
                       </div>
                       <p className="mt-2 break-all text-sm text-muted-foreground">
-                        {source.publicConfig.url}
+                        {source.publicConfig.discoveryMode === 'opencli'
+                          ? `OpenCLI 搜索：${source.publicConfig.accountName}`
+                          : source.publicConfig.url}
                       </p>
                       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
                         <span>健康 {healthLabels[source.healthStatus]}</span>
@@ -3198,7 +3255,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
             })}
             {!sources.length && (
               <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-                粘贴第一个 RSS 或 JSON API；保存后系统会先测试，再允许启用。
+                选择 RSS、JSON、公开网页或社交发现方式；保存后系统会先测试，再允许启用。
               </div>
             )}
           </div>

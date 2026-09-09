@@ -2381,7 +2381,8 @@ components:
          RIGHTS_BLOCKED, LEGAL_HOLD_ACTIVE, LEASE_LOST,
          POLICY_DRIFT, SSRF_BLOCKED, NETWORK,
          PERMANENT_UNSUPPORTED, SCHEMA_CHANGED, PAYLOAD_LIMIT,
-         REDIRECT_LIMIT, UPSTREAM_SECRET_REFLECTION, STORAGE_ERROR]
+         REDIRECT_LIMIT, UPSTREAM_SECRET_REFLECTION, STORAGE_ERROR,
+         OPENCLI_UNAVAILABLE, OPENCLI_AUTH_REQUIRED, OPENCLI_TIMEOUT]
     ErrorEnvelope:
       type: object
       required: [error]
@@ -2440,7 +2441,7 @@ components:
       properties:
         id: { type: string, minLength: 1 }
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http, web] }
+        adapter: { type: string, enum: [rss, http, web, social] }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         lifecycleStatus: { $ref: '#/components/schemas/SourceLifecycleStatus' }
@@ -2525,6 +2526,9 @@ components:
         url: { type: string, format: uri, maxLength: 2000 }
         mapping: { $ref: '#/components/schemas/PublicSourceMapping' }
         pagination: { $ref: '#/components/schemas/PublicSourcePagination' }
+        discoveryMode: { type: string, enum: [opencli, rss] }
+        accountName: { type: string, minLength: 1, maxLength: 100 }
+        searchLimit: { type: integer, minimum: 1, maximum: 50 }
     SourceConfigMutationRecord:
       type: object
       additionalProperties: false
@@ -2563,13 +2567,16 @@ components:
     SourceProposalCreate:
       type: object
       additionalProperties: false
-      required: [name, adapter, platform, sourceType, url, requestNote]
+      required: [name, adapter, platform, sourceType, requestNote]
       properties:
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http, web] }
+        adapter: { type: string, enum: [rss, http, web, social] }
         platform: { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         sourceType: { type: string, enum: [social, media, market, filing, company] }
         url: { type: string, format: uri, maxLength: 2000 }
+        discoveryMode: { type: string, enum: [opencli, rss] }
+        accountName: { type: string, minLength: 1, maxLength: 100 }
+        searchLimit: { type: integer, minimum: 1, maximum: 50 }
         scheduleCron: { type: [string, 'null'], maxLength: 160 }
         requestNote: { type: string, minLength: 10, maxLength: 1000 }
     SourceProposalDecision:
@@ -2584,15 +2591,18 @@ components:
       additionalProperties: false
       required:
         [id, name, adapter, platform, sourceType, url, scheduleCron, status,
-         requestedBy, requestNote, decidedBy, decisionNote, sourceConfigId,
+         discoveryMode, accountName, searchLimit, requestedBy, requestNote, decidedBy, decisionNote, sourceConfigId,
          createdAt, updatedAt, decidedAt]
       properties:
         id: { type: string, minLength: 1 }
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http, web] }
+        adapter: { type: string, enum: [rss, http, web, social] }
         platform: { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         sourceType: { type: string, enum: [social, media, market, filing, company] }
-        url: { type: string, format: uri, maxLength: 2048 }
+        url: { type: [string, 'null'], format: uri, maxLength: 2048 }
+        discoveryMode: { type: [string, 'null'], enum: [opencli, rss, null] }
+        accountName: { type: [string, 'null'], minLength: 1, maxLength: 100 }
+        searchLimit: { type: [integer, 'null'], minimum: 1, maximum: 50 }
         scheduleCron: { type: [string, 'null'], maxLength: 160 }
         status: { $ref: '#/components/schemas/SourceProposalStatus' }
         requestedBy: { type: string, minLength: 1, maxLength: 200 }
@@ -2648,7 +2658,7 @@ components:
       properties:
         id: { type: string, minLength: 1 }
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http, web] }
+        adapter: { type: string, enum: [rss, http, web, social] }
         platform: { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         enabled: { type: boolean }
         rights_status: { $ref: '#/components/schemas/SourceRightsStatus' }
@@ -2981,7 +2991,7 @@ components:
         version: { type: string, minLength: 1 }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
-        adapter: { type: string, enum: [rss, http, web] }
+        adapter: { type: string, enum: [rss, http, web, social] }
         label: { type: string, minLength: 1 }
         availability: { type: string, enum: [available, blocked] }
         unavailableReason: { type: string, minLength: 1, maxLength: 1000 }
@@ -3016,7 +3026,7 @@ components:
         version: { type: string, minLength: 1 }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
-        adapter: { type: string, enum: [rss, http, web] }
+        adapter: { type: string, enum: [rss, http, web, social] }
         label: { type: string, minLength: 1 }
         availability: { type: string, enum: [available, blocked] }
         unavailableReason: { type: string, minLength: 1, maxLength: 1000 }
@@ -3656,7 +3666,7 @@ components:
         [name, adapter, sourceType, rightsStatus, publicUseConfirmed]
       properties:
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http, web] }
+        adapter: { type: string, enum: [rss, http, web, social] }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         sourceType:
@@ -3671,6 +3681,9 @@ components:
         mapping:
           { type: object, additionalProperties: { type: string } }
         pagination: { $ref: '#/components/schemas/HttpJsonPagination' }
+        discoveryMode: { type: string, enum: [opencli, rss] }
+        accountName: { type: string, minLength: 1, maxLength: 100 }
+        searchLimit: { type: integer, minimum: 1, maximum: 50 }
         billingPolicy: { $ref: '#/components/schemas/SourceBillingPolicy' }
         schedulePolicy: { $ref: '#/components/schemas/SourceSchedulePolicy' }
         businessOwnerId: { type: string, minLength: 1 }
@@ -3685,7 +3698,7 @@ components:
         enabled:
           { type: boolean, const: false, description: Enable uses the gated action }
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http, web] }
+        adapter: { type: string, enum: [rss, http, web, social] }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         sourceType:
@@ -3700,6 +3713,9 @@ components:
         mapping:
           { type: object, additionalProperties: { type: string } }
         pagination: { $ref: '#/components/schemas/HttpJsonPagination' }
+        discoveryMode: { type: string, enum: [opencli, rss] }
+        accountName: { type: string, minLength: 1, maxLength: 100 }
+        searchLimit: { type: integer, minimum: 1, maximum: 50 }
         billingPolicy: { $ref: '#/components/schemas/SourceBillingPolicy' }
         schedulePolicy: { $ref: '#/components/schemas/SourceSchedulePolicy' }
         publisherEntityId: { type: [string, 'null'], maxLength: 200 }

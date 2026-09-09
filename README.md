@@ -38,6 +38,7 @@ R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com
 | `BOOTSTRAP_ADMIN_EMAILS` / `MEDIA_SIGNING_SECRET` / `SCHEDULER_TOKEN` / `WEBHOOK_SECRET` | 控制面 | 鉴权与签名 |
 | `SIGNAL40_CONTROL_URL` | Worker | 控制面地址 |
 | `SIGNAL40_SOURCE_WORKER_TOKEN` / `SIGNAL40_RENDER_WORKER_TOKEN` | 对应 Worker + 控制面 | 生产必须为两个 profile 配置不同值，控制面按作业类型和端点拒绝越界令牌 |
+| `SIGNAL40_OPENCLI_BIN` | Source Worker | 微信/小红书选择 OpenCLI 搜索时使用；默认 `opencli`，第三方 RSS 模式不需要 |
 | `SIGNAL40_IDENTITY_HEADER_ID` / `SIGNAL40_IDENTITY_HEADER_EMAIL` | 控制面 | 认证反向代理注入的身份头名 |
 | `SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS` | 控制面 | 生产必须 `false`，否则本机请求可伪造角色 |
 | `SIGNAL40_AUTOMATION_ACTOR_ID` | 控制面 + 调度器 | 自动化服务账号；必须是 `team_members` 里 active 的 admin，不配则引擎不写入 |
@@ -51,7 +52,7 @@ R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com
 
 ```bash
 npm run db:migrate      # schema
-npm test                # 当前 253 项；未配安全可用的对象存储测试凭据时有 3 项远程契约测试跳过
+npm test                # 当前 260 项；未配安全可用的对象存储测试凭据时有 3 项远程契约测试跳过
 npm run source:chaos   # 固定 seed 的本地采集事务/租约故障演练（不代表目标环境验收）
 npm run source:sensitive-canary # 扫描公开 DTO；可重复传 --artifact 扫描 HAR/log/trace/export
 npm run test:evaluation # 100 个门禁回归场景
@@ -66,6 +67,12 @@ Worker 启动后会打印 `connected to <控制面地址>`，并在空闲轮询�
 界面据此判断「入队的作业有没有人会执行」。
 来源 Worker 还会上报每项 capability 支持的最大整数协议版本；HTTP JSON
 metadata 采集使用 v2 逐页提交/恢复协议，旧 v1 Worker 不会误领该类作业。
+微信和小红书来源可选择两种方式：OpenCLI 按公众号/账号名称定时搜索，或粘贴已获准使用的
+第三方 RSS/RSSHub Feed。`make setup` 会安装项目锁定的 OpenCLI；使用前仍须按其官方说明配置
+Chrome 与 Browser Bridge，并可运行 `npm run opencli:doctor` 检查。它是候选发现，不等于平台官方的 canonical 账号订阅。系统不会保存
+Cookie，也不会把搜索词伪装成文章发布者。严格账号订阅应使用能核验账号身份的第三方 Feed。
+OpenCLI 模式应在能连接该 Chrome profile 的宿主机 Source Worker 运行；默认 Compose 容器没有宿主浏览器会话，
+除非部署方另行完成 Browser Bridge 网络与隔离验收，否则容器部署请选择第三方 RSS 模式。
 本地 Compose 会常驻拉起 `control-plane` / `source-worker` / `render-worker` / `scheduler`，
 均设置 `restart: unless-stopped`，日常使用不需要手工启动它们。
 按上述 Makefile 命令，`npm run dev` 监听 `127.0.0.1:3001`；

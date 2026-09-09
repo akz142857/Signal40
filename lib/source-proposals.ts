@@ -2,17 +2,20 @@ import type { SourceType } from './domain.ts';
 import type { SqlDatabase } from './sql.ts';
 import type { Actor } from './workflow.ts';
 import { stableHash } from './workflow.ts';
-import type { SourceAdapterName } from './source-adapters.ts';
+import { normalizeSourceRuntimeConfig, sourceLocatorForConfig, type SourceAdapterName, type SocialDiscoveryMode } from './source-adapters.ts';
 import { sourceConnectorByPlatform } from './source-connectors/registry.ts';
 import { projectPublicHttpUrl } from './source-public-projection.ts';
 import { createPendingSourceRightsRequest } from './source-rights-approval.ts';
 
 export type SourceProposalInput = {
   name: string;
-  adapter: Extract<SourceAdapterName, 'rss' | 'http' | 'web'>;
+  adapter: Extract<SourceAdapterName, 'rss' | 'http' | 'web' | 'social'>;
   platform: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
   sourceType: SourceType;
   url: string;
+  discoveryMode?: SocialDiscoveryMode;
+  accountName?: string;
+  searchLimit?: number;
   scheduleCron: string | null;
   requestNote: string;
 };
@@ -21,10 +24,13 @@ type ProposalRow = {
   id: string;
   team_id: string;
   name: string;
-  adapter: 'rss' | 'http' | 'web';
+  adapter: 'rss' | 'http' | 'web' | 'social';
   platform: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
   source_type: SourceType;
   url: string;
+  discovery_mode: SocialDiscoveryMode | null;
+  account_name: string | null;
+  search_limit: number | null;
   schedule_cron: string | null;
   status: 'proposal_pending' | 'proposal_approved' | 'proposal_rejected';
   requested_by: string;
@@ -46,7 +52,10 @@ export function projectPublicSourceProposal(row: ProposalRow) {
     adapter: row.adapter,
     platform: row.platform,
     sourceType: row.source_type,
-    url: projectPublicHttpUrl(row.url),
+    url: projectPublicHttpUrl(row.url) ?? null,
+    discoveryMode: row.discovery_mode,
+    accountName: row.account_name,
+    searchLimit: row.search_limit,
     scheduleCron: row.schedule_cron,
     status: row.status,
     requestedBy: row.requested_by,
@@ -61,7 +70,8 @@ export function projectPublicSourceProposal(row: ProposalRow) {
 }
 
 const PROPOSAL_COLUMNS = `
-  id, team_id, name, adapter, platform, source_type, url, schedule_cron,
+  id, team_id, name, adapter, platform, source_type, url, discovery_mode,
+  account_name, search_limit, schedule_cron,
   status, requested_by, request_note, idempotency_key, decided_by,
   decision_note, decision_idempotency_key, source_config_id,
   created_at, updated_at, decided_at
@@ -96,9 +106,10 @@ export async function createSourceProposal(
     const id = `proposal_${crypto.randomUUID()}`;
     await tx.prepare(`
       INSERT INTO source_proposals
-        (id, team_id, name, adapter, platform, source_type, url, schedule_cron,
+        (id, team_id, name, adapter, platform, source_type, url, discovery_mode,
+         account_name, search_limit, schedule_cron,
          status, requested_by, request_note, idempotency_key, created_at, updated_at)
-      VALUES (?, 'default', ?, ?, ?, ?, ?, ?, 'proposal_pending', ?, ?, ?, ?, ?)
+      VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposal_pending', ?, ?, ?, ?, ?)
     `).bind(
       id,
       input.name,
@@ -106,6 +117,9 @@ export async function createSourceProposal(
       input.platform,
       input.sourceType,
       input.url,
+      input.discoveryMode ?? null,
+      input.accountName?.trim() ?? null,
+      input.searchLimit ?? null,
       input.scheduleCron,
       input.actor.id,
       input.requestNote,
@@ -175,22 +189,28 @@ export async function decideSourceProposal(
       if (!connector || connector.adapter !== proposal.adapter || connector.availability !== 'available') {
         return { status: 409 as const, error: connector?.unavailableReason ?? '该来源连接器当前不可用。' };
       }
-      const locator = { kind: 'url', url: proposal.url };
+      const sourceInput = {
+        name: proposal.name,
+        adapter: proposal.adapter,
+        sourceType: proposal.source_type,
+        url: proposal.url || undefined,
+        discoveryMode: proposal.discovery_mode ?? undefined,
+        accountName: proposal.account_name ?? undefined,
+        searchLimit: proposal.search_limit ?? undefined,
+        rightsStatus: 'pending' as const,
+        namespace: proposal.platform,
+      };
+      const locator = sourceLocatorForConfig(sourceInput);
       const locatorHash = stableHash({ teamId: proposal.team_id, platform: proposal.platform, locator });
       const duplicate = await tx.prepare(`
         SELECT id FROM source_configs
         WHERE team_id = ? AND platform = ?
-          AND (locator_hash = ? OR locator_json ->> 'url' = ?)
+          AND (locator_hash = ? OR (? <> '' AND locator_json ->> 'url' = ?))
         LIMIT 1
-      `).bind(proposal.team_id, proposal.platform, locatorHash, proposal.url).first<{ id: string }>();
+      `).bind(proposal.team_id, proposal.platform, locatorHash, proposal.url, proposal.url).first<{ id: string }>();
       if (duplicate) return { status: 409 as const, error: '该来源已经登记。' };
       sourceConfigId = `source_${stableHash({ proposalId: proposal.id }).slice(0, 32)}`;
-      const config = {
-        sourceType: proposal.source_type,
-        url: proposal.url,
-        mapping: {},
-        pagination: proposal.adapter === 'http' ? { mode: 'none' } : undefined,
-      };
+      const config = normalizeSourceRuntimeConfig(sourceInput);
       const configHash = stableHash({ platform: proposal.platform, adapter: proposal.adapter, config });
       const rightsConfigHash = stableHash({
         platform: proposal.platform,

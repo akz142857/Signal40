@@ -48,18 +48,18 @@ const CONNECTORS: readonly ConnectorDescriptor[] = [
     supports: { test: true, backfill: true, pagination: false, edits: true, deletions: false, metrics: false },
   },
   {
-    id: 'wechat-feed-v1', version: '1', platform: 'wechat', adapter: 'rss', label: '微信公众号公开 Feed',
+    id: 'wechat-monitor-v1', version: '1', platform: 'wechat', adapter: 'social', label: '微信公众号（OpenCLI / 第三方 RSS）',
     availability: 'available',
-    authMode: 'public-confirmation', requiredCapability: 'source:rss', minimumIntervalMinutes: 30,
+    authMode: 'public-confirmation', requiredCapability: 'source:social', minimumIntervalMinutes: 30,
     capabilityProtocolVersion: 1,
-    supports: { test: true, backfill: true, pagination: false, edits: true, deletions: false, metrics: false },
+    supports: { test: true, backfill: false, pagination: false, edits: true, deletions: false, metrics: false },
   },
   {
-    id: 'xiaohongshu-feed-v1', version: '1', platform: 'xiaohongshu', adapter: 'rss', label: '小红书公开 Feed',
+    id: 'xiaohongshu-monitor-v1', version: '1', platform: 'xiaohongshu', adapter: 'social', label: '小红书（OpenCLI / 第三方 RSS）',
     availability: 'available',
-    authMode: 'public-confirmation', requiredCapability: 'source:rss', minimumIntervalMinutes: 60,
+    authMode: 'public-confirmation', requiredCapability: 'source:social', minimumIntervalMinutes: 60,
     capabilityProtocolVersion: 1,
-    supports: { test: true, backfill: true, pagination: false, edits: true, deletions: false, metrics: false },
+    supports: { test: true, backfill: false, pagination: false, edits: true, deletions: false, metrics: false },
   },
 ];
 

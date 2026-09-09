@@ -113,3 +113,22 @@ void test('source adapters reject SSRF targets and unapproved rights', () => {
   assert.ok(result.errors.some((error) => error.includes('rightsStatus')));
   assert.equal(validateSourceConfig({ name: '暂停来源', adapter: 'rss', sourceType: 'media', url: 'https://example.com/rss', rightsStatus: 'pending' }, false).valid, true);
 });
+
+void test('social adapter validates OpenCLI account search and third-party RSS separately', () => {
+  assert.equal(validateSourceConfig({
+    name: '聚大模型前言', adapter: 'social', sourceType: 'social', rightsStatus: 'pending',
+    discoveryMode: 'opencli', accountName: '聚大模型前言', searchLimit: 20,
+  }, false).valid, true);
+  assert.equal(validateSourceConfig({
+    name: '聚大模型前言', adapter: 'social', sourceType: 'social', rightsStatus: 'pending',
+    discoveryMode: 'rss', url: 'https://rsshub.example/wechat/ce/example',
+  }, false).valid, true);
+  assert.match(validateSourceConfig({
+    name: '缺少账号', adapter: 'social', sourceType: 'social', rightsStatus: 'pending',
+    discoveryMode: 'opencli',
+  }, false).errors.join(' '), /账号名称/);
+  assert.match(validateSourceConfig({
+    name: '微信条数过大', adapter: 'social', sourceType: 'social', rightsStatus: 'pending',
+    discoveryMode: 'opencli', accountName: '目标账号', searchLimit: 11, namespace: 'wechat',
+  }, false).errors.join(' '), /1–10/);
+});

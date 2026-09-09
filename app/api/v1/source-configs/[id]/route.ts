@@ -1,7 +1,8 @@
 import { db, resolveRequestActor } from '@/lib/runtime';
 import { sourceApiError } from '@/lib/source-api-error';
 import {
-  assertPublicHttpUrl,
+  normalizeSourceRuntimeConfig,
+  sourceLocatorForConfig,
   validateSourceConfig,
   type SourceConfigInput,
 } from '@/lib/source-adapters';
@@ -84,9 +85,12 @@ export async function PATCH(
   if (body.enabled) {
     return sourceApiError('启用来源必须使用测试门禁后的 enable 操作。', 409);
   }
-  const validation = validateSourceConfig(body, false);
+  const validation = validateSourceConfig({ ...body, namespace: body.platform }, false);
   if (!validation.valid)
     return sourceApiError('来源配置无效。', 422, { issues: validation.errors });
+  if (body.adapter === 'social' && !body.platform) {
+    return sourceApiError('社交来源必须明确选择微信公众号或小红书平台。', 422);
+  }
   const platform = body.platform ?? platformForAdapter(body.adapter);
   const connector = sourceConnectorByPlatform(platform);
   if (
@@ -141,16 +145,8 @@ export async function PATCH(
     return sourceApiError('rightsStatus 由独立权利决定接口管理，来源修改不能直接改变。', 422);
   }
 
-  const normalizedUrl = body.url ? assertPublicHttpUrl(body.url) : '';
-  const nextConfig = {
-    sourceType: body.sourceType,
-    url: normalizedUrl,
-    mapping: body.mapping ?? {},
-    pagination:
-      body.adapter === 'http'
-        ? (body.pagination ?? { mode: 'none' as const })
-        : undefined,
-  };
+  const normalizedInput = { ...body, namespace: platform };
+  const nextConfig = normalizeSourceRuntimeConfig(normalizedInput);
   const nextConfigHash = stableHash({ platform, adapter: body.adapter, config: nextConfig });
   const configChanged = nextConfigHash !== existing.config_hash;
   if (
@@ -162,7 +158,7 @@ export async function PATCH(
   ) {
     return sourceApiError('主动暂停必须填写 3–500 个字符的原因。', 422);
   }
-  const locator = { kind: 'url', url: normalizedUrl };
+  const locator = sourceLocatorForConfig(normalizedInput);
   const locatorHash = stableHash({ teamId: 'default', platform, locator });
   const rateLimitPerMinute =
     body.rateLimitPerMinute ?? existing.rate_limit_per_minute;

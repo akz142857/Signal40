@@ -1,10 +1,10 @@
 # 数据源订阅与自动采集开发方案
 
 - 日期：2026-09-09
-- 版本：3.3（公开来源连接器 + Social Evidence 本地实现）
+- 版本：3.4（OpenCLI/第三方 RSS 社交发现 + Social Evidence 本地实现）
 - 状态：Foundation 整体 `In progress`；只有已形成可重现本地证据的单项能力可称为 `Implemented locally`，尚无 Delivered/Deployed/Integrated/Accepted 连接器；未标记 Accepted 的连接器不对外宣称可用
 - 当前 Foundation 目标：管理员首次配置 RSS 或无凭据 Public JSON，之后系统持续采集、去重、聚类并产生候选题；JSON/CSV 粘贴仅作为迁移与排障入口
-- 当前剩余核心：公开网页/热榜、公众号 Feed、小红书 Feed 已完成本地连接器；Social Evidence 已完成关系分类、人工修正、评测和生产门禁代码，剩余真实来源/语料与业务验收
+- 当前剩余核心：公开网页/热榜以及微信/小红书 OpenCLI + 第三方 RSS 双策略已完成本地代码；仍缺真实 OpenCLI/Browser Bridge、具体 RSSHub 路由与真实来源验收，以及 Social Evidence 的真实授权语料与业务签字
 
 本版已把产品/编辑、架构/数据一致性、安全/凭据、运行/SRE、交付/验收和法务/治理六个视角的评审意见合并到同一执行基线。这里的“评审闭环”只表示意见已转化为明确需求、依赖、负责人和关闭证据，不表示代码、外部平台接入或生产验收已经完成；实际状态始终以第 2 节事实账本、第 12 节工作包状态和第 15 节分层完成定义为准。
 
@@ -15,10 +15,10 @@
 1. **正式产品是来源订阅，不是手工导入**：RSS 与无凭据 Public JSON 是 Foundation GA 的首批承诺；JSON/CSV 粘贴或文件导入仅为迁移和排障兜底。
 2. **外部平台按连接器独立晋级**：公众号、小红书、网页/热榜即使得到 `blocked` 结论，也不阻塞 Foundation GA；但不得显示为已支持，也不得以手工导入冒充连接器。
 3. **发现与生产分层**：社交或网页内容可以作为发现信号进入雷达，但在声明级补证和独立性门禁通过前不得自动进入生产。
-4. **不建设来源凭据平台**：来源订阅限定为已获允许的公开 URL；Secret Manager、workload identity、OAuth/PKCE、本机 Agent、凭据 Broker 和相关数据模型均不属于系统范围。
+4. **不建设来源凭据平台**：Secret Manager、workload identity、OAuth/PKCE、自研本机 Agent、凭据 Broker 和相关数据模型均不属于系统范围。用户明确选择 OpenCLI 时，Source Worker 仅调用外部 `opencli` 可执行文件；浏览器登录态由 OpenCLI/Browser Bridge 自己管理，Signal40 不保存或转发 Cookie。
 5. **一致性以服务端逐页提交协议为准**：页面 hash、ordinal、checkpoint CAS、lease epoch、版本与权利在提交端复核；连接器自身的“成功”不能绕过这些条件。
 6. **状态声明按证据分层**：本地测试、Git/制品交付、目标环境部署、真实上游集成和业务验收分别对应 `Implemented locally`、`Delivered`、`Deployed`、`Integrated`、`Accepted`，禁止跨级表述。
-7. **当前发布范围保持收窄**：Foundation GA 不承诺多租户、登录态抓取或绕过平台限制；网页和社交 Feed 只接收经权利确认的公开 URL，社交证据自动放行仍须通过校准门禁。
+7. **当前发布范围保持收窄**：Foundation GA 不承诺多租户或绕过平台限制；网页和第三方 Feed 只接收经权利确认的公开 URL。OpenCLI 只作候选发现，不能把搜索词当作 canonical 发布主体；社交证据自动放行仍须通过校准门禁。
 8. **状态只有一条线性交付链**：`Implemented locally → Delivered → Deployed → Integrated → Accepted`；`Blocked`、`Experimental` 和 `Deprecated` 是正交标签，不是更高交付等级。禁止再使用 `Integrated locally`。
 9. **浏览器与 Worker 使用不同读模型**：用户端只取得明确 allowlist 中的字段；Worker 所需 checkpoint cursor 和运行内部数据使用内部执行契约，不通过同一响应依赖调用者猜测分支。
 10. **分页持久化不等于对用户可见**：逐页提交的 article/origin 在 run `complete` 前保持 staged，不进入雷达、证据门禁或主题重算；完成时一次性可见并触发幂等重算。
@@ -59,10 +59,10 @@ Signal 40 的正常使用方式应当是：
 | 实现提交 | 未提交；当前能力尚未形成可恢复的 Git 交付点 |
 | 远端 CI | 当前工作树未运行；不得沿用基线 SHA 的结果 |
 | 部署/制品 | 未部署、无 release manifest/SBOM/签名 provenance；来源凭据 Broker 及其镜像已删除。当前 tree 的 control-plane/source/render 镜像仍需在远端 CI 重新构建、扫描并记录 digest，不能沿用删除前的本机镜像证据 |
-| 最后完整本地验证 | 2026-09-09 本工作树发现 253 项测试：250 pass、0 fail、3 skip；跳过项仅为未加载已暴露 R2/S3 凭据的远程对象存储契约。`tsc`、oxlint、production build、Redocly OAS 3.1 lint、32 项 migration checksum 和固定种子本地 chaos 10/10 通过；新增回归覆盖公开网页解析、五类来源提案、全部有效 origin 输入、Social Evidence 合格边最大匹配、unknown/低置信度/social 默认失败关闭、不可变人工修正、重算入队、标注集误独立率/召回率和冻结阈值。此前镜像、敏感值 canary 和 Compose 环境矩阵证据未因本次代码改动自动升级为当前 tree 的交付证据；仍需按 DELIVERY-01 在远端重跑 |
+| 最后完整本地验证 | 2026-09-09 本工作树发现 260 项测试：257 pass、0 fail、3 skip；跳过项仅为已轮换但尚未恢复的 R2/S3 远程对象存储契约。`tsc`、oxlint、production build、Redocly OAS 3.1 lint 和 33 项 migration checksum 通过；新增回归覆盖 OpenCLI JSON 映射、无 shell 参数、publisher 不伪造、社交提案与双策略连接器。OpenCLI 1.8.6 二进制可用，但 `doctor` 显示 Browser Bridge 未连接，因此真实搜索仍属外部验收待办 |
 | 最后完整验证后的改动 | 仅事实与证据文档同步；无代码改动 |
-| 数据库 | manifest 已扩展到 `0000`–`0031` 共 32 项；`0030` 增加不可变 origin 人工修正、Social Evidence 校准类型、数据集哈希和冻结策略，`0031` 删除来源凭据/连接会话模型并登记公开网页与平台 Feed connector。PGlite fresh install 已通过。当前开发 PostgreSQL 仍只登记到 `0022`，因此 `0023`–`0031` 均未形成开发/生产升级证据 |
-| 迁移校验 | `drizzle/checksums.json` 覆盖 `0000`–`0031` 精确有序文件集和 SHA-256；runner 在连接数据库前校验文件，并在 `schema_migrations` 保存/核对 checksum；缺项、增项、改写和数据库 hash 漂移均 fail closed。PGlite fresh migration、旧开发 PostgreSQL 19→21→22→23 upgrade 已通过；`0023`–`0031` 的开发/生产升级、隔离 restore 和远端 CI 仍未验证 |
+| 数据库 | manifest 已扩展到 `0000`–`0032` 共 33 项；`0032` 增加社交发现配置并以 OpenCLI/RSS 双策略 release 替换误导性的“平台公开 Feed”。PGlite fresh install 与本机开发 PostgreSQL `0000`–`0032` 升级均已通过；生产升级证据仍待目标环境执行 |
+| 迁移校验 | `drizzle/checksums.json` 覆盖 `0000`–`0032` 精确有序文件集和 SHA-256；runner 在连接数据库前校验文件，并在 `schema_migrations` 保存/核对 checksum；缺项、增项、改写和数据库 hash 漂移均 fail closed。PGlite fresh migration、旧开发 PostgreSQL 19→21→22→23 upgrade 已通过；`0023`–`0032` 的开发/生产升级、隔离 restore 和远端 CI 仍未验证 |
 | 可发布结论 | **否**；Foundation 整体为 `In progress`。`P0A-STATE-01` 已有本地关闭证据；`P0A-RBAC-01`、`P0A-API-03/04A` 和 `MIGRATION-INTEGRITY-01` 的代码/本地测试已显著推进，但各自仍缺浏览器/安全签字、已发布 baseline 或生产升级等更高层证据 |
 
 后续快照必须绑定单一可还原的 commit/tree，记录基线/实现 commit SHA、全部 tracked/untracked 内容清单与哈希、完整 migration checksum、CI run URL、制品 digest/provenance、目标环境、验证命令/时间、skip 计数和批准人。唯一状态链是 `Implemented locally → Delivered → Deployed → Integrated → Accepted`：本地脏工作树证据不能支持 Delivered，部署了但未连通真实上游不能支持 Integrated，连通了但未签字不能支持 Accepted。
@@ -83,14 +83,14 @@ Signal 40 的正常使用方式应当是：
 | RSS / Atom | Implemented locally，未 Deployed/Integrated/Accepted | 三步 draft/test/enable UI；独立 XML parser + syntax validator；namespace、`xml:base`、相对 URL、多 link、ETag/Last-Modified/304；受控 Worker | 当前环境将外网 DNS 映射到 `198.18.0.0/15`，真实 SEC RSS 被 SSRF 防线正确拒绝；需在可达公网的生产 egress 环境完成真实增量、重启续采和用户验收 |
 | HTTP JSON | Partial, local only；未 Delivered/Deployed/Integrated/Accepted | UI 可配 items/id/kind/title/url/publishedAt/updatedAt/deletedAt/summary/author 及 page/cursor/since；有界页数/条目/字节、cursor 环检测、坏项逐条 rejection、同时间戳 tie-break、结构化 429/Retry-After 与预览；metadata 模式逐页 staged，complete 后原子可见；upsert/tombstone 判别联合和事件状态防旧回放复活 | 仍需真实无凭据 Public JSON 上游的多页/opaque cursor/中断恢复及真实删除/重现验收 |
 | 网页/热榜 | Implemented locally | 公开 HTML 的 JSON-LD/可见链接解析、5 MB/100 条上限、无 JavaScript、无登录绕过 | 逐站点真实 URL、浏览器 E2E 与权利验收 |
-| 微信公众号 | Implemented locally | 复用 RSS/Atom 协议接入已获允许的公众号公开 Feed，不包含登录、Cookie 或关键词搜索 | 真实 Feed、主体映射、编辑/删除语义和权利验收 |
-| 小红书 | Implemented locally | 复用 RSS/Atom 协议接入已获允许的小红书公开 Feed，不包含登录、Cookie 或页面自动化 | 真实 Feed、主体映射、编辑/删除语义和权利验收 |
+| 微信公众号 | Implemented locally | `opencli weixin search` 候选发现；可切换到 RSSHub CareerEngine/Newrank/EFB 等第三方 Feed URL；Signal40 负责调度、内容指纹去重和 checkpoint | 安装并实测 OpenCLI/Browser Bridge；逐个第三方路由确认参数、授权、发布主体、编辑/删除与稳定性；OpenCLI 仍不是 canonical 账号订阅 |
+| 小红书 | Implemented locally | `opencli xiaohongshu search` 候选发现；可切换到获准第三方 RSS；Signal40 负责调度、去重和 checkpoint | 真实账号搜索、登录态/Bridge、主体映射、编辑/删除语义与权利验收 |
 | CSV / JSON 手工导入 | Fallback | 保留现有迁移/排障入口 | 不计入连接器 Accepted |
 
 基础平台实施状态：
 
-- 已实现或已有本地代码路径：来源生命周期与配置哈希门禁、不可变权利 grant、调度/租约/提交复核、异步预览、批量导入、RSS/Public JSON/公开 HTML/公众号 Feed/小红书 Feed、结构化 checkpoint、逐页 staged 后原子可见、origin/rejection 持久化、发布 canary、隔离/删除编排、SLO/预算和运行治理。所有 Worker 写入口均复核租约 owner、epoch 与过期时间；连接器只接受公开 URL，不保存、兑换或注入来源账号凭据。Social Evidence 已接入 publisher/origin、保守关系分类、不可变人工修正、声明级合格支持和 family↔publisher group 最大匹配；无批准校准策略时 social/web 自动生产 fail closed。直接创建、批量导入和 proposal 批准只创建 `rights=pending` draft，不绕过异人权利审批、逐来源测试和启用门禁。
-- 已验证：迁移 `0000`–`0022` 已应用到当前 PostgreSQL，`0023`–`0031` 仅完成 PGlite fresh install 和 manifest 校验。当前 253 项回归中 250 项本地/PG 测试通过、0 fail、3 项远程 R2/S3 契约跳过；同轮覆盖公开连接器、Social Evidence 最大匹配、失败关闭、人工修正审计与 Worker 重算、声明级合格支持证据、数据集指标和阈值冻结。
+- 已实现或已有本地代码路径：来源生命周期与配置哈希门禁、不可变权利 grant、调度/租约/提交复核、异步预览、批量导入、RSS/Public JSON/公开 HTML、微信/小红书 OpenCLI 候选搜索与第三方 RSS、结构化 checkpoint、逐页 staged 后原子可见、origin/rejection 持久化、发布 canary、隔离/删除编排、SLO/预算和运行治理。OpenCLI 由 Worker 以参数数组直接执行，不经 shell；Signal40 不保存其浏览器 Cookie。Social Evidence 已接入 publisher/origin、保守关系分类、不可变人工修正、声明级合格支持和 family↔publisher group 最大匹配。
+- 已验证：迁移 `0000`–`0022` 已应用到当前 PostgreSQL，`0023`–`0032` 仅完成 PGlite fresh install 和 manifest 校验。本地回归覆盖 OpenCLI JSON 映射、无 shell 参数、publisher 不伪造、社交提案、公开连接器及 Social Evidence 门禁；3 项真实 R2/S3 契约因此前凭据轮换后尚未恢复而不计通过。
 - Experimental / Partial Gate：`publisher_entities`、`source_item_origins`、保守关系分类器、不可变人工修正、声明级合格支持证据和 evidence family 最大匹配已进入滚动语料与项目门禁；未批准 Social Evidence 校准时 social/web 自动生产默认关闭。仍缺已授权真实标注集、真实生产抽样生成的评测报告与 Product/Editorial sign-off，因此不能宣称 Social Evidence Accepted。
 - 未完成主线仅为外部验收：真实公开 Feed/网页浏览器 E2E、已授权版本化标注集与生产抽样、Product/Editorial 签字，以及目标环境迁移/恢复/chaos、安全扫描和观察期。OAuth、Agent 与来源凭据基础设施不再列为待办。
 - 安全现状：本地已增加 `.dockerignore` Secret/私钥/云配置排除、allowlist-copy 非 root 镜像、Compose 显式 env allowlist、生产 shared-token/fallback 拒绝、镜像 canary 和 CI 扫描矩阵。它们保护当前运行时，但不再派生云 Secret Manager/workload identity 或 OAuth/Agent 建设任务。
@@ -101,7 +101,7 @@ Signal 40 的正常使用方式应当是：
 | --- | --- | --- |
 | Foundation GA 承诺集 | RSS + Public JSON + 来源管理/调度/运行/待办基础平台 | 两条真实来源链路均达到 Accepted 后才可声明 Foundation GA |
 | 网页/热榜 | 条件式能力；按站点模板逐个批准 | 没有授权模板和隔离证据时保持 Blocked，不进入承诺集 |
-| 公众号/小红书 | 已实现“获允许的公开 RSS/Atom Feed”入口；不实现账号托管、Cookie 或页面自动化 | 未提供真实获权 Feed 时只能保持 Implemented locally，不能标记 Integrated/Accepted |
+| 公众号/小红书 | 已实现 OpenCLI 候选搜索与获准第三方 RSS 双策略；不自建账号托管或 Cookie 服务 | OpenCLI 搜索不声明 canonical 账号订阅；真实 Bridge/账号或真实获权 Feed 未验收时只能保持 Implemented locally |
 | Social Evidence | 与“连接器可采集”分开验收 | 连接器 Accepted 仍只允许内容进入发现层，不能自动放行生产 |
 | 多租户 | 本期明确不做 | 当前仅允许固定单 team；开放前必须完成复合租户约束与越权测试 |
 | 手工导入 | Fallback | 可用于迁移/排障，不计入任何连接器 Accepted 或无人值守验收 |
@@ -372,7 +372,7 @@ RSS、JSON、HTML 和连接测试复用同一 egress client：
 
 ### 6.3 服务隔离
 
-当前来源主线只接入经明确权利确认的公开 RSS、Public JSON、HTML/JSON-LD 与平台公开 Feed。控制面、source Worker、render Worker 和发布进程继续使用独立 token、环境变量 allowlist、非 root 镜像和最小代码构建上下文；来源连接器不得持有 R2、OpenAI、YouTube 或发布凭据。来源 credential provider/Broker、OAuth/PKCE 和本机 Agent 代码已删除。
+当前来源主线只接入经明确权利确认的公开 RSS、Public JSON、HTML/JSON-LD，以及显式选择的 OpenCLI 候选搜索。控制面、source Worker、render Worker 和发布进程继续使用独立 token、环境变量 allowlist、非 root 镜像和最小代码构建上下文；来源 credential provider/Broker、OAuth/PKCE 和自研本机 Agent 代码已删除。OpenCLI/Browser Bridge 属于外部运行依赖，其登录态不进入 Signal40 数据库或 API。
 
 ### 6.4 错误与重试
 
@@ -421,11 +421,11 @@ HAR、trace、截图、录像、console、crash dump、download、profile、cook
 
 ### 7.4 微信公众号
 
-按 P0 Spike 选择官方接口、明确授权的数据供应商或站点公开订阅能力。目标是按 canonical account ID 订阅，预览认证主体和最近内容，处理平台 item ID、编辑/删除、版本化 checkpoint、限流和失效恢复。若不能按账号稳定订阅，产品明确显示“仅支持关键词发现”或保持不可连接。
+当前实现提供两条明确区分的路径：`opencli weixin search <公众号名称>` 用于周期性候选发现；或读取用户提供、已获准使用的 RSSHub CareerEngine/Newrank/EFB 等第三方 Feed。OpenCLI 输出未提供作者时保持 publisher unknown，不把搜索词伪造成主体。第三方路由由用户/部署方提供完整 Feed URL，Signal40 不收集 Newrank Cookie，也不代建 EFB→Telegram 桥。只有第三方 Feed 能核验 canonical account ID 且通过真实验收时，才能宣称严格账号订阅。
 
 ### 7.5 小红书
 
-只有 Spike 找到稳定、获授权路径后才实现。必须先确认 canonical identity、字段、更新/删除语义、配额、成本、最小频率、登录/轮换/撤销以及内容保存边界。没有路径则标记 Blocked 并隐藏可连接入口；已授权导出文件只算手工导入，不算连接器 Accepted。
+当前实现调用 `opencli xiaohongshu search <账号名称>` 做候选发现，或读取获准的第三方 RSS。浏览器与 Browser Bridge 是 OpenCLI 的运行前置，不是 Signal40 的凭据系统。真实验收仍必须确认 canonical identity、字段、更新/删除语义、频率、登录失效和内容保存边界；未完成前不标记 Integrated/Accepted。
 
 ## 8. 调度、队列与原子提交
 
@@ -598,7 +598,7 @@ P3/P4 的 `Accepted` 只证明平台连接器能在真实授权下稳定采集�
 | Source Ownership | Platform + Security | P0A、团队成员治理 | L/L/L/L/L/P | Implemented locally；`0015`、owner team、业务负责人、版本锁转移、启用门禁、成员影响提示、Scheduler 巡检、待办链接与审计 | 真实离职/停用恢复演练、未来多租户 team 约束 | audit + browser offboarding drill |
 | Legal Delete | Platform + Legal + SRE | `P0A-CONTRACT-DELETE-01/LEGAL-RIGHTS-01/P0C-DRILL-01` | L/L/L/L/L/P | 来源范围删除与保全编排已本地实现；不等于法律有效性或物理删除已验收 | 完整数据系统删除矩阵、对象版本/复制/备份/缓存/日志、真实平台撤回、职责分离和法律签字 | request/item/platform receipts + physical-state evidence + legal approval |
 | P2 Browser/Web | Source Platform + Security | P0A、P0C | L/L/L/L/L/P | Implemented locally；公开 HTML JSON-LD/可见链接解析，不执行 JavaScript、不绕登录，统一 SSRF/大小/条目上限 | 逐站点真实 URL、网络隔离、恶意页面和权利验收 | manifest + browser/隔离证据 |
-| P3/P4 Social | Source Platform + Legal | P0A、P0B | L/L/L/L/L/P | Implemented locally；公众号/小红书以已获允许的公开 RSS/Atom Feed 接入，不含账号托管或页面自动化 | 真实 Feed、publisher 映射、内容变化和权利验收 | 平台 acceptance pack |
+| P3/P4 Social | Source Platform + Legal | P0A、P0B | L/L/L/L/L/P | Implemented locally；公众号/小红书提供 OpenCLI 候选搜索与已获允许的第三方 RSS，不含自建账号托管 | 真实 OpenCLI/Bridge 或 Feed、publisher 映射、内容变化和权利验收 | 平台 acceptance pack |
 | P5 Social Evidence | Data/Editorial | P0B、P1A1 + 已授权语料 | L/L/L/L/L/P | In progress；本地已实现 publisher/origin 治理、保守关系分类器、不可变人工修正、声明级合格支持、family↔ownership group 最大匹配、冻结阈值/数据集哈希/异人审批；无批准策略时 social/web fail closed | 已授权版本化评测集、真实评测与生产抽样、Product/Editorial 签字 | evaluation pack + production sample + approval |
 
 每个工作包关闭时都要更新“状态 / 已完成 / 剩余 / 依赖 / 验收证据”；不能因为阶段中一部分代码存在就关闭整个阶段。
@@ -630,8 +630,8 @@ P3/P4 的 `Accepted` 只证明平台连接器能在真实授权下稳定采集�
 
 | ID | 优先级 | 工作与退出条件 | Owner | Depends on | 当前状态 | 关闭证据 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `P0A-API-01` | P0 | 为 Worker 全部 2xx 响应绑定专用 schema | Platform | 当前运行时结构 | Implemented locally | 当前专项通过；完整账本为 250 pass/0 fail/3 远程存储 skip |
-| `P0A-API-02` | P0 | 所有来源控制面/Worker 已登记非 2xx 必须返回 `error+errorCode`，不污染非来源 API | Platform | `P0A-API-01` | Implemented locally | 当前专项通过；完整账本为 250 pass/0 fail/3 远程存储 skip |
+| `P0A-API-01` | P0 | 为 Worker 全部 2xx 响应绑定专用 schema | Platform | 当前运行时结构 | Implemented locally | 当前专项通过；完整账本为 257 pass/0 fail/3 远程存储 skip |
+| `P0A-API-02` | P0 | 所有来源控制面/Worker 已登记非 2xx 必须返回 `error+errorCode`，不污染非来源 API | Platform | `P0A-API-01` | Implemented locally | 当前专项通过；完整账本为 257 pass/0 fail/3 远程存储 skip |
 | `P0A-STATE-01` | P0 | 将 proposal/source lifecycle/health/rights/run/quarantine/release/acceptance 枚举按实体冻结，DB/TS/OpenAPI/UI/负向测试等值 | Platform + Product | `P0A-API-02` | Implemented locally；`0019` DB checks、共享 TS 常量、OAS 等值和 UI 标签已验证 | `SRC-STATE-CONTRACT-001`；部署兼容仍由 DELIVERY gate 负责 |
 | `P0A-RBAC-01` | P0 | 建立 action × role × resource 权限矩阵；researcher proposal 与 admin/rights approval 分离；高风险动作职责分离且不得自批 | Security + Product + Platform | `P0A-STATE-01` | In progress；可执行矩阵、proposal、显式 rights/legal capability、异人权利决定与 legal hold 解除、两名法律操作人存续门禁、API/UI/OAS/审计及负向 PG 回归已本地实现 | 仍缺真实身份下跨角色 API/browser 全矩阵与 Security/Legal sign-off |
 | `P0A-API-03` | P0 | 按 §9.1 分离 actor/Worker DTO，严格 allowlist 浏览器字段，禁止 cursor/object key/raw/error/Secret URL 等越界 | Security + Platform | `P0A-STATE-01/P0A-API-02` | In progress；Actor allowlist、Worker-only 读模型、敏感 URL 清理、严格 OAS/回归、合成 canary scanner、自检和 CI step 已本地实现 | 仍缺真实浏览器 HAR/录像、目标环境 log/trace/snapshot/export 实扫与 Security sign-off |
@@ -639,13 +639,13 @@ P3/P4 的 `Accepted` 只证明平台连接器能在真实授权下稳定采集�
 | `P0A-API-04B` | P0 | 从首个已发布 SHA 保存不可变 baseline；不使用 dirty spec | Delivery + Platform | `P0A-API-04A/DELIVERY-01` | External pending | baseline artifact digest + commit SHA + CI URL |
 | `P0A-VISIBILITY-01` | P0 | 逐页数据在 run complete 前 staged，不进入雷达/门禁/重算；complete 后一次性可见并只触发一次重算 | Platform | `P0A-STATE-01` | Implemented locally；`0021` staged payload、运行内 checkpoint、complete 原子发布/CAS/幂等重算已验证 | `SRC-VISIBILITY-001`；进程强杀/多 Worker 由 chaos gate 验证 |
 | `P0A-CONTRACT-DELETE-01` | P0 | 将 `NormalizedSourceItem` 冻结为 upsert/tombstone 判别联合，覆盖未知 ID、重放与删除后重现 | Platform + Legal | `P0A-STATE-01` | Implemented locally；严格 runtime/OAS 联合、HTTP 映射/UI、`0022` 最新事件状态、删除优先和显式较新恢复已实现 | `SRC-CONTRACT-DELETE-001`；真实上游与外部删除仍由 connector/LEGAL E2E 验证 |
-| `MIGRATION-INTEGRITY-01` | P0 | 为全部迁移维护不可变 checksum manifest，运行时/CI 校验 tag+hash；分别验证 fresh install 和 from-current-production upgrade | Delivery + DBA | 无 | In progress；`0000`–`0031` 的 32 项 manifest、runner/CI 校验、PGlite fresh、旧开发库 19→21→22→23 upgrade 和 drift-negative 已通过 | `0023`–`0031` 尚未在开发/生产基线升级；仍缺隔离 restore log 与远端 CI |
+| `MIGRATION-INTEGRITY-01` | P0 | 为全部迁移维护不可变 checksum manifest，运行时/CI 校验 tag+hash；分别验证 fresh install 和 from-current-production upgrade | Delivery + DBA | 无 | In progress；`0000`–`0032` 的 33 项 manifest、runner/CI 校验、PGlite fresh、旧开发库 19→21→22→23 upgrade 和 drift-negative 已通过 | `0023`–`0032` 尚未在开发/生产基线升级；仍缺隔离 restore log 与远端 CI |
 | `P0A-IMG-01` | P0 | 构建上下文排除 `.env*`/私钥/云凭据；source/render 独立最小镜像与 env allowlist | Security + Delivery | 无 | In progress；allowlist-copy/non-root 镜像、Compose env allowlist和 CI 扫描矩阵已实现；Broker 镜像已从范围和构建矩阵删除 | `SRC-WORKLOAD-BOUNDARY-001/SRC-IMAGE-CANARY-001`；仍缺远端 SBOM/Trivy artifact、签名 provenance 与 Security sign-off |
 | `P0A-NET-01` | P0 | 默认拒绝 egress；用固定版本 IANA special-purpose corpus 验证 A/AAAA、mapped/NAT64/6to4、DNS/CNAME/逐跳 redirect/代理旁路/元数据 | Security + SRE | 目标环境 | In progress；应用层已固定 IANA 2025-10-09 IPv4/IPv6 corpus，mapped/NAT64/6to4 解包与相邻公网负向回归已实现 | 仍缺目标环境默认拒绝策略、代理旁路/CNAME/逐跳日志、actual remote IP/SNI、packet evidence 与 Security sign-off |
 | `P0A-IAM-01` | P0 | 准备目标环境唯一 team、首个 active admin、business owner、身份头来源、禁用同步和 break-glass | Security + SRE | 身份源 | External pending | provisioning record + two-account RBAC test + recovery drill |
 | `LEGAL-RIGHTS-01` | P0 | provisional assertion → verified grant；服务端治理 source type；不可变权利证据/条款快照 | Legal + Platform | 对应公开来源 | In progress；pending request→异人 verified grant、独立确认冻结 `sourceType`、严格 dossier、证据/条款 hash、配置漂移/自批/过期/撤销门禁已本地实现 | 仍缺真实 publisher/evidence-family 目录映射、公开来源 evidence artifact/dossier、到期/撤销环境演练与 Legal sign-off |
-| `E2E-WECHAT-FEED-01` | P1 | 使用已获允许的公众号公开 Feed 验证测试、启用、增量与主体映射 | Product + Source Platform + Legal | 真实 Feed | External pending | 浏览器记录、run ID 与权利 dossier |
-| `E2E-XHS-FEED-01` | P1 | 使用已获允许的小红书公开 Feed 验证测试、启用、增量与主体映射 | Product + Source Platform + Legal | 真实 Feed | External pending | 浏览器记录、run ID 与权利 dossier |
+| `E2E-WECHAT-SOCIAL-01` | P1 | 用真实 OpenCLI/Browser Bridge 或选定第三方 RSS 验证测试、启用、增量、去重与主体 unknown/verified 行为 | Product + Source Platform + Legal | OpenCLI 环境或真实 Feed | External pending | 浏览器记录、run ID 与权利 dossier |
+| `E2E-XHS-SOCIAL-01` | P1 | 用真实 OpenCLI/Browser Bridge 或获权第三方 RSS 验证测试、启用、增量与主体映射 | Product + Source Platform + Legal | OpenCLI 环境或真实 Feed | External pending | 浏览器记录、run ID 与权利 dossier |
 | `E2E-WEB-{site}` | P1 | 每个热榜/网页站点用公开页面独立验收，不用一份结论覆盖所有站点 | Product + Source Platform + Legal | 目标站点 | External pending | per-site dossier + browser run + review date |
 | `DELIVERY-01` | P0 | 固定单一目标 SHA；CI 必须包含 tsc/lint/test/evaluation/build/render、OAS 验证/兼容、迁移 fresh+upgrade、restore、secret/dependency/image scan，关键测试不得 skip；产出 control-plane/source/render 可追溯 OCI digest/provenance | Delivery | `P0A-STATE-01/P0A-RBAC-01/P0A-API-03/P0A-API-04A/P0A-VISIBILITY-01/P0A-CONTRACT-DELETE-01/MIGRATION-INTEGRITY-01/P0A-IMG-01` | Not delivered | commit SHA + required CI URL + skip=0 + migration/restore logs + 三个 OCI digests/provenance |
 | `P0B-E2E-01` | P0 | admin 无终端完成 RSS 接入、测试、启用、采集、雷达/运行详情；重启后从 checkpoint 续采 | Product + Source Platform | `DELIVERY-01/P0A-IAM-01/P0A-NET-01/LEGAL-RIGHTS-01` + 有效 RSS | External pending | browser recording + run IDs + restart trace |
@@ -738,13 +738,13 @@ Foundation must-pass ID 集合是 `P0A-STATE-01`、`P0A-RBAC-01`、`P0A-API-03/0
 
 P2 必须交付固定的容器/编排 manifest、网络策略和身份策略。验收从恶意页面真实执行控制面探测、云元数据访问、DNS rebinding、文件读取、下载、持久 profile 和进程炸弹测试，并记录实际出站网络、容器身份、seccomp/AppArmor 加载状态和任务后销毁证据；只通过应用层 mock 不得标记 Integrated/Accepted。
 
-### P3：微信公众号（Spike 后约 10–20 工程日）
+### P3：微信公众号（本地代码完成，外部集成与验收待办）
 
-按 Spike 选定路径，交付账号身份、连接状态、增量、限流、编辑/删除、预览及 UI 重新授权，并用真实授权账号验证连续新增文章。供应商/平台审批、合同和实际新增内容另计；无法满足则 Blocked。
+已交付 OpenCLI/第三方 RSS 策略选择、预览、调度、去重、checkpoint 与明确失败码。剩余用真实 OpenCLI/Browser Bridge 或选定 RSSHub 路由验证连续新增文章、账号身份、限流及编辑/删除；供应商/平台授权另计。
 
-### P4：小红书（外部能力决策后排期）
+### P4：小红书（本地代码完成，外部集成与验收待办）
 
-只实现 Spike 判定为 go/constrained 的稳定授权路径，并用真实账号、真实新增/编辑/删除内容验收。
+已交付 OpenCLI/第三方 RSS 双策略的本地执行路径；剩余用真实账号及 Browser Bridge 或真实获权 Feed 验证新增/编辑/删除与登录失效。
 
 ### P5：补证与生产观察（5–8 工程日，另加 chaos 通过后连续 28 天）
 
@@ -839,7 +839,7 @@ P2 必须交付固定的容器/编排 manifest、网络策略和身份策略。�
 
 发布门禁包括迁移备份、隔离恢复演练、旧/新版本兼容和远端运行验证。当前迁移 runner 已在连接前核对 `drizzle/checksums.json` 的完整有序文件集，并在 `schema_migrations` 记录和复核 SHA-256；已登记 SQL 被改写、manifest 缺项/增项或数据库 hash 漂移都会 fail closed。PGlite fresh install 和当前开发 PostgreSQL 19→21→22→23 upgrade 已通过，但尚无“当前生产基线 → 目标 SHA”的升级/恢复日志，因此 `MIGRATION-INTEGRITY-01` 仍不能提升为 Delivered。
 
-当前步骤账本：`0003`–`0018` 的语义保持不变；`0019` 冻结来源状态，`0020` 建立独立 source proposal，`0021` 增加逐页 staged payload，`0022` 增加来源条目事件状态，`0023`–`0028` 分别增加独立权利审批、fetch outcome、SLO 排除、预算降频审计、legal-hold epoch 和 connector canary，`0029` 增加独立来源法律操作 capability，`0030` 增加 Social Evidence 人工修正与冻结策略，`0031` 删除来源凭据/连接会话字段与表并启用公开网页和平台 Feed connector release。`0000`–`0022` 已应用到开发 PostgreSQL并记录 checksum；`0023`–`0031` 仅在 PGlite fresh install 和回归中验证，尚未应用到开发或生产 PostgreSQL。历史负责人只在创建人仍是有效成员时回填，无法证明的旧来源保持空值并由巡检暴露；迁移和回填尚未形成签名交付证据。当前生产基线 upgrade 和隔离恢复演练仍未完成。发布人员不得仅凭“开发库已迁移”跳到步骤 4。
+当前步骤账本：`0003`–`0018` 的语义保持不变；`0019`–`0030` 依次冻结来源状态、提案、逐页提交、事件状态、权利、fetch outcome、SLO/预算、legal hold、canary、法律操作与 Social Evidence；`0031` 删除来源凭据/连接会话模型，`0032` 以 OpenCLI/RSS 双策略社交连接器替换误导性的公开 Feed 入口。`0000`–`0032` 已应用到本机开发 PostgreSQL 并通过迁移后浏览器复测；生产 PostgreSQL 升级、隔离恢复演练与目标环境证据仍未完成。
 
 ### 14.2 Shadow 与回滚
 

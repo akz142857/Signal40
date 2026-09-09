@@ -10,7 +10,9 @@ import {
 } from './source-lifecycle-status.ts';
 import type { NormalizedSourceItem } from './source-normalized-item.ts';
 
-export type SourceAdapterName = 'rss' | 'http' | 'web' | 'csv';
+export type SourceAdapterName = 'rss' | 'http' | 'web' | 'social' | 'csv';
+
+export type SocialDiscoveryMode = 'opencli' | 'rss';
 
 export type HttpJsonPaginationConfig = {
   mode: 'none' | 'page' | 'cursor' | 'since';
@@ -39,10 +41,42 @@ export type SourceConfigInput = {
   retention?: { mode: 'metadata' | 'raw'; days: number };
   mapping?: Record<string, string>;
   pagination?: HttpJsonPaginationConfig;
+  /** 社交平台发现策略：OpenCLI 按账号搜索，或读取第三方 RSSHub/Feed。 */
+  discoveryMode?: SocialDiscoveryMode;
+  accountName?: string;
+  searchLimit?: number;
   namespace?: string;
   connectorId?: string;
   connectorVersion?: string;
 };
+
+export function normalizeSourceRuntimeConfig(input: SourceConfigInput) {
+  const normalizedUrl = input.url ? assertPublicHttpUrl(input.url) : '';
+  const socialMaximum = input.namespace === 'wechat' ? 10 : input.namespace === 'xiaohongshu' ? 20 : 50;
+  const socialLimit = Math.max(1, Math.min(socialMaximum, input.searchLimit ?? socialMaximum));
+  return {
+    sourceType: input.sourceType,
+    url: normalizedUrl || undefined,
+    mapping: input.mapping ?? {},
+    pagination: input.adapter === 'http'
+      ? (input.pagination ?? { mode: 'none' as const })
+      : undefined,
+    discoveryMode: input.adapter === 'social' ? input.discoveryMode : undefined,
+    accountName: input.adapter === 'social' && input.discoveryMode === 'opencli'
+      ? input.accountName?.trim()
+      : undefined,
+    searchLimit: input.adapter === 'social' && input.discoveryMode === 'opencli'
+      ? socialLimit
+      : undefined,
+  };
+}
+
+export function sourceLocatorForConfig(input: SourceConfigInput) {
+  const config = normalizeSourceRuntimeConfig(input);
+  return input.adapter === 'social' && input.discoveryMode === 'opencli'
+    ? { kind: 'account-search', platform: input.namespace, accountName: config.accountName }
+    : { kind: 'url', url: config.url };
+}
 
 const SENSITIVE_SOURCE_QUERY_NAME = /(?:^|[-_.])(access|auth|credential|key|pass(?:word)?|secret|sig(?:nature)?|token)(?:$|[-_.])/i;
 
@@ -386,9 +420,27 @@ export function mapHttpJsonPage(payload: unknown, config: SourceConfigInput) {
 export function validateSourceConfig(input: SourceConfigInput, requireApproved = true) {
   const errors: string[] = [];
   if (!input.name?.trim() || input.name.length > 160) errors.push('来源名称必须为 1–160 个字符');
-  if (!['rss', 'http', 'web', 'csv'].includes(input.adapter)) errors.push('适配器无效');
+  if (!['rss', 'http', 'web', 'social', 'csv'].includes(input.adapter)) errors.push('适配器无效');
   if (['rss', 'http', 'web'].includes(input.adapter)) {
     try { if (!input.url) throw new Error(); else assertPublicHttpUrl(input.url); } catch { errors.push('RSS/HTTP/网页适配器必须提供公网 HTTP(S) URL'); }
+  }
+  if (input.adapter === 'social') {
+    if (!['opencli', 'rss'].includes(input.discoveryMode ?? '')) {
+      errors.push('社交来源必须选择 opencli 或 rss 发现策略');
+    } else if (input.discoveryMode === 'opencli') {
+      if (!input.accountName?.trim() || input.accountName.trim().length > 100) {
+        errors.push('OpenCLI 社交来源必须提供 1–100 个字符的账号名称');
+      }
+      if (input.url) {
+        try { assertPublicHttpUrl(input.url); } catch { errors.push('OpenCLI 种子文章 URL 必须是公网 HTTP(S) URL'); }
+      }
+      const maximum = input.namespace === 'wechat' ? 10 : input.namespace === 'xiaohongshu' ? 20 : 50;
+      if (input.searchLimit !== undefined && (!Number.isInteger(input.searchLimit) || input.searchLimit < 1 || input.searchLimit > maximum)) {
+        errors.push(`searchLimit 必须为 1–${maximum} 的整数`);
+      }
+    } else {
+      try { if (!input.url) throw new Error(); else assertPublicHttpUrl(input.url); } catch { errors.push('第三方 RSS 策略必须提供公网 HTTP(S) Feed URL'); }
+    }
   }
   if (input.scheduleCron && !isValidCron(input.scheduleCron)) errors.push('scheduleCron 格式无效或超出取值范围');
   if (!(SOURCE_RIGHTS_STATUSES as readonly string[]).includes(input.rightsStatus)) errors.push('rightsStatus 无效');

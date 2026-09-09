@@ -22,20 +22,23 @@ export async function POST(request: Request) {
   if (!idempotencyKey) return sourceApiError('Idempotency-Key 必填。', 400);
   let body: {
     name?: string;
-    adapter?: 'rss' | 'http' | 'web';
+    adapter?: 'rss' | 'http' | 'web' | 'social';
     platform?: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
     sourceType?: 'social' | 'media' | 'market' | 'filing' | 'company';
     url?: string;
+    discoveryMode?: 'opencli' | 'rss';
+    accountName?: string;
+    searchLimit?: number;
     scheduleCron?: string | null;
     requestNote?: string;
   };
   try { body = (await request.json()) as typeof body; }
   catch { return sourceApiError('请求体必须是 JSON。', 400); }
-  if (!body.adapter || !['rss', 'http', 'web'].includes(body.adapter) || !body.platform ||
+  if (!body.adapter || !['rss', 'http', 'web', 'social'].includes(body.adapter) || !body.platform ||
       !['rss', 'http_json', 'web_page', 'wechat', 'xiaohongshu'].includes(body.platform) ||
-      !body.sourceType || !body.name?.trim() || !body.url || !body.requestNote?.trim() ||
+      !body.sourceType || !body.name?.trim() || !body.requestNote?.trim() ||
       body.requestNote.trim().length < 10 || body.requestNote.trim().length > 1000) {
-    return sourceApiError('来源类型、公网 URL 与 10–1000 字的提案理由必填。', 422);
+    return sourceApiError('来源类型、名称与 10–1000 字的提案理由必填。', 422);
   }
   const connector = sourceConnectorByPlatform(body.platform);
   if (!connector || connector.adapter !== body.adapter || connector.availability !== 'available') {
@@ -43,16 +46,20 @@ export async function POST(request: Request) {
       errorCode: 'CONNECTOR_UNAVAILABLE',
     });
   }
-  let normalizedUrl: string;
-  try { normalizedUrl = assertPublicHttpUrl(body.url); }
+  let normalizedUrl = '';
+  try { normalizedUrl = body.url ? assertPublicHttpUrl(body.url) : ''; }
   catch (error) { return sourceApiError(error instanceof Error ? error.message : '来源 URL 无效。', 422); }
   const validation = validateSourceConfig({
     name: body.name,
     adapter: body.adapter,
     sourceType: body.sourceType,
     url: normalizedUrl,
+    discoveryMode: body.discoveryMode,
+    accountName: body.accountName,
+    searchLimit: body.searchLimit,
     scheduleCron: body.scheduleCron,
     rightsStatus: 'pending',
+    namespace: body.platform,
   }, false);
   if (!validation.valid) return sourceApiError('来源提案无效。', 422, { issues: validation.errors });
   const result = await createSourceProposal(db, {
@@ -61,6 +68,9 @@ export async function POST(request: Request) {
     platform: body.platform,
     sourceType: body.sourceType,
     url: normalizedUrl,
+    discoveryMode: body.discoveryMode,
+    accountName: body.accountName?.trim(),
+    searchLimit: body.searchLimit,
     scheduleCron: body.scheduleCron ?? null,
     requestNote: body.requestNote.trim(),
     idempotencyKey,

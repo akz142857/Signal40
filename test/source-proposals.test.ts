@@ -105,12 +105,12 @@ void test('proposal creation and decisions are idempotent without creating dupli
   assert.equal(Number(((await db.client.query('SELECT COUNT(*) AS total FROM source_configs')).rows[0] as { total: number }).total), 1);
 });
 
-void test('public web and platform feed proposals use the same governed workflow', async () => {
+void test('public web and social discovery proposals use the same governed workflow', async () => {
   const db = await createMemoryPg();
   const cases = [
     { platform: 'web_page' as const, adapter: 'web' as const, url: 'https://example.com/hot' },
-    { platform: 'wechat' as const, adapter: 'rss' as const, url: 'https://example.com/wechat.xml' },
-    { platform: 'xiaohongshu' as const, adapter: 'rss' as const, url: 'https://example.com/xhs.xml' },
+    { platform: 'wechat' as const, adapter: 'social' as const, url: '', discoveryMode: 'opencli' as const, accountName: '聚大模型前言', searchLimit: 20 },
+    { platform: 'xiaohongshu' as const, adapter: 'social' as const, url: 'https://example.com/xhs.xml', discoveryMode: 'rss' as const },
   ];
   for (const [index, item] of cases.entries()) {
     const created = await createSourceProposal(db, {
@@ -124,5 +124,31 @@ void test('public web and platform feed proposals use the same governed workflow
     }, now);
     assert.equal('error' in created, false);
   }
-  assert.equal((await listSourceProposals(db, researcher)).length, 3);
+  const proposals = await listSourceProposals(db, researcher);
+  assert.equal(proposals.length, 3);
+  const openCliProposal = proposals.find((proposal) => proposal.discoveryMode === 'opencli');
+  assert.ok(openCliProposal);
+  const approved = await decideSourceProposal(db, {
+    proposalId: openCliProposal.id,
+    decision: 'approve',
+    note: '确认以 OpenCLI 搜索公开候选，并保持社交证据门禁。',
+    idempotencyKey: 'approve-opencli-social',
+    actor: admin,
+  }, now);
+  assert.equal('error' in approved, false);
+  const source = await db.client.query<{
+    adapter: string;
+    platform: string;
+    config_json: string;
+    locator_json: string | Record<string, unknown>;
+  }>("SELECT adapter, platform, config_json, locator_json FROM source_configs WHERE platform = 'wechat' LIMIT 1");
+  assert.equal(source.rows[0].adapter, 'social');
+  assert.equal(source.rows[0].platform, 'wechat');
+  const config = JSON.parse(source.rows[0].config_json) as Record<string, unknown>;
+  const locator = typeof source.rows[0].locator_json === 'string'
+    ? JSON.parse(source.rows[0].locator_json) as Record<string, unknown>
+    : source.rows[0].locator_json;
+  assert.equal(config.discoveryMode, 'opencli');
+  assert.equal(config.accountName, '聚大模型前言');
+  assert.equal(locator.kind, 'account-search');
 });

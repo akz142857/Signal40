@@ -13,7 +13,7 @@ void test('migration checksum manifest covers every PostgreSQL migration in orde
   const entries = await verifyMigrationManifest(migrationsDirectory);
   assert.ok(entries.length > 0);
   assert.equal(entries[0]?.file, '0000_baseline_postgres.sql');
-  assert.equal(entries.at(-1)?.file, '0031_remove_source_credentials.sql');
+  assert.equal(entries.at(-1)?.file, '0032_opencli_social_sources.sql');
 });
 
 void test('migration verification fails closed on changed or unregistered SQL', async () => {
