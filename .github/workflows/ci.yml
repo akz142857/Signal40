@@ -42,8 +42,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # runner 预装的 Google Chrome apt 源与 ffmpeg 无关，但它的索引校验失败
+      # （Hash Sum mismatch）会让 apt-get update 整体非零退出，连带阻断安装——
+      # 连续两次 run 因此在 npm ci 之前就红。先移除这个我们从不安装的第三方源，
+      # 官方源的 update 与 ffmpeg 的 install 仍然是硬门禁，不吞失败。
       - name: Install media probe dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - run: npm ci
       - run: npm audit --omit=dev
       - run: npm run lint
