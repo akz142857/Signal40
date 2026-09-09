@@ -77,7 +77,7 @@ export async function POST(request: Request) {
     canManageSourceLegal: Boolean(body.canManageSourceLegal),
   };
   const ownership = await db.transaction(async (tx) => {
-    await tx.prepare("INSERT INTO team_members (user_id, email, role, status, can_approve_source_rights, can_manage_source_legal, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?)").bind(member.userId, email, body.role, member.canApproveSourceRights ? 1 : 0, member.canManageSourceLegal ? 1 : 0, now, now).run();
+    await tx.prepare("INSERT INTO team_members (user_id, email, role, status, can_approve_source_rights, can_manage_source_legal, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)").bind(member.userId, email, body.role, member.canApproveSourceRights ? 1 : 0, member.canManageSourceLegal ? 1 : 0, now, now).run();
     await tx.prepare("INSERT INTO audit_events (id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at) VALUES (?, ?, ?, 'member.created', 'team_member', ?, ?, ?, ?, ?)").bind(`audit_${crypto.randomUUID()}`, actor.id, actor.role, member.userId, stableHash(member), JSON.stringify({ idempotencyKey: key, email, role: body.role, canApproveSourceRights: member.canApproveSourceRights, canManageSourceLegal: member.canManageSourceLegal }), crypto.randomUUID(), now).run();
     return reconcileSourceOwnership(tx, actor, new Date(now));
   });

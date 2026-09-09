@@ -167,7 +167,7 @@ export async function POST(request: Request) {
          monthly_budget_micros, budget_soft_limit_percent,
          schedule_priority, auto_throttle_enabled,
          enabled, version, schedule_cron, created_at, updated_at)
-      VALUES (?, 'default', 'default', ?, ?, ?, ?, ?, ?, ?, 'draft', 'unknown', ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+      VALUES (?, 'default', 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'unknown', ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
     `)
       .bind(
         id,
