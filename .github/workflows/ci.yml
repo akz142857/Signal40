@@ -48,7 +48,8 @@ jobs:
       # 官方源的 update 与 ffmpeg 的 install 仍然是硬门禁，不吞失败。
       - name: Install media probe dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list
+          # 按内容而不是文件名删：runner 上这个源可能是 .list 也可能是 deb822 的 .sources。
+          sudo grep -rls 'dl\.google\.com' /etc/apt/sources.list.d/ | sudo xargs -r rm -v -f
           sudo apt-get update
           sudo apt-get install -y ffmpeg
       - run: npm ci
