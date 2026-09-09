@@ -54,16 +54,17 @@ Signal 40 的正常使用方式应当是：
 
 | 项目 | 当前事实 |
 | --- | --- |
-| 记录时间 | 2026-09-09 15:54 +08 |
-| 代码范围 | `main@fedaa22` 之上的本地脏工作树 |
-| 实现提交 | 未提交；当前能力尚未形成可恢复的 Git 交付点 |
-| 远端 CI | 当前工作树未运行；不得沿用基线 SHA 的结果 |
-| 部署/制品 | 未部署、无 release manifest/SBOM/签名 provenance；来源凭据 Broker 及其镜像已删除。当前 tree 的 control-plane/source/render 镜像仍需在远端 CI 重新构建、扫描并记录 digest，不能沿用删除前的本机镜像证据 |
-| 最后完整本地验证 | 2026-09-09 本工作树发现 260 项测试：257 pass、0 fail、3 skip；跳过项仅为已轮换但尚未恢复的 R2/S3 远程对象存储契约。`tsc`、oxlint、production build、Redocly OAS 3.1 lint 和 33 项 migration checksum 通过；新增回归覆盖 OpenCLI JSON 映射、无 shell 参数、publisher 不伪造、社交提案与双策略连接器。OpenCLI 1.8.6 二进制可用，但 `doctor` 显示 Browser Bridge 未连接，因此真实搜索仍属外部验收待办 |
-| 最后完整验证后的改动 | 仅事实与证据文档同步；无代码改动 |
+| 记录时间 | 2026-09-09 22:32 +08 |
+| 代码范围 | `main@47a7596c459d24cec01412fd147f2f9c223ed77e`，已推送且与 `origin/main` 一致；工作树干净（仅 `CLAUDE.md` 有本地文档修改，不含代码） |
+| 实现提交 | 已提交：`70d4b76`（来源订阅与采集平台）、`bb5ad3a`（简化采集并加入 Social Evidence）、`47a7596`（OpenCLI 社交发现）。**可恢复 Git 交付点已存在**，此前“未提交”的记录作废 |
+| 远端 CI | 已在 `47a7596` 运行并**失败**：[run 34352893022](https://github.com/akz142857/Signal40/actions/runs/34352893022)，4 个 job 全红。① `application` 在 `Reject OpenAPI breaking changes` 步骤退出 1，其后的 `npm test`、canary 扫描、evaluation、`db:migrations:verify`、两次 `db:migrate`、`drill:restore`、`build`、`test:render` **全部未执行**（不是 skip，是未运行）；② `workload-images` 的 control/source/render 三个 job 均在 Trivy `vuln,misconfig` 扫描退出 1。**不得以本地全绿替代该结果** |
+| CI 阻断项 1：OAS 兼容 | 相对 baseline `bb5ad3a` 检出 4 项 breaking change，同一根因：`source-proposals` 响应的 `url` 由 `"string"` 变为 `["string","null"]`。**已核实为有意变更而非回归**：微信/小红书 OpenCLI 提案提交的是账号名而不是 URL（`test/source-proposals.test.ts` 的 wechat 用例 `url: ''`，`lib/source-proposals.ts:55` 显式投影为 `null`），`url` 同时从 `required` 移除，schema 与代码一致。**处置**：不回退该字段；改为按 §9.2 原设计锚定 baseline——新增 `contracts/openapi.baseline.yaml`（锚定 SHA `47a7596`），CI 由 `--baseline-git-ref ${{ github.event.before }}` 改为 `--baseline contracts/openapi.baseline.yaml`。原配置把「上一个提交」当基线，会让真实破坏性变更在下一个提交后自动消失、而正常 pre-GA 演进每次硬失败。已做负测试：把 `url` 收窄回 `string` 时 checker 仍报 4 项并 exit 1，门禁未被削弱 |
+| CI 阻断项 2：镜像漏洞 | 三个镜像的 `Node.js (node-pkg)` 各报 `Total: 11 (HIGH: 10, CRITICAL: 1)`，全部标记 `fixed`，故 `ignore-unfixed: true` 不生效：`tar` 7.5.11(CVE-2026-59873, CRITICAL)、`brace-expansion` 2.0.2(3 项)、`ip-address` 10.1.0、`pacote` 19.0.2/20.0.1、`picomatch` 4.0.3、`sigstore` 3.1.0。**归因已核实**：`docker run node:22-bookworm-slim ls /usr/local/lib/node_modules/npm/node_modules` 确认 6 个包全部属于基础镜像自带的 npm 10.9.8，不是应用依赖（`npm audit --omit=dev` 对生产依赖树报 0）。**升级 npm 不足以修复**：实测 npm@12.0.2 后 `brace-expansion` 仅到 5.0.7（需 5.0.9）、`ip-address` 仅到 10.2.0（需 10.3.1）、`tar` CRITICAL 仍在。**处置**：三个运行层镜像统一删除 npm/npx（`rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx`），控制面 CMD 改为 `node node_modules/vinext/dist/cli.js start`，compose 的 scheduler 改为 node 直调。已确认 `vinext` 仅在 `lint`/`deploy`/帮助文本中调用 npx，`start` 路径不涉及 |
+| 最后完整本地验证 | 2026-09-09 22:0x–22:3x 在上述干净树执行：260 项测试 **260 pass、0 fail、0 skip**——此前 3 项 R2/S3 远程对象存储契约本次真实执行并通过（分片上传耗时 21.5 s，为真实网络往返）。`tsc --noEmit`、oxlint、Redocly OAS 3.1 lint、33 项 migration checksum、100 例 evaluation（`gateAccuracy` 1、0 failures）与 production build 均通过。**但本地对象存储测试所用凭据是否为 `R-ROTATE-01` 要求轮换后的新凭据，无法从代码侧判定，该风险仍开放**。OpenCLI 1.8.6 二进制可用，但 `doctor` 显示 Browser Bridge 未连接，真实搜索仍属外部验收待办 |
+| 最后完整验证后的改动 | 无代码改动；仅本节事实账本、`DELIVERY-01` 状态与 `CLAUDE.md` 同步 |
 | 数据库 | manifest 已扩展到 `0000`–`0032` 共 33 项；`0032` 增加社交发现配置并以 OpenCLI/RSS 双策略 release 替换误导性的“平台公开 Feed”。PGlite fresh install 与本机开发 PostgreSQL `0000`–`0032` 升级均已通过；生产升级证据仍待目标环境执行 |
 | 迁移校验 | `drizzle/checksums.json` 覆盖 `0000`–`0032` 精确有序文件集和 SHA-256；runner 在连接数据库前校验文件，并在 `schema_migrations` 保存/核对 checksum；缺项、增项、改写和数据库 hash 漂移均 fail closed。PGlite fresh migration、旧开发 PostgreSQL 19→21→22→23 upgrade 已通过；`0023`–`0032` 的开发/生产升级、隔离 restore 和远端 CI 仍未验证 |
-| 可发布结论 | **否**；Foundation 整体为 `In progress`。`P0A-STATE-01` 已有本地关闭证据；`P0A-RBAC-01`、`P0A-API-03/04A` 和 `MIGRATION-INTEGRITY-01` 的代码/本地测试已显著推进，但各自仍缺浏览器/安全签字、已发布 baseline 或生产升级等更高层证据 |
+| 可发布结论 | **否**；Foundation 整体为 `In progress`。本轮变化是「可恢复提交」这一半前提已满足，但 `DELIVERY-01` 随即被远端 CI 红结果明确阻断，且阻断点在测试之前——`47a7596` 上没有任何远端测试/迁移/恢复证据。`P0A-STATE-01` 已有本地关闭证据；`P0A-RBAC-01`、`P0A-API-03/04A` 和 `MIGRATION-INTEGRITY-01` 的代码/本地测试已显著推进，但各自仍缺浏览器/安全签字、已发布 baseline 或生产升级等更高层证据 |
 
 后续快照必须绑定单一可还原的 commit/tree，记录基线/实现 commit SHA、全部 tracked/untracked 内容清单与哈希、完整 migration checksum、CI run URL、制品 digest/provenance、目标环境、验证命令/时间、skip 计数和批准人。唯一状态链是 `Implemented locally → Delivered → Deployed → Integrated → Accepted`：本地脏工作树证据不能支持 Delivered，部署了但未连通真实上游不能支持 Integrated，连通了但未签字不能支持 Accepted。
 
@@ -71,8 +72,8 @@ Signal 40 的正常使用方式应当是：
 
 | 证据包 | 当前状态 | 负责人/批准人 | 可证明 | 不可证明 |
 | --- | --- | --- | --- | --- |
-| `docs/evidence/SOURCE_INGESTION_LOCAL_2026-09-09.md` | 已登记；本地记录 | 执行人：Codex session；批准人：无 | 当前脏工作树上的测试、静态检查、开发 PostgreSQL 迁移、开发对象存储探针和本地镜像构建/rootfs 边界 | Git 交付、远端 CI、签名制品、部署、外部集成、产品/安全/法务验收 |
-| 远端 CI evidence | 未生成 | Owner：交付负责人 | 目标 commit 的可重复自动化结果 | 部署和真实平台行为 |
+| `docs/evidence/SOURCE_INGESTION_LOCAL_2026-09-09.md` | 已登记；本地记录（其描述的脏工作树已于 `47a7596` 提交固化） | 执行人：Codex session；批准人：无 | 该次记录范围内的测试、静态检查、开发 PostgreSQL 迁移、开发对象存储探针和本地镜像构建/rootfs 边界 | Git 交付、远端 CI、签名制品、部署、外部集成、产品/安全/法务验收 |
+| 远端 CI evidence | 已生成但为失败记录：`47a7596` 的 run 34352893022 四 job 全红，不构成交付证据 | Owner：交付负责人 | 该 commit 上哪些步骤被执行、哪些因前序失败而未执行 | 任何「测试通过」结论——application job 在 `npm test` 之前即中断 |
 | 环境 acceptance pack | 未生成 | Owner：对应工作包；批准人见 15.1 | 制品、目标环境、真实来源、恢复和安全边界 | 未列入 pack 的平台与能力 |
 | Social Evidence evaluation pack | 未生成 | Owner：Data/Editorial；批准人：产品与编辑负责人 | 声明级补证、独立性阈值和生产抽样 | 仅凭连接器采集成功推导内容可生产 |
 
@@ -636,18 +637,18 @@ P3/P4 的 `Accepted` 只证明平台连接器能在真实授权下稳定采集�
 | `P0A-RBAC-01` | P0 | 建立 action × role × resource 权限矩阵；researcher proposal 与 admin/rights approval 分离；高风险动作职责分离且不得自批 | Security + Product + Platform | `P0A-STATE-01` | In progress；可执行矩阵、proposal、显式 rights/legal capability、异人权利决定与 legal hold 解除、两名法律操作人存续门禁、API/UI/OAS/审计及负向 PG 回归已本地实现 | 仍缺真实身份下跨角色 API/browser 全矩阵与 Security/Legal sign-off |
 | `P0A-API-03` | P0 | 按 §9.1 分离 actor/Worker DTO，严格 allowlist 浏览器字段，禁止 cursor/object key/raw/error/Secret URL 等越界 | Security + Platform | `P0A-STATE-01/P0A-API-02` | In progress；Actor allowlist、Worker-only 读模型、敏感 URL 清理、严格 OAS/回归、合成 canary scanner、自检和 CI step 已本地实现 | 仍缺真实浏览器 HAR/录像、目标环境 log/trace/snapshot/export 实扫与 Security sign-off |
 | `P0A-API-04A` | P0 | 在本地/CI 接入 OAS 3.1 规范校验与 breaking-change 检查，冻结弃用窗口 | Delivery + Platform | `P0A-API-03` | Implemented locally；Redocly 0 warning、兼容 checker、90 天弃用规则和 CI required step 已入代码 | checker 及负测试通过；远端 required check 由 DELIVERY-01 验证 |
-| `P0A-API-04B` | P0 | 从首个已发布 SHA 保存不可变 baseline；不使用 dirty spec | Delivery + Platform | `P0A-API-04A/DELIVERY-01` | External pending | baseline artifact digest + commit SHA + CI URL |
+| `P0A-API-04B` | P0 | 从首个已发布 SHA 保存不可变 baseline；不使用 dirty spec | Delivery + Platform | `P0A-API-04A/DELIVERY-01` | In progress；机制已落地——`contracts/openapi.baseline.yaml` 为仓库内不可变锚点，CI 不再用漂移的 `github.event.before`，并有收窄类型的负测试。**但锚定 SHA `47a7596` 的 CI 从未通过，按 §9.2「第一个 baseline 只能证明基线被锚定，不能证明它向后兼容」，本项在 `DELIVERY-01` 指定已发布 SHA 并重新锚定前不得关闭** | baseline artifact digest + 已发布 commit SHA + 绿色 CI URL |
 | `P0A-VISIBILITY-01` | P0 | 逐页数据在 run complete 前 staged，不进入雷达/门禁/重算；complete 后一次性可见并只触发一次重算 | Platform | `P0A-STATE-01` | Implemented locally；`0021` staged payload、运行内 checkpoint、complete 原子发布/CAS/幂等重算已验证 | `SRC-VISIBILITY-001`；进程强杀/多 Worker 由 chaos gate 验证 |
 | `P0A-CONTRACT-DELETE-01` | P0 | 将 `NormalizedSourceItem` 冻结为 upsert/tombstone 判别联合，覆盖未知 ID、重放与删除后重现 | Platform + Legal | `P0A-STATE-01` | Implemented locally；严格 runtime/OAS 联合、HTTP 映射/UI、`0022` 最新事件状态、删除优先和显式较新恢复已实现 | `SRC-CONTRACT-DELETE-001`；真实上游与外部删除仍由 connector/LEGAL E2E 验证 |
 | `MIGRATION-INTEGRITY-01` | P0 | 为全部迁移维护不可变 checksum manifest，运行时/CI 校验 tag+hash；分别验证 fresh install 和 from-current-production upgrade | Delivery + DBA | 无 | In progress；`0000`–`0032` 的 33 项 manifest、runner/CI 校验、PGlite fresh、旧开发库 19→21→22→23 upgrade 和 drift-negative 已通过 | `0023`–`0032` 尚未在开发/生产基线升级；仍缺隔离 restore log 与远端 CI |
-| `P0A-IMG-01` | P0 | 构建上下文排除 `.env*`/私钥/云凭据；source/render 独立最小镜像与 env allowlist | Security + Delivery | 无 | In progress；allowlist-copy/non-root 镜像、Compose env allowlist和 CI 扫描矩阵已实现；Broker 镜像已从范围和构建矩阵删除 | `SRC-WORKLOAD-BOUNDARY-001/SRC-IMAGE-CANARY-001`；仍缺远端 SBOM/Trivy artifact、签名 provenance 与 Security sign-off |
+| `P0A-IMG-01` | P0 | 构建上下文排除 `.env*`/私钥/云凭据；source/render 独立最小镜像与 env allowlist | Security + Delivery | 无 | In progress；allowlist-copy/non-root 镜像、Compose env allowlist和 CI 扫描矩阵已实现；Broker 镜像已从范围和构建矩阵删除。新增：三个运行层不再携带 npm/npx，消除基础镜像自带包管理器带来的 11 项可修复 HIGH/CRITICAL，运行时只保留 node —— 清除效果待远端 CI 扫描确认 | `SRC-WORKLOAD-BOUNDARY-001/SRC-IMAGE-CANARY-001`；仍缺远端 SBOM/Trivy artifact、签名 provenance 与 Security sign-off |
 | `P0A-NET-01` | P0 | 默认拒绝 egress；用固定版本 IANA special-purpose corpus 验证 A/AAAA、mapped/NAT64/6to4、DNS/CNAME/逐跳 redirect/代理旁路/元数据 | Security + SRE | 目标环境 | In progress；应用层已固定 IANA 2025-10-09 IPv4/IPv6 corpus，mapped/NAT64/6to4 解包与相邻公网负向回归已实现 | 仍缺目标环境默认拒绝策略、代理旁路/CNAME/逐跳日志、actual remote IP/SNI、packet evidence 与 Security sign-off |
 | `P0A-IAM-01` | P0 | 准备目标环境唯一 team、首个 active admin、business owner、身份头来源、禁用同步和 break-glass | Security + SRE | 身份源 | External pending | provisioning record + two-account RBAC test + recovery drill |
 | `LEGAL-RIGHTS-01` | P0 | provisional assertion → verified grant；服务端治理 source type；不可变权利证据/条款快照 | Legal + Platform | 对应公开来源 | In progress；pending request→异人 verified grant、独立确认冻结 `sourceType`、严格 dossier、证据/条款 hash、配置漂移/自批/过期/撤销门禁已本地实现 | 仍缺真实 publisher/evidence-family 目录映射、公开来源 evidence artifact/dossier、到期/撤销环境演练与 Legal sign-off |
 | `E2E-WECHAT-SOCIAL-01` | P1 | 用真实 OpenCLI/Browser Bridge 或选定第三方 RSS 验证测试、启用、增量、去重与主体 unknown/verified 行为 | Product + Source Platform + Legal | OpenCLI 环境或真实 Feed | External pending | 浏览器记录、run ID 与权利 dossier |
 | `E2E-XHS-SOCIAL-01` | P1 | 用真实 OpenCLI/Browser Bridge 或获权第三方 RSS 验证测试、启用、增量与主体映射 | Product + Source Platform + Legal | OpenCLI 环境或真实 Feed | External pending | 浏览器记录、run ID 与权利 dossier |
 | `E2E-WEB-{site}` | P1 | 每个热榜/网页站点用公开页面独立验收，不用一份结论覆盖所有站点 | Product + Source Platform + Legal | 目标站点 | External pending | per-site dossier + browser run + review date |
-| `DELIVERY-01` | P0 | 固定单一目标 SHA；CI 必须包含 tsc/lint/test/evaluation/build/render、OAS 验证/兼容、迁移 fresh+upgrade、restore、secret/dependency/image scan，关键测试不得 skip；产出 control-plane/source/render 可追溯 OCI digest/provenance | Delivery | `P0A-STATE-01/P0A-RBAC-01/P0A-API-03/P0A-API-04A/P0A-VISIBILITY-01/P0A-CONTRACT-DELETE-01/MIGRATION-INTEGRITY-01/P0A-IMG-01` | Not delivered | commit SHA + required CI URL + skip=0 + migration/restore logs + 三个 OCI digests/provenance |
+| `DELIVERY-01` | P0 | 固定单一目标 SHA；CI 必须包含 tsc/lint/test/evaluation/build/render、OAS 验证/兼容、迁移 fresh+upgrade、restore、secret/dependency/image scan，关键测试不得 skip；产出 control-plane/source/render 可追溯 OCI digest/provenance | Delivery | `P0A-STATE-01/P0A-RBAC-01/P0A-API-03/P0A-API-04A/P0A-VISIBILITY-01/P0A-CONTRACT-DELETE-01/MIGRATION-INTEGRITY-01/P0A-IMG-01` | Not delivered；目标 SHA 已固定为 `47a7596` 且已推送，但该 SHA 的 required CI（run 34352893022）4 job 全红：OAS 兼容门禁在 `bb5ad3a` baseline 上检出 4 项 `source-proposals.url` breaking change 并中断 application job，其后测试/迁移/restore/build/render 未执行；三个镜像 job 均被 Trivy 可修复 HIGH×10+CRITICAL×1 阻断，未产出可追溯 OCI digest | 两个阻断项修复后重跑 CI，取 commit SHA + required CI URL + skip=0 + migration/restore logs + 三个 OCI digests/provenance |
 | `P0B-E2E-01` | P0 | admin 无终端完成 RSS 接入、测试、启用、采集、雷达/运行详情；重启后从 checkpoint 续采 | Product + Source Platform | `DELIVERY-01/P0A-IAM-01/P0A-NET-01/LEGAL-RIGHTS-01` + 有效 RSS | External pending | browser recording + run IDs + restart trace |
 | `P1A1-E2E-01` | P0 | 真实无凭据 Public JSON 验证多页、opaque cursor、429、网络中断、Worker 重启和同时间戳补发 | Source Platform | `DELIVERY-01/P0A-IAM-01/P0A-NET-01/LEGAL-RIGHTS-01` | External pending | upstream/run IDs + recovery trace |
 | `P0C-DRILL-01` | P0 | 目标环境演练 canary 命中/未命中与阈值自动停用，以及 kill/shadow/quarantine/cutover/recovery，并证明未 complete 页不可见 | SRE + Platform | `DELIVERY-01/P0A-VISIBILITY-01` | External pending；本地已覆盖稳定分桶、payload/run shadow 固化、最小样本阈值和自动 kill switch | drill log + before/after SQL/API/audit/run IDs |
@@ -954,7 +955,7 @@ Foundation GA 只代表连接器平台达到生产门槛，不代表 Social Evid
 | 阶段混合已完成和未开始工作 | 12 | 工作包状态、剩余、依赖和关闭证据逐项更新 |
 | 测试清单无法证明已执行 | 13 | 证据绑定可还原 tree/制品、完整命令、版本、skip、日志、时间、失效条件与独立批准人 |
 | 发布/回滚不可执行 | 14 | 每 connector acceptance pack 含 feature flag、kill switch、数据库事故决策树、RPO/RTO 与已实际运行的 runbook |
-| 迁移标签存在即被当作幂等/不可变 | 12.2、14.1 | `MIGRATION-INTEGRITY-01`关闭；32 项 checksum、fresh/upgrade 与 drift 负测试 |
+| 迁移标签存在即被当作幂等/不可变 | 12.2、14.1 | `MIGRATION-INTEGRITY-01`关闭；33 项 checksum、fresh/upgrade 与 drift 负测试 |
 | 外部平台导致总体永不完成 | 4、15.2、15.4 | Foundation、单 connector、Social Evidence、Vision 分层判定 |
 | 评审意见只有原则、无法排期 | 12.2 | 每个剩余项具备 ID、Owner、依赖、退出条件和关闭证据 |
 | 发布文案扩大真实能力 | 2.2、15.5 | README、状态页、release manifest 与证据等级一致 |
@@ -967,7 +968,7 @@ Foundation GA 只代表连接器平台达到生产门槛，不代表 Social Evid
 | 架构/数据一致性 | 按实体冻结状态；NormalizedSourceItem 改为 upsert/tombstone；逐页写入 staged；能力兼容只使用整数 protocol | `P0A-STATE-01/P0A-VISIBILITY-01/P0A-CONTRACT-DELETE-01` 已本地实现；外部 connector 行为与多 Worker chaos 仍待环境验收 |
 | 安全 | 纠正镜像 `.env`、RFC 6890 覆盖和浏览器响应的过度声明；冻结 actor/Worker DTO、canary 扫描和生产网络边界 | 已转为 `P0A-API-03/P0A-IMG-01/P0A-NET-01`；本地镜像/进程隔离及 layer canary 已实现，远端 SBOM/Trivy、目标网络、运行态 canary 与 Security 验收仍未完成 |
 | 运行/SRE | 公平调度、停机补跑、结构化退避、active run、SLO、预算、kill switch、shadow、quarantine、cutover 和恢复条件进入 8、11、14 | 已纳入方案；canary feature flag/稳定分桶/自动停用已本地实现，多实例目标环境演练与真实观察尚缺 |
-| 交付/验收 | 统一五级状态，拆分 API-04A/04B，补全 32 项迁移完整性、必需 CI、OCI digest/provenance、执行批次、决策树与 28 天观察 | 已转为 `MIGRATION-INTEGRITY-01/DELIVERY-01/P1B-SLO-01/P1B-OBS-01`；当前 dirty tree 证据不支持 Delivered |
+| 交付/验收 | 统一五级状态，拆分 API-04A/04B，补全 33 项迁移完整性、必需 CI、OCI digest/provenance、执行批次、决策树与 28 天观察 | 已转为 `MIGRATION-INTEGRITY-01/DELIVERY-01/P1B-SLO-01/P1B-OBS-01`；实现已落到 `47a7596`，但该 SHA 的 required CI 失败，仍不支持 Delivered |
 | 法务/治理 | 区分 provisional assertion 与 verified grant；配置变化不刷新权利；删除降级为来源范围编排，补物理数据和 legal hold 职责分离 | 已转为 `LEGAL-RIGHTS-01/LEGAL-E2E-01`；当前不得显示“依法删除已完成” |
 
 “已纳入方案”只表示评审意见已转化为可执行要求，不表示对应代码、外部接入或验收已经完成。各项当前事实仍以 2.1 和 12 的账本为准。
@@ -987,5 +988,6 @@ Foundation GA 只代表连接器平台达到生产门槛，不代表 Social Evid
 | `R-OBS-01` | 观察期和阈值可能成为移动球门 | 7 天仅 pre-GA，28 天是硬门禁；启动前先签字 SLO | SRE + Product | chaos 前 | 观察中改口径则时钟重置 |
 | `R-SOCIAL-01` | 公众号/小红书/热榜被误报支持 | 默认 hidden/disabled，按 connector 独立 Spike | Product + Legal | 加入 manifest 前 | 平台/合同/删除路径变化自动降级 Blocked |
 | `R-RUNBOOK-01` | 恢复文档参数与脚本不一致 | 当前 runbook 不可作为执行证据 | SRE | `DELIVERY-01` 前 | 示例未在隔离库实跑或任一命令安全失败 |
+| `R-CI-01` | 本地全绿与远端 CI 结果背离：`47a7596` 本地 260 pass/0 skip，但同一 SHA 的 required CI 4 job 全红，且 application job 在测试之前就中断 | 两个阻断项已定位并修复（OAS baseline 锚定、运行层移除 npm），**但在新的 CI run 全绿之前，`DELIVERY-01` 保持 Not delivered**；修复本身不构成交付证据。另注：CI 的 `Render image smoke` 此前从未真正执行过（每次都在更早的步骤失败），且其调用方式依赖镜像内不存在的 `scripts/render-smoke.ts` 与 `test/fixtures/`，已一并改为只读挂载后用 node 直调 | Delivery + Security | `DELIVERY-01` 前 | 以本地结果替代远端 required check，或为通过而放宽 OAS checker / 扫描阈值，即升级为 P0 |
 
 本表每周复核，但任务状态只在关闭证据产生时改变。风险接受必须绑定具体批准人、到期日和适用 connector/version；无期或泛化“已知风险”不是有效接受。

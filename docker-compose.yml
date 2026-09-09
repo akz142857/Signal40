@@ -107,7 +107,7 @@ services:
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       MONTHLY_RENDER_BUDGET_MICROS: ${MONTHLY_RENDER_BUDGET_MICROS:-0}
       SIGNAL40_DEPLOYMENT_MODE: development
-    command: ['npm', 'run', 'scheduler']
+    command: ['node', '--experimental-strip-types', 'scripts/scheduler.ts']
     depends_on:
       postgres: {condition: service_healthy}
     restart: unless-stopped

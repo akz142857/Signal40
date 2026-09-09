@@ -48,10 +48,11 @@ jobs:
       - run: npm audit --omit=dev
       - run: npm run lint
       - run: npm run openapi:lint
-      - name: Reject OpenAPI breaking changes against the published Git baseline
-        env:
-          OPENAPI_BASELINE_GIT_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
-        run: npm run openapi:breaking -- --baseline-git-ref "$OPENAPI_BASELINE_GIT_REF"
+      # 比对锚定的已发布 baseline，而不是「上一个提交」。用 github.event.before 会让
+      # baseline 随每次推送漂移：真实的破坏性变更在下一个提交后就自动「消失」，
+      # 而正常的 pre-GA schema 演进反而每次都硬失败。锚点见 §9.2 / P0A-API-04B。
+      - name: Reject OpenAPI breaking changes against the anchored published baseline
+        run: npm run openapi:breaking -- --baseline contracts/openapi.baseline.yaml
       # 存储契约测试靠上面的 R2 secret 启用；没配就自动跳过。
       - run: npm test
       - name: Scan Actor DTO and redacted source artifacts for sensitive canary variants
@@ -142,9 +143,17 @@ jobs:
           artifact-name: signal40-${{ matrix.profile }}-${{ github.sha }}.spdx.json
           output-file: signal40-${{ matrix.profile }}.spdx.json
           upload-release-assets: false
+      # 镜像里没有 npm 了，直接调 node。render-smoke.ts 和它依赖的 test/fixtures 是测试资产，
+      # 不进生产镜像——只读挂进去跑，镜像自己的 lib/render-worker/video/node_modules 和
+      # Chromium/FFmpeg 才是被冒烟的对象。
       - name: Render image smoke
         if: matrix.profile == 'render'
-        run: docker run --rm --shm-size=1g --entrypoint npm "${{ matrix.image }}" run test:render
+        run: |
+          docker run --rm --shm-size=1g \
+            -v "$PWD/scripts/render-smoke.ts:/app/scripts/render-smoke.ts:ro" \
+            -v "$PWD/test/fixtures:/app/test/fixtures:ro" \
+            --entrypoint node "${{ matrix.image }}" \
+            --experimental-strip-types scripts/render-smoke.ts
       - name: Remove build-context canaries
         if: always()
         run: npm run image:canary:cleanup
