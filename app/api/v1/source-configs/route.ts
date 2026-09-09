@@ -24,14 +24,13 @@ export async function GET(request: Request) {
   const result = await db
     .prepare(`
     SELECT id, name, adapter, platform, team_id, owner_team_id,
-      business_owner_id, credential_steward_id, backup_admin_id,
+      business_owner_id, publisher_entity_id,
       config_json, lifecycle_status, health_status, rights_status,
       rate_limit_per_minute, cost_micros_per_request, estimated_requests_per_run,
       monthly_budget_micros, budget_soft_limit_percent,
       schedule_priority, auto_throttle_enabled, effective_schedule_multiplier,
       schedule_throttle_reason, schedule_throttle_recovery_at,
       retention_mode, retention_days, enabled, version,
-      credential_ref, credential_version,
       schedule_cron, checkpoint_version,
       next_run_at, retry_after, backoff_until, last_attempt_at, last_success_at,
       last_healthy_at, last_tested_at, last_error_code,
@@ -64,8 +63,7 @@ export async function POST(request: Request) {
     billingPolicy?: unknown;
     schedulePolicy?: unknown;
     businessOwnerId?: string;
-    credentialStewardId?: string;
-    backupAdminId?: string | null;
+    publisherEntityId?: string | null;
   };
   try {
     input = (await request.json()) as typeof input;
@@ -89,11 +87,15 @@ export async function POST(request: Request) {
   }
   const ownership = await validateSourceOwnershipMembers(db, {
     businessOwnerId: input.businessOwnerId ?? actor!.id,
-    credentialStewardId: input.credentialStewardId ?? actor!.id,
-    backupAdminId: input.backupAdminId,
   });
   if ('error' in ownership) {
     return sourceApiError(ownership.error ?? '来源维护责任无效。', 422);
+  }
+  const publisherEntityId = input.publisherEntityId?.trim() || null;
+  if (publisherEntityId) {
+    const publisher = await db.prepare('SELECT id FROM publisher_entities WHERE id = ? LIMIT 1')
+      .bind(publisherEntityId).first<{ id: string }>();
+    if (!publisher) return sourceApiError('publisher entity 不存在。', 422);
   }
 
   const platform = input.platform ?? platformForAdapter(input.adapter);
@@ -119,12 +121,7 @@ export async function POST(request: Request) {
         ? (input.pagination ?? { mode: 'none' as const })
         : undefined,
   };
-  const configHash = stableHash({
-    platform,
-    adapter: input.adapter,
-    config,
-    credentialVersion: 0,
-  });
+  const configHash = stableHash({ platform, adapter: input.adapter, config });
   const locator = { kind: 'url', url: normalizedUrl };
   const locatorHash = stableHash({ teamId: 'default', platform, locator });
   const rateLimitPerMinute = input.rateLimitPerMinute ?? 30;
@@ -134,6 +131,7 @@ export async function POST(request: Request) {
     adapter: input.adapter,
     config,
     retention,
+    publisherEntityId,
   });
   const collectionPolicy = {
     scheduleCron: input.scheduleCron ?? null,
@@ -163,21 +161,19 @@ export async function POST(request: Request) {
     await tx
       .prepare(`
       INSERT INTO source_configs
-        (id, team_id, owner_team_id, business_owner_id, credential_steward_id,
-         backup_admin_id, name, adapter, platform, config_json, locator_json, locator_hash,
+        (id, team_id, owner_team_id, business_owner_id,
+         name, adapter, platform, config_json, locator_json, locator_hash,
          collection_policy_json, capabilities_json, lifecycle_status, health_status,
-         config_hash, rights_config_hash, source_type, rights_status, rate_limit_per_minute, retention_mode,
+         config_hash, rights_config_hash, source_type, publisher_entity_id, rights_status, rate_limit_per_minute, retention_mode,
          retention_days, cost_micros_per_request, estimated_requests_per_run,
          monthly_budget_micros, budget_soft_limit_percent,
          schedule_priority, auto_throttle_enabled,
          enabled, version, schedule_cron, created_at, updated_at)
-      VALUES (?, 'default', 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'unknown', ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+      VALUES (?, 'default', 'default', ?, ?, ?, ?, ?, ?, ?, 'draft', 'unknown', ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
     `)
       .bind(
         id,
         ownership.assignment.businessOwnerId,
-        ownership.assignment.credentialStewardId,
-        ownership.assignment.backupAdminId,
         input.name.trim(),
         input.adapter,
         platform,
@@ -189,6 +185,7 @@ export async function POST(request: Request) {
         configHash,
         rightsConfigHash,
         input.sourceType,
+        publisherEntityId,
         rateLimitPerMinute,
         retention.mode,
         retention.days,

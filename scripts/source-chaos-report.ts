@@ -444,7 +444,7 @@ export async function runLocalSourceChaosDrill() {
       'real process/container SIGKILL at every boundary',
       'real 429, timeout, socket disconnect, DNS and clock-skew injection',
       'real multipart/object-store partial failure and orphan sweeper',
-      'credential and rights mutation through deployed APIs during an in-flight run',
+      'source config and rights mutation through deployed APIs during an in-flight run',
       'mixed deployed image versions and remote before/after SQL evidence',
     ],
   };

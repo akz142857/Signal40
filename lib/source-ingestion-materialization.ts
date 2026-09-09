@@ -7,6 +7,7 @@ import {
   type NormalizedSourceItem,
   type NormalizedSourceUpsert,
 } from './source-normalized-item.ts';
+import { classifyOriginRelationship } from './source-relationship-classifier.ts';
 
 export type StagedIngestionPayload = {
   /** page-v2/new workers use the discriminated union; legacy pages are upgraded below. */
@@ -176,6 +177,21 @@ export async function materializeIngestionPayload(
   const normalized: Article[] = [];
   let duplicateCount = Math.max(0, input.payload.skippedCount);
   let changedCount = 0;
+  const publisher = input.publisherEntityId
+    ? await db.prepare('SELECT identifiers_json FROM publisher_entities WHERE id = ? LIMIT 1')
+      .bind(input.publisherEntityId).first<{ identifiers_json: unknown }>()
+    : null;
+  let publisherIdentifiers: Record<string, string> = {};
+  if (publisher?.identifiers_json && typeof publisher.identifiers_json === 'object') {
+    publisherIdentifiers = publisher.identifiers_json as Record<string, string>;
+  } else if (typeof publisher?.identifiers_json === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(publisher.identifiers_json);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        publisherIdentifiers = parsed as Record<string, string>;
+      }
+    } catch { /* 损坏的治理元数据必须失败关闭为 unknown，而不是中断整批采集。 */ }
+  }
 
   for (const item of candidateItems) {
     const eventAt = sourceItemEventAt(item);
@@ -230,21 +246,24 @@ export async function materializeIngestionPayload(
     const revision = await db.prepare(`
       SELECT id FROM article_revisions WHERE article_id = ? ORDER BY revision DESC LIMIT 1
     `).bind(canonical.id).first<{ id: string }>();
+    const classification = classifyOriginRelationship(canonical, publisherIdentifiers);
     await db.prepare(`
       INSERT INTO source_item_origins
         (id, source_config_id, namespace, platform_item_id, article_id,
          article_revision_id, ingestion_run_id, canonical_url_hash,
          fingerprint_version, content_fingerprint, relationship,
          evidence_family_id, publisher_entity_id, confidence, first_seen_at, last_seen_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'content-v1', ?, 'unknown', ?, ?, 0, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'content-v1', ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (source_config_id, namespace, platform_item_id) DO UPDATE SET
         article_id = excluded.article_id,
         article_revision_id = excluded.article_revision_id,
         ingestion_run_id = excluded.ingestion_run_id,
         canonical_url_hash = excluded.canonical_url_hash,
         content_fingerprint = excluded.content_fingerprint,
+        relationship = excluded.relationship,
         evidence_family_id = excluded.evidence_family_id,
         publisher_entity_id = excluded.publisher_entity_id,
+        confidence = excluded.confidence,
         last_seen_at = excluded.last_seen_at,
         deleted_at = NULL
     `).bind(
@@ -257,8 +276,10 @@ export async function materializeIngestionPayload(
       input.ingestionRunId,
       sha256Hex(canonical.url),
       canonical.contentHash,
+      classification.relationship,
       `family_${canonical.contentHash}`,
       input.publisherEntityId ?? input.sourceConfigId,
+      classification.confidence,
       input.observedAt.toISOString(),
       input.observedAt.toISOString(),
     ).run();

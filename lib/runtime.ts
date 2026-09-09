@@ -130,16 +130,6 @@ export const config = {
     return process.env.SIGNAL40_ATTENTION_WEBHOOK_URL;
   },
   /**
-   * HTTP JSON Secret Header 的服务端 allowlist。值只描述 alias -> env var/origin/header 的绑定，
-   * 长期 Secret 本身仍只从对应环境变量读取，绝不进入数据库或客户端响应。
-   */
-  get sourceCredentialPoliciesJson() {
-    return process.env.SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON;
-  },
-  resolveSourceCredentialSecret(environmentName: string) {
-    return process.env[environmentName];
-  },
-  /**
    * 反向代理注入身份头时用的头名。默认沿用 OpenAI Sites 时期的 `oai-authenticated-user-*`，
    * 自建部署把认证代理配成注入自己的头名即可，不用改代码。
    */

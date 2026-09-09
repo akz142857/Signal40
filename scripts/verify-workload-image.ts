@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 
-type Profile = 'control' | 'source' | 'render' | 'broker';
+type Profile = 'control' | 'source' | 'render';
 
 function argument(name: string) {
   const index = process.argv.indexOf(name);
@@ -14,8 +14,8 @@ const canary = process.env.SIGNAL40_IMAGE_SCAN_CANARY;
 if (!image || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(image)) {
   throw new Error('--image 必须是明确且安全的本地镜像引用。');
 }
-if (!profile || !['control', 'source', 'render', 'broker'].includes(profile)) {
-  throw new Error('--profile 必须是 control/source/render/broker。');
+if (!profile || !['control', 'source', 'render'].includes(profile)) {
+  throw new Error('--profile 必须是 control/source/render。');
 }
 if (!canary || canary.length < 16) {
   throw new Error('SIGNAL40_IMAGE_SCAN_CANARY 必须是至少 16 字符的非生产测试值。');
@@ -43,8 +43,7 @@ if (!environment.includes('SIGNAL40_DEPLOYMENT_MODE=production')) {
 const forbiddenEnvironment: Record<Profile, string[]> = {
   control: ['SIGNAL40_MARKET_DATA_KEY', 'OPENAI_API_KEY', 'YOUTUBE_ACCESS_TOKEN'],
   source: ['DATABASE_URL', 'S3_SECRET_ACCESS_KEY', 'OPENAI_API_KEY', 'YOUTUBE_ACCESS_TOKEN'],
-  render: ['DATABASE_URL', 'S3_SECRET_ACCESS_KEY', 'SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON'],
-  broker: ['S3_SECRET_ACCESS_KEY', 'OPENAI_API_KEY', 'YOUTUBE_ACCESS_TOKEN', 'SIGNAL40_RENDER_WORKER_TOKEN'],
+  render: ['DATABASE_URL', 'S3_SECRET_ACCESS_KEY'],
 };
 for (const name of forbiddenEnvironment[profile]) {
   if (environment.some((value) => value.startsWith(`${name}=`))) {
@@ -72,14 +71,6 @@ const rootfsChecks: Record<Profile, string[]> = {
     'test ! -e /app/.env',
     'command -v chromium >/dev/null',
     'command -v ffmpeg >/dev/null',
-  ],
-  broker: [
-    'test ! -e /app/.env',
-    'test ! -d /app/render-worker',
-    'test ! -d /app/video',
-    'test ! -e /app/scripts/media-qc.ts',
-    '! command -v chromium',
-    '! command -v ffmpeg',
   ],
 };
 docker(['run', '--rm', '--entrypoint', 'sh', image, '-c', [

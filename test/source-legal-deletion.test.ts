@@ -237,6 +237,13 @@ void test('object failure is retryable and database content is removed only afte
       'run-delete', 'url-hash', 'v1', 'fingerprint', $1, $1)
   `, [now.toISOString()]);
   await db.client.query(`
+    INSERT INTO source_origin_corrections
+      (id, origin_id, evidence_family_id, relationship, confidence,
+       publisher_entity_id, created_by, reason, created_at)
+    VALUES ('correction-delete', 'origin-delete', 'family-delete', 'original', 95,
+      'publisher-delete', 'admin-delete', 'Verified editorial correction', $1)
+  `, [now.toISOString()]);
+  await db.client.query(`
     INSERT INTO raw_payload_uploads
       (id, source_config_id, ingestion_run_id, state, object_key, sha256, byte_size,
        created_at, updated_at, expires_at, delete_after)
@@ -260,6 +267,7 @@ void test('object failure is retryable and database content is removed only afte
   assert.equal(completed.completed, true);
   assert.equal(storage.keys.has(objectKey), false);
   assert.equal(firstRow<{ total: number }>(await db.client.query("SELECT COUNT(*)::int AS total FROM articles WHERE id = 'article-delete'")).total, 0);
+  assert.equal(firstRow<{ total: number }>(await db.client.query("SELECT COUNT(*)::int AS total FROM source_origin_corrections WHERE id = 'correction-delete'")).total, 0);
   const item = await db.client.query("SELECT object_key, status, receipt_hash, receipt_json FROM source_deletion_items WHERE kind = 'raw_object'");
   const itemRow = firstRow<{ object_key: null; status: string; receipt_hash: string; receipt_json: unknown }>(item);
   assert.equal(itemRow.object_key, null);
@@ -361,7 +369,7 @@ void test('published content blocks final deletion until the publish worker conf
   const retried = await retrySourceLegalDeletion(db, {
     sourceId: 'source-published',
     deletionRequestId: 'deletionRequestId' in requested ? String(requested.deletionRequestId) : '',
-    reason: 'Provider credentials repaired',
+    reason: 'Platform withdrawal access restored',
     actor,
   }, new Date(now.valueOf() + 3_000));
   assert.equal('error' in retried, false);

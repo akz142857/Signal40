@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   DatabaseZap,
   History,
-  KeyRound,
   ListPlus,
   LoaderCircle,
   Play,
@@ -44,8 +43,8 @@ import type {
 type SourceRow = {
   id: string;
   name: string;
-  adapter: 'rss' | 'http';
-  platform: 'rss' | 'http_json';
+  adapter: 'rss' | 'http' | 'web';
+  platform: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
   lifecycleStatus: Exclude<SourceLifecycleStatus, 'archived'>;
   healthStatus: SourceHealthStatus;
   rightsStatus: SourceRightsStatus;
@@ -53,10 +52,7 @@ type SourceRow = {
   version: number;
   ownerTeamId: string | null;
   businessOwnerId: string | null;
-  credentialStewardId: string | null;
-  backupAdminId: string | null;
-  hasCredential: boolean;
-  credentialVersion: number;
+  publisherEntityId: string | null;
   scheduleCron: string | null;
   checkpointVersion: number;
   nextRunAt: string | null;
@@ -130,8 +126,8 @@ type IngestionRun = {
 type SourceImportCandidate = {
   row: number;
   name: string;
-  adapter: 'rss' | 'http';
-  platform: 'rss' | 'http_json';
+  adapter: 'rss' | 'http' | 'web';
+  platform: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
   sourceType: 'social' | 'media' | 'market' | 'filing' | 'company';
   url: string;
   scheduleCron: string | null;
@@ -157,6 +153,7 @@ type ConnectorRelease = {
   id: string;
   version: string;
   platform: string;
+  adapter: 'rss' | 'http' | 'web';
   label: string;
   availability: 'available' | 'blocked';
   rolloutMode: ConnectorReleaseMode;
@@ -170,11 +167,6 @@ type ConnectorRelease = {
   canaryStoppedAt: string | null;
   effectiveAvailability: 'available' | 'blocked';
 };
-type CredentialPolicy = {
-  alias: string;
-  targetOrigins: string[];
-  headerName: string;
-};
 type TeamMember = {
   user_id: string;
   email: string;
@@ -185,8 +177,6 @@ type TeamMember = {
 };
 type OwnershipDraft = {
   businessOwnerId: string;
-  credentialStewardId: string;
-  backupAdminId: string;
 };
 
 type SourceSloExclusion = {
@@ -256,7 +246,6 @@ const lifecycleLabels: Record<SourceLifecycleStatus, string> = {
   tested: '已测试',
   enabled: '运行中',
   degraded: '运行异常',
-  auth_required: '需重新授权',
   paused: '已暂停',
   archived: '已归档',
 };
@@ -265,7 +254,6 @@ const healthLabels: Record<SourceHealthStatus, string> = {
   unknown: '未检测',
   healthy: '正常',
   degraded: '异常',
-  auth_required: '需授权',
   paused: '已暂停',
   waiting_capacity: '等待执行能力',
 };
@@ -395,7 +383,7 @@ function SourceProposalWorkspace() {
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
-  const [platform, setPlatform] = useState<'rss' | 'http_json'>('rss');
+  const [platform, setPlatform] = useState<'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu'>('rss');
   const [sourceType, setSourceType] = useState<SourceProposal['sourceType']>('media');
   const [scheduleCron, setScheduleCron] = useState('0 */2 * * *');
   const [requestNote, setRequestNote] = useState('');
@@ -429,7 +417,7 @@ function SourceProposalWorkspace() {
           name,
           url,
           platform,
-          adapter: platform === 'rss' ? 'rss' : 'http',
+          adapter: platform === 'http_json' ? 'http' : platform === 'web_page' ? 'web' : 'rss',
           sourceType,
           scheduleCron: scheduleCron || null,
           requestNote,
@@ -451,11 +439,11 @@ function SourceProposalWorkspace() {
       <div className="mx-auto grid max-w-5xl gap-6 px-4 py-6 sm:px-7 lg:grid-cols-[360px_1fr]">
         <section className="h-fit rounded-2xl border bg-card p-5">
           <h1 className="text-xl font-semibold">提案新来源</h1>
-          <p className="mt-2 text-sm text-muted-foreground">这里只提交建议，不会自动授权、绑定凭据或启用采集。</p>
+          <p className="mt-2 text-sm text-muted-foreground">这里只提交建议，不会自动授权或启用采集。</p>
           <div className="mt-5 grid gap-4">
             <div className="grid gap-2"><Label htmlFor="proposal-name">来源名称</Label><Input id="proposal-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
             <div className="grid gap-2"><Label htmlFor="proposal-url">公网 URL</Label><Input id="proposal-url" type="url" value={url} onChange={(event) => setUrl(event.target.value)} /></div>
-            <div className="grid gap-2"><Label htmlFor="proposal-platform">来源类型</Label><NativeSelect id="proposal-platform" value={platform} onChange={(event) => setPlatform(event.target.value as typeof platform)}><NativeSelectOption value="rss">RSS / Atom</NativeSelectOption><NativeSelectOption value="http_json">Public JSON</NativeSelectOption></NativeSelect></div>
+            <div className="grid gap-2"><Label htmlFor="proposal-platform">来源类型</Label><NativeSelect id="proposal-platform" value={platform} onChange={(event) => setPlatform(event.target.value as typeof platform)}><NativeSelectOption value="rss">RSS / Atom</NativeSelectOption><NativeSelectOption value="http_json">Public JSON</NativeSelectOption><NativeSelectOption value="web_page">公开网页 / 热榜</NativeSelectOption><NativeSelectOption value="wechat">微信公众号公开 Feed</NativeSelectOption><NativeSelectOption value="xiaohongshu">小红书公开 Feed</NativeSelectOption></NativeSelect></div>
             <div className="grid gap-2"><Label htmlFor="proposal-source-type">内容类型</Label><NativeSelect id="proposal-source-type" value={sourceType} onChange={(event) => setSourceType(event.target.value as SourceProposal['sourceType'])}>{['social', 'media', 'market', 'filing', 'company'].map((value) => <NativeSelectOption key={value} value={value}>{value}</NativeSelectOption>)}</NativeSelect></div>
             <div className="grid gap-2"><Label htmlFor="proposal-cron">建议频率</Label><Input id="proposal-cron" value={scheduleCron} onChange={(event) => setScheduleCron(event.target.value)} /></div>
             <div className="grid gap-2"><Label htmlFor="proposal-note">业务理由（至少 10 字）</Label><Textarea id="proposal-note" value={requestNote} onChange={(event) => setRequestNote(event.target.value)} /></div>
@@ -554,13 +542,8 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [workers, setWorkers] = useState<WorkerRow[]>([]);
   const [connectors, setConnectors] = useState<ConnectorRelease[]>([]);
-  const [credentialPolicies, setCredentialPolicies] = useState<
-    CredentialPolicy[]
-  >([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [businessOwnerId, setBusinessOwnerId] = useState('');
-  const [credentialStewardId, setCredentialStewardId] = useState('');
-  const [backupAdminId, setBackupAdminId] = useState('');
   const [ownershipDrafts, setOwnershipDrafts] = useState<
     Record<string, OwnershipDraft>
   >({});
@@ -588,11 +571,11 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
   >({});
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
-  const [platform, setPlatform] = useState<'rss' | 'http_json'>('rss');
+  const [platform, setPlatform] = useState<'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu'>('rss');
   const [sourceType, setSourceType] = useState('media');
+  const [publisherEntityId, setPublisherEntityId] = useState('');
   const [cron, setCron] = useState('0 */2 * * *');
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
-  const [credentialAlias, setCredentialAlias] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [itemsPath, setItemsPath] = useState('items');
   const [idPath, setIdPath] = useState('id');
@@ -645,7 +628,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       sourceResponse,
       workerResponse,
       connectorResponse,
-      credentialResponse,
       memberResponse,
     ] = await Promise.all([
       fetch('/api/v1/source-configs', {
@@ -654,10 +636,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       }),
       fetch('/api/v1/workers', { cache: 'no-store', headers: adminHeaders() }),
       fetch('/api/v1/source-connectors', {
-        cache: 'no-store',
-        headers: adminHeaders(),
-      }),
-      fetch('/api/v1/source-credentials/policies', {
         cache: 'no-store',
         headers: adminHeaders(),
       }),
@@ -680,11 +658,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
         ((await connectorResponse.json()) as { connectors: ConnectorRelease[] })
           .connectors,
       );
-    if (credentialResponse.ok)
-      setCredentialPolicies(
-        ((await credentialResponse.json()) as { policies: CredentialPolicy[] })
-          .policies,
-      );
     if (memberResponse.ok) {
       const nextMembers = (
         (await memberResponse.json()) as { members: TeamMember[] }
@@ -693,13 +666,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       const activeOwners = nextMembers.filter(
         (member) => member.status === 'active' && member.role !== 'auditor',
       );
-      const activeAdmins = nextMembers.filter(
-        (member) => member.status === 'active' && member.role === 'admin',
-      );
       setBusinessOwnerId((current) => current || activeOwners[0]?.user_id || '');
-      setCredentialStewardId(
-        (current) => current || activeAdmins[0]?.user_id || '',
-      );
     }
     setMessage(
       sourcePayload.sources.length
@@ -730,16 +697,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
     () => connectors.find((connector) => connector.platform === platform),
     [connectors, platform],
   );
-  const eligibleCredentialPolicies = useMemo(() => {
-    try {
-      const origin = new URL(url).origin;
-      return credentialPolicies.filter((policy) =>
-        policy.targetOrigins.includes(origin),
-      );
-    } catch {
-      return [];
-    }
-  }, [credentialPolicies, url]);
   const activeOwnerMembers = useMemo(
     () =>
       members.filter(
@@ -832,7 +789,8 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
   const createSource = async () => {
     setBusy(true);
     try {
-      const adapter = platform === 'rss' ? 'rss' : 'http';
+      const adapter = selectedConnector?.adapter;
+      if (!adapter) throw new Error('连接器未加载。');
       const mapping =
         platform === 'http_json'
           ? {
@@ -901,8 +859,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
             autoThrottleEnabled,
           },
           businessOwnerId,
-          credentialStewardId,
-          backupAdminId: backupAdminId || null,
+          publisherEntityId: publisherEntityId || null,
           retention: { mode: retentionMode, days: Number(retentionDays) },
         }),
       });
@@ -913,22 +870,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       };
       const sourceId = payload.source?.id ?? payload.sourceId;
       if (!sourceId) throw new Error('来源已保存，但响应缺少来源 ID。');
-      if (platform === 'http_json' && credentialAlias) {
-        const credentialResponse = await fetch(
-          `/api/v1/source-configs/${encodeURIComponent(sourceId)}/credentials`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', ...adminHeaders() },
-            body: JSON.stringify({
-              expectedVersion: payload.source?.version ?? 1,
-              alias: credentialAlias,
-              reason: '创建来源时绑定预配 credential alias',
-            }),
-          },
-        );
-        if (!credentialResponse.ok)
-          throw new Error(await errorText(credentialResponse));
-      }
       setPendingSourceId(sourceId);
       await refresh();
       await testSource(sourceId);
@@ -1123,8 +1064,8 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       if (!response.ok) throw new Error(await errorText(response));
       setName('');
       setUrl('');
+      setPublisherEntityId('');
       setRightsConfirmed(false);
-      setCredentialAlias('');
       setPreview([]);
       setPendingSourceId(null);
       setStep(1);
@@ -1197,8 +1138,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
   const transferOwnership = async (source: SourceRow) => {
     const draft = ownershipDrafts[source.id] ?? {
       businessOwnerId: source.businessOwnerId ?? '',
-      credentialStewardId: source.credentialStewardId ?? '',
-      backupAdminId: source.backupAdminId ?? '',
     };
     const reason = window
       .prompt(
@@ -1217,8 +1156,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
           body: JSON.stringify({
             expectedVersion: source.version,
             businessOwnerId: draft.businessOwnerId,
-            credentialStewardId: draft.credentialStewardId,
-            backupAdminId: draft.backupAdminId || null,
             reason,
           }),
         },
@@ -1233,92 +1170,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       setMessage(`${source.name} 的负责人已转移并写入审计。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '负责人转移失败。');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const bindCredential = async (source: SourceRow) => {
-    const aliases = credentialPolicies
-      .filter((policy) => {
-        try {
-          return policy.targetOrigins.includes(
-            new URL(source.publicConfig.url ?? '').origin,
-          );
-        } catch {
-          return false;
-        }
-      })
-      .map((policy) => policy.alias);
-    if (!aliases.length) {
-      setMessage('该来源 origin 没有服务端预配的 credential alias。');
-      return;
-    }
-    const alias = window
-      .prompt(
-        `输入要绑定的 credential alias：\n${aliases.join('\n')}`,
-        aliases[0],
-      )
-      ?.trim();
-    if (!alias || !aliases.includes(alias)) return;
-    const reason = window
-      .prompt(
-        source.hasCredential ? '请输入轮换原因：' : '请输入绑定原因：',
-        source.hasCredential ? '轮换上游 API 凭据' : '绑定组织 API 凭据',
-      )
-      ?.trim();
-    if (!reason) return;
-    setBusy(true);
-    try {
-      const response = await fetch(
-        `/api/v1/source-configs/${encodeURIComponent(source.id)}/credentials`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...adminHeaders() },
-          body: JSON.stringify({
-            alias,
-            expectedVersion: source.version,
-            reason,
-          }),
-        },
-      );
-      if (!response.ok) throw new Error(await errorText(response));
-      await refresh();
-      setMessage(
-        `${source.name} 已${source.hasCredential ? '轮换' : '绑定'} credential alias；旧作业不能提交，请重新测试后启用。`,
-      );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '凭据绑定失败。');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const revokeCredential = async (source: SourceRow) => {
-    const reason = window
-      .prompt(
-        '撤销会立即阻止新兑换和旧运行提交。请输入原因：',
-        '撤销上游 API 凭据',
-      )
-      ?.trim();
-    if (!reason) return;
-    setBusy(true);
-    try {
-      const response = await fetch(
-        `/api/v1/source-configs/${encodeURIComponent(source.id)}/credentials`,
-        {
-          method: 'DELETE',
-          headers: { 'content-type': 'application/json', ...adminHeaders() },
-          body: JSON.stringify({ expectedVersion: source.version, reason }),
-        },
-      );
-      if (!response.ok) throw new Error(await errorText(response));
-      await refresh();
-      setMessage(
-        `${source.name} 的凭据已撤销；长期 Secret 未由浏览器或 Worker 读取。`,
-      );
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '凭据撤销失败。');
     } finally {
       setBusy(false);
     }
@@ -2009,9 +1860,11 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                     <NativeSelect
                       id="platform"
                       value={platform}
-                      onChange={(event) =>
-                        setPlatform(event.target.value as typeof platform)
-                      }
+                      onChange={(event) => {
+                        const next = event.target.value as typeof platform;
+                        setPlatform(next);
+                        if (next === 'wechat' || next === 'xiaohongshu') setSourceType('social');
+                      }}
                     >
                       <NativeSelectOption value="rss">
                         RSS / Atom
@@ -2019,14 +1872,14 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                       <NativeSelectOption value="http_json">
                         HTTP JSON API
                       </NativeSelectOption>
-                      <NativeSelectOption value="wechat" disabled>
-                        微信公众号 · 待外部能力确认
+                      <NativeSelectOption value="wechat">
+                        微信公众号公开 Feed
                       </NativeSelectOption>
-                      <NativeSelectOption value="xiaohongshu" disabled>
-                        小红书 · 待外部能力确认
+                      <NativeSelectOption value="xiaohongshu">
+                        小红书公开 Feed
                       </NativeSelectOption>
-                      <NativeSelectOption value="web_page" disabled>
-                        网页热榜 · 待模板与隔离浏览器
+                      <NativeSelectOption value="web_page">
+                        公开网页 / 热榜
                       </NativeSelectOption>
                     </NativeSelect>
                   </div>
@@ -2037,15 +1890,17 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                     </p>
                   )}
                   <div className="grid gap-2">
-                    <Label htmlFor="source-url">Feed / API URL</Label>
+                    <Label htmlFor="source-url">Feed / API / 网页 URL</Label>
                     <Input
                       id="source-url"
                       value={url}
                       onChange={(event) => setUrl(event.target.value)}
                       placeholder={
-                        platform === 'rss'
+                        ['rss', 'wechat', 'xiaohongshu'].includes(platform)
                           ? 'https://example.com/feed.xml'
-                          : 'https://api.example.com/news'
+                          : platform === 'web_page'
+                            ? 'https://example.com/news'
+                            : 'https://api.example.com/news'
                       }
                     />
                   </div>
@@ -2092,51 +1947,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                               ))}
                             </NativeSelect>
                           </div>
-                          <div className="grid gap-2">
-                            <Label>凭据管理员</Label>
-                            <NativeSelect
-                              value={credentialStewardId}
-                              onChange={(event) =>
-                                setCredentialStewardId(event.target.value)
-                              }
-                            >
-                              <NativeSelectOption value="">
-                                请选择 active admin
-                              </NativeSelectOption>
-                              {activeAdmins.map((member) => (
-                                <NativeSelectOption
-                                  key={member.user_id}
-                                  value={member.user_id}
-                                >
-                                  {member.email}
-                                </NativeSelectOption>
-                              ))}
-                            </NativeSelect>
-                          </div>
-                          <div className="col-span-2 grid gap-2">
-                            <Label>备用管理员（可选）</Label>
-                            <NativeSelect
-                              value={backupAdminId}
-                              onChange={(event) =>
-                                setBackupAdminId(event.target.value)
-                              }
-                            >
-                              <NativeSelectOption value="">未指定</NativeSelectOption>
-                              {activeAdmins
-                                .filter(
-                                  (member) =>
-                                    member.user_id !== credentialStewardId,
-                                )
-                                .map((member) => (
-                                  <NativeSelectOption
-                                    key={member.user_id}
-                                    value={member.user_id}
-                                  >
-                                    {member.email}
-                                  </NativeSelectOption>
-                                ))}
-                            </NativeSelect>
-                          </div>
                         </div>
                         {!activeAdmins.length && (
                           <p className="text-xs text-destructive">
@@ -2167,6 +1977,15 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                         </NativeSelect>
                       </div>
                       <div className="grid gap-2">
+                        <Label htmlFor="publisher-entity">发布主体 ID（可选）</Label>
+                        <Input
+                          id="publisher-entity"
+                          value={publisherEntityId}
+                          onChange={(event) => setPublisherEntityId(event.target.value)}
+                          placeholder="先在治理页登记，用于关系分类"
+                        />
+                      </div>
+                      <div className="grid gap-2">
                         <Label htmlFor="source-cron">调度（UTC Cron）</Label>
                         <Input
                           id="source-cron"
@@ -2176,34 +1995,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                       </div>
                       {platform === 'http_json' && (
                         <div className="grid gap-4">
-                          <div className="grid gap-2">
-                            <Label>认证（可选）</Label>
-                            <NativeSelect
-                              value={credentialAlias}
-                              onChange={(event) =>
-                                setCredentialAlias(event.target.value)
-                              }
-                            >
-                              <NativeSelectOption value="">
-                                公开 API，不使用凭据
-                              </NativeSelectOption>
-                              {eligibleCredentialPolicies.map((policy) => (
-                                <NativeSelectOption
-                                  key={policy.alias}
-                                  value={policy.alias}
-                                >
-                                  {policy.alias} · {policy.headerName}
-                                </NativeSelectOption>
-                              ))}
-                            </NativeSelect>
-                            <p className="text-xs text-muted-foreground">
-                              这里只选择运维预配的 alias。长期 Secret
-                              由控制面代理注入，不会发送到浏览器或采集 Worker。
-                              {url && !eligibleCredentialPolicies.length
-                                ? ' 当前 origin 没有可用 alias。'
-                                : ''}
-                            </p>
-                          </div>
                           <div className="grid grid-cols-2 gap-3">
                             <div className="grid gap-2">
                               <Label>列表路径</Label>
@@ -2548,15 +2339,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                       我提交对此公开来源的 provisional 使用权声明；这不会自动批准，仍需另一名权利审批者核验。
                     </span>
                   </label>
-                  {!activeAdmins.length && (
-                    <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-                      尚无 active admin 可承担凭据管理责任。请先到{' '}
-                      <Link className="underline" href="/governance">
-                        治理页
-                      </Link>{' '}
-                      添加或恢复管理员。
-                    </p>
-                  )}
                   <Button
                     onClick={() => void createSource()}
                     disabled={
@@ -2565,7 +2347,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                       !url ||
                       !rightsConfirmed ||
                       !businessOwnerId ||
-                      !credentialStewardId ||
                       selectedConnector?.rolloutMode === 'disabled'
                     }
                   >
@@ -2759,14 +2540,15 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
           </div>
           <div className="grid gap-3">
             {sources.map((source) => {
-              const capability =
-                source.adapter === 'rss' ? 'source:rss' : 'source:http-json';
+              const capability = source.adapter === 'rss'
+                ? 'source:rss'
+                : source.adapter === 'web'
+                  ? 'source:web'
+                  : 'source:http-json';
               const workerOnline = onlineCapabilities.has(capability);
               const recentRuns = runsBySource[source.id];
               const ownershipDraft = ownershipDrafts[source.id] ?? {
                 businessOwnerId: source.businessOwnerId ?? '',
-                credentialStewardId: source.credentialStewardId ?? '',
-                backupAdminId: source.backupAdminId ?? '',
               };
               const maintenanceDraft = maintenanceDrafts[source.id] ?? {
                 startsAt: '',
@@ -2812,12 +2594,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                             删除请求 {source.deletionStatus}
                           </Badge>
                         )}
-                        {source.hasCredential && (
-                          <Badge variant="outline">
-                            <KeyRound />
-                            凭据 v{source.credentialVersion}
-                          </Badge>
-                        )}
                         <Badge
                           variant={workerOnline ? 'outline' : 'destructive'}
                         >
@@ -2850,10 +2626,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                         <span>checkpoint v{source.checkpointVersion}</span>
                         <span>
                           业务负责人 {memberLabel(source.businessOwnerId)}
-                        </span>
-                        <span>
-                          凭据管理员{' '}
-                          {memberLabel(source.credentialStewardId)}
                         </span>
                         <span>
                           成本{' '}
@@ -2952,67 +2724,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                               ))}
                             </NativeSelect>
                           </div>
-                          <div className="grid gap-2">
-                            <Label>凭据管理员</Label>
-                            <NativeSelect
-                              value={ownershipDraft.credentialStewardId}
-                              onChange={(event) =>
-                                setOwnershipDrafts((current) => ({
-                                  ...current,
-                                  [source.id]: {
-                                    ...ownershipDraft,
-                                    credentialStewardId: event.target.value,
-                                    backupAdminId:
-                                      ownershipDraft.backupAdminId ===
-                                      event.target.value
-                                        ? ''
-                                        : ownershipDraft.backupAdminId,
-                                  },
-                                }))
-                              }
-                            >
-                              <NativeSelectOption value="">未分配</NativeSelectOption>
-                              {activeAdmins.map((member) => (
-                                <NativeSelectOption
-                                  key={member.user_id}
-                                  value={member.user_id}
-                                >
-                                  {member.email}
-                                </NativeSelectOption>
-                              ))}
-                            </NativeSelect>
-                          </div>
-                          <div className="grid gap-2">
-                            <Label>备用管理员</Label>
-                            <NativeSelect
-                              value={ownershipDraft.backupAdminId}
-                              onChange={(event) =>
-                                setOwnershipDrafts((current) => ({
-                                  ...current,
-                                  [source.id]: {
-                                    ...ownershipDraft,
-                                    backupAdminId: event.target.value,
-                                  },
-                                }))
-                              }
-                            >
-                              <NativeSelectOption value="">未指定</NativeSelectOption>
-                              {activeAdmins
-                                .filter(
-                                  (member) =>
-                                    member.user_id !==
-                                    ownershipDraft.credentialStewardId,
-                                )
-                                .map((member) => (
-                                  <NativeSelectOption
-                                    key={member.user_id}
-                                    value={member.user_id}
-                                  >
-                                    {member.email}
-                                  </NativeSelectOption>
-                                ))}
-                            </NativeSelect>
-                          </div>
                         </div>
                         <div className="mt-3 flex items-center gap-3">
                           <Button
@@ -3020,8 +2731,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                             variant="outline"
                             disabled={
                               busy ||
-                              !ownershipDraft.businessOwnerId ||
-                              !ownershipDraft.credentialStewardId
+                              !ownershipDraft.businessOwnerId
                             }
                             onClick={() => void transferOwnership(source)}
                           >
@@ -3207,25 +2917,6 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                           variant="outline"
                         >
                           停用
-                        </Button>
-                      )}
-                      {source.adapter === 'http' && !source.deletionStatus && (
-                        <Button
-                          onClick={() => void bindCredential(source)}
-                          disabled={busy}
-                          variant="outline"
-                        >
-                          <KeyRound />
-                          {source.hasCredential ? '轮换凭据' : '绑定凭据'}
-                        </Button>
-                      )}
-                      {source.hasCredential && !source.deletionStatus && (
-                        <Button
-                          onClick={() => void revokeCredential(source)}
-                          disabled={busy}
-                          variant="destructive"
-                        >
-                          撤销凭据
                         </Button>
                       )}
                       <Button

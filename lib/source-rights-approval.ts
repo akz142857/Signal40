@@ -294,8 +294,7 @@ export async function submitSourceRightsRequest(
     await tx.prepare(`
       UPDATE source_configs
       SET rights_status = 'pending', enabled = 0,
-        lifecycle_status = CASE WHEN lifecycle_status = 'auth_required' THEN lifecycle_status ELSE 'draft' END,
-        health_status = CASE WHEN lifecycle_status = 'auth_required' THEN health_status ELSE 'unknown' END,
+        lifecycle_status = 'draft', health_status = 'unknown',
         next_run_at = NULL, active_run_id = CASE WHEN active_run_id IN (
           SELECT id FROM ingestion_runs WHERE source_config_id = ? AND status = 'cancelled'
         ) THEN NULL ELSE active_run_id END,
@@ -473,8 +472,7 @@ export async function decideSourceRightsRequest(
     await tx.prepare(`
       UPDATE source_configs
       SET rights_status = ?, enabled = 0,
-        lifecycle_status = CASE WHEN lifecycle_status = 'auth_required' THEN lifecycle_status ELSE 'draft' END,
-        health_status = CASE WHEN lifecycle_status = 'auth_required' THEN health_status ELSE 'unknown' END,
+        lifecycle_status = 'draft', health_status = 'unknown',
         next_run_at = NULL, version = version + 1, updated_at = ?
       WHERE id = ? AND version = ?
     `).bind(

@@ -28,12 +28,12 @@ void test('multi-source DRAM reports become one candidate', () => {
   );
 });
 
-void test('the repeated 84.84% figure forms a separate evidence cluster', () => {
+void test('a primary plus unqualified social repeat stays below the independent-evidence gate', () => {
   const topics = runPipeline(sampleArticles(now), now);
   const margin = topics.find((topic) => topic.title.includes('84.84%'));
   assert.ok(margin);
-  assert.equal(margin.sourceCount, 2);
-  assert.equal(margin.gate.passed, true);
+  assert.equal(margin.sourceCount, 1);
+  assert.equal(margin.gate.passed, false);
 });
 
 void test('adding an independent source increases resonance', () => {

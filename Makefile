@@ -7,12 +7,11 @@ PORT ?= 3001
 DOCKER ?= docker
 PROJECT ?=
 RENDER_OUTPUT ?= output/signal40.mp4
-COUNT ?= 20
 
 .PHONY: help install setup dev start worker source-worker render-worker scheduler \
 	format format-check lint typecheck openapi-lint openapi-breaking test test-evaluation test-render check verify audit build \
 	db-generate db-migrations-verify db-migrate contracts-rehash \
-	project-migrate render media-qc voice-local ingest-weixin ingest-real walk check-storage \
+	project-migrate render media-qc voice-local ingest-real walk check-storage \
 	drill-restore docker-build docker-up docker-down guard-%
 
 help: ## 显示可用目标和参数
@@ -101,9 +100,6 @@ media-qc: guard-PROJECT guard-VIDEO ## 检查成片（VIDEO=<video.mp4> PROJECT=
 
 voice-local: guard-PROJECT guard-AUDIO guard-OUTPUT_PROJECT ## 生成本地配音（PROJECT=... AUDIO=... OUTPUT_PROJECT=...）
 	$(NPM) run voice:local -- "$(PROJECT)" "$(AUDIO)" "$(OUTPUT_PROJECT)"
-
-ingest-weixin: guard-QUERY ## 通过 OpenCLI 采集微信来源（QUERY=<关键词> [COUNT=20]）
-	$(NPM) run ingest:weixin -- "$(QUERY)" "$(COUNT)"
 
 ingest-real: ## 从已配置的真实来源采集
 	$(NPM) run ingest:real

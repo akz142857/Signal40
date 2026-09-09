@@ -534,6 +534,10 @@ async function completeDatabaseDeletion(db: SqlDatabase, request: DeletionReques
         `).bind(topic.topic_id, topic.topic_id).run();
       }
     }
+    await tx.prepare(`
+      DELETE FROM source_origin_corrections
+      WHERE origin_id IN (SELECT id FROM source_item_origins WHERE source_config_id = ?)
+    `).bind(request.source_config_id).run();
     await tx.prepare('DELETE FROM source_item_origins WHERE source_config_id = ?').bind(request.source_config_id).run();
     await tx.prepare('DELETE FROM source_item_event_states WHERE source_config_id = ?').bind(request.source_config_id).run();
     await tx.prepare('DELETE FROM source_item_rejections WHERE ingestion_run_id IN (SELECT id FROM ingestion_runs WHERE source_config_id = ?)').bind(request.source_config_id).run();
@@ -541,14 +545,11 @@ async function completeDatabaseDeletion(db: SqlDatabase, request: DeletionReques
     await tx.prepare("UPDATE ingestion_runs SET checkpoint_before = NULL, checkpoint_after = NULL, checkpoint_before_json = '{}', checkpoint_after_json = '{}', result_json = '{}', error_json = NULL WHERE source_config_id = ?")
       .bind(request.source_config_id).run();
     await tx.prepare('DELETE FROM raw_payload_uploads WHERE source_config_id = ?').bind(request.source_config_id).run();
-    await tx.prepare('DELETE FROM source_connection_sessions WHERE source_config_id = ?').bind(request.source_config_id).run();
     await tx.prepare('DELETE FROM source_connection_tests WHERE source_config_id = ?').bind(request.source_config_id).run();
-    await tx.prepare('DELETE FROM source_connection_events WHERE source_config_id = ?').bind(request.source_config_id).run();
     await tx.prepare('DELETE FROM source_checkpoint_cutovers WHERE source_config_id = ?').bind(request.source_config_id).run();
-    await tx.prepare('DELETE FROM source_credentials WHERE source_config_id = ?').bind(request.source_config_id).run();
     await tx.prepare(`
       UPDATE source_configs SET name = '[deleted]', config_json = '{}', locator_json = '{}', locator_hash = '',
-        collection_policy_json = '{}', capabilities_json = '{}', credential_ref = NULL,
+        collection_policy_json = '{}', capabilities_json = '{}',
         checkpoint = NULL, checkpoint_json = '{}', backfill_checkpoint_json = '{}', active_run_id = NULL,
         enabled = 0, lifecycle_status = 'archived', health_status = 'paused', archived_at = ?,
         last_error = NULL, last_error_detail_redacted = NULL, updated_at = ? WHERE id = ?

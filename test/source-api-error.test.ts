@@ -12,7 +12,6 @@ void test('source API errors always carry a stable machine-readable code', async
   assert.equal(sourceErrorCodeFor(409, 'Idempotency-Key 已用于其他操作。'), 'IDEMPOTENCY_CONFLICT');
   assert.equal(sourceErrorCodeFor(409, '当前状态不能操作。'), 'STATE_CONFLICT');
   assert.equal(sourceErrorCodeFor(422, '字段无效。'), 'VALIDATION_ERROR');
-  assert.equal(sourceErrorCodeFor(503, '来源凭据策略配置无效。'), 'BROKER_CONFIG');
 
   const budget = sourceApiError('来源月预算已用尽。', 429, {
     errorCode: 'BUDGET_EXCEEDED',

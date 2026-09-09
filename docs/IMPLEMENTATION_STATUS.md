@@ -8,15 +8,15 @@
 | --- | --- | --- | --- | --- |
 | P0 | 角色、G0–G8、状态机、ETag、SHA-256 审批 | Implemented | `lib/workflow.ts`、工作台、状态机测试 | 认证反向代理与团队成员实测 |
 | P0 | project.json 2.0 / 1.0 兼容 | Implemented | Schema、迁移脚本、协议测试 | 历史项目批量演练 |
-| P0 | 数据库/对象存储/作业/审计 | Implemented locally | PostgreSQL 57 表、直接/分片上传、对象级短时读取、`FOR UPDATE SKIP LOCKED` 租约、lease epoch、legal-hold epoch、整数 capability protocol、心跳续约/DLQ、项目级声明 ID | 托管 PostgreSQL/S3 与保留策略、混合 Worker 部署演练；`0023`–`0029` 尚未在开发/生产 PostgreSQL 升级 |
-| P1 | 来源、调度、滚动聚类、修订 | Foundation 整体 In progress；RSS connector core 有 `Implemented locally` 证据，Public JSON 为 Partial/local；均未 Delivered/Deployed/Integrated/Accepted | draft/test/enable、proposal→provisional request→异人 rights-capable admin 决策与 `sourceType` 确认、独立 legal capability、两人 hold 存续门禁与异人解除 UI/API/OAS/审计、action×role 矩阵、Actor/Worker allowlist DTO、公开 DTO/脱敏制品敏感值 canary scanner 与 Broker 回显门禁、全状态契约、RSS/Atom、HTTP JSON 分页与 staged visibility、upsert/tombstone 联合及防旧回放复活、稳定游标与来源范围运行详情、服务端补采条数/请求/成本/时间估算及版本绑定的二次确认、lease fence 与 running ingestion 过期租约接管、legal hold epoch 与外部撤回执行前复核、connector/version canary 独立开关、稳定来源分桶、未命中 shadow、切换时取消未领取运行、在途正式提交复核与失败阈值自动停用、固定 seed 的两 Scheduler/三 Worker 本地故障演练、固定 IANA 2025-10-09 网络语料、权利/凭据/原载荷/批次隔离、版本化来源 SLO/304 分类/暂停与来源卡片计划维护排除/预算/owner、来源优先级与可关闭 1x/2x/4x 自动降频、逐 occurrence 审计及不掩盖漏调度的分母规则、独立本地镜像/env allowlist、四镜像 Secret layer canary、五 workload runtime env 5/5 与 CI SBOM/Trivy 矩阵，以及 30 项迁移 checksum、Redocly 和兼容 checker；当前完整回归为 249 pass、0 fail、3 远程存储 skip | 先轮换已暴露的对象存储凭据并恢复 skip=0；仍缺真实身份跨角色浏览器与 Security/Legal sign-off、真实 publisher/evidence-family 目录、目标 egress/packet 证据、真实浏览器 HAR/录像与目标 log/trace/export canary 实扫、远端 SBOM/Trivy artifact、已发布 OpenAPI baseline、开发/生产 `0023`–`0029` 升级与恢复；P0C 仍需目标环境 canary/自动停止/恢复/并发演练，SLO 仍需真实来源/告警清单和签字、真实账单触发降频演练、真实 RSS/Public JSON、目标环境进程/网络/对象存储 chaos、真实上游删除/重现、28 天观察；credentialed JSON 另需云 Secret Manager/workload identity/受限数据库角色；公众号/小红书/网页仍为 Blocked 或 Spike |
+| P0 | 数据库/对象存储/作业/审计 | Implemented locally | PostgreSQL 55 表、直接/分片上传、对象级短时读取、`FOR UPDATE SKIP LOCKED` 租约、lease epoch、legal-hold epoch、整数 capability protocol、心跳续约/DLQ、项目级声明 ID | 托管 PostgreSQL/S3 与保留策略、混合 Worker 部署演练；`0023`–`0031` 尚未在开发/生产 PostgreSQL 升级 |
+| P1 | 来源、调度、滚动聚类、修订 | Foundation 整体 In progress；五种公开来源入口均为 `Implemented locally`，未 Delivered/Deployed/Integrated/Accepted | draft/test/enable、权利异人审批、RSS/Atom、Public JSON 分页与 staged visibility、公开网页 JSON-LD/可见链接解析、公众号/小红书公开 Feed、统一 SSRF/限额、checkpoint、退避、SLO、预算、canary/shadow、运行隔离、业务负责人治理，以及 `0031` 对凭据 Broker/OAuth 预留的删除 | 真实 RSS/Public JSON/网页/公众号 Feed/小红书 Feed、跨角色浏览器、开发/生产迁移恢复、目标环境 chaos、安全扫描和 28 天观察 |
 | P1 | Claim/Evidence/ResearchSnapshot | Implemented | 支持/反驳、冲突、快照、独立批准 | 财经编辑真实题材验收 |
 | P2 | 脚本与分镜 | Implemented | 逐句声明、版本比较、评论/锁定、读音、连续帧、动态图表 | 品牌规范和模板冻结 |
 | P3 | 资产、TTS、字幕 | Implemented | 版权元数据、OpenAI TTS、逐词对齐、字幕安全区、可选版权音乐与音量混合 | API key、授权声音与素材政策 |
 | P3 | Remotion 渲染 | Implemented | 三个版本化视觉模板、Player、真实转场/屏幕文字/来源脚注、低码率预览、正式片 Worker、Docker、并发/预算、封面 | 部署池、许可证和金丝雀 |
 | P4 | 自动/人工 QC | Implemented | 24 类媒体/内容/混音/关键帧检查、哈希绑定 QC、旁白覆盖门禁和独立批准、QC 失败即终态失败作业 | 人工终审责任人签字 |
 | P4 | 发布、更正和下架 | Implemented | 发布包（已端到端验证：真实成片 → 清单落对象存储 → 人工确认分发 → PUBLISHED）、YouTube 续传与 private fail-safe（**尚未端到端验证**）、HMAC 回调、事件与下架 | YouTube 测试频道实测；`SIGNAL40_ALLOW_PUBLIC_PUBLISH` 的开放决策 |
-| P5 | 指标与实验 | Implemented | 2h/24h/7d 快照、版本/实验归因、确定性 A/B、校准审批及 `/governance` 操作台 | 真实指标口径与四周阈值校准 |
+| P5 | 指标、实验与 Social Evidence | Implemented locally / external acceptance pending | 2h/24h/7d 快照、版本/实验归因、确定性 A/B；Social Evidence 保守关系分类器、最大匹配、unknown/低置信度 fail closed、publisher entity、不可变 origin 人工修正、声明级合格支持门禁、数据集哈希/误独立率/召回率/生产抽样冻结审批及 `/governance` 操作台 | 已授权版本化标注集、真实评测报告与生产抽样、Product/Editorial 签字；此前通用 synthetic 回归不计为 Social Evidence 金标 |
 | P5/P6 | SLO、成本、容量、灾备 | Implemented locally | `/operations`、`/health`、DLQ 重放、CI、备份恢复和运行手册 | 托管告警、远端恢复和季度演练 |
 | UI-P0 | 常驻 Worker、系统自检、无 Worker 告警、脚本时长前置校验 | Implemented locally | compose 常驻服务、独立 Worker 注册心跳、诊断页、项目页定时刷新孤儿作业、自动脚本按 `narrationBudget` 生成 | 目标环境的常驻部署与告警接入 |
 | UI-P1a | 选题质量指标 | Implemented locally | 质量 JSON 会在选题更新时失效重算；雷达显示一致性、区分度、语言、词表覆盖和 0–100 综合分；策略支持数值下限 | 有授权的中文来源上的阈值校准 |
@@ -50,7 +50,7 @@ OpenAI TTS 配音与逐词字幕、Remotion 渲染、24 项自动 QC 全通过�
 ## 当前不能宣称 Accepted 的项目
 
 - 生产认证反向代理、远端迁移、访问控制和浏览器回归未执行。
-- 来源平台尚未完成真实 RSS/无凭据 Public JSON、生产 egress、成员离职恢复、目标环境双 Scheduler/多 Worker 进程与网络 chaos（本地固定 seed 前置演练已有）和 chaos 后 28 天观察；带凭据 JSON 另需云 Secret Manager/workload identity；公众号、小红书与网页连接器不能宣称可用。
+- 公众号/小红书公开 Feed 与网页/热榜连接器代码已完成本地实现；剩余是逐来源真实 URL、权利与浏览器验收。Social Evidence 的关系分类、人工修正和门禁代码已完成，仍需真实授权评测集、生产抽样与 Product/Editorial 签字；自动放行保持关闭。Foundation 尚未完成真实来源、生产 egress、成员离职恢复、目标环境 chaos 和 28 天观察。
 - 没有生产 OpenAI Secret、声音权利证明、YouTube OAuth 测试账号和实际渠道返回 ID。
 - 没有组织指定的财经终审、品牌/素材权利、Remotion 商业许可、月预算与保留期限决策。
 - 备份/恢复脚本（`pg_dump`/`pg_restore` + 隔离库演练）已交付，但生产库的时间点恢复、对象存储生命周期、供应商切换和季度演练需要目标环境。

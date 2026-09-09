@@ -4,7 +4,6 @@ export const SOURCE_LIFECYCLE_STATUSES = [
   'tested',
   'enabled',
   'degraded',
-  'auth_required',
   'paused',
   'archived',
 ] as const;
@@ -23,7 +22,6 @@ export const SOURCE_HEALTH_STATUSES = [
   'unknown',
   'healthy',
   'degraded',
-  'auth_required',
   'paused',
   'waiting_capacity',
 ] as const;

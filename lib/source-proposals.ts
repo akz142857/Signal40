@@ -9,8 +9,8 @@ import { createPendingSourceRightsRequest } from './source-rights-approval.ts';
 
 export type SourceProposalInput = {
   name: string;
-  adapter: Extract<SourceAdapterName, 'rss' | 'http'>;
-  platform: 'rss' | 'http_json';
+  adapter: Extract<SourceAdapterName, 'rss' | 'http' | 'web'>;
+  platform: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
   sourceType: SourceType;
   url: string;
   scheduleCron: string | null;
@@ -21,8 +21,8 @@ type ProposalRow = {
   id: string;
   team_id: string;
   name: string;
-  adapter: 'rss' | 'http';
-  platform: 'rss' | 'http_json';
+  adapter: 'rss' | 'http' | 'web';
+  platform: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
   source_type: SourceType;
   url: string;
   schedule_cron: string | null;
@@ -191,12 +191,7 @@ export async function decideSourceProposal(
         mapping: {},
         pagination: proposal.adapter === 'http' ? { mode: 'none' } : undefined,
       };
-      const configHash = stableHash({
-        platform: proposal.platform,
-        adapter: proposal.adapter,
-        config,
-        credentialVersion: 0,
-      });
+      const configHash = stableHash({ platform: proposal.platform, adapter: proposal.adapter, config });
       const rightsConfigHash = stableHash({
         platform: proposal.platform,
         adapter: proposal.adapter,
@@ -205,19 +200,18 @@ export async function decideSourceProposal(
       });
       await tx.prepare(`
         INSERT INTO source_configs
-          (id, team_id, owner_team_id, business_owner_id, credential_steward_id,
+          (id, team_id, owner_team_id, business_owner_id,
            name, adapter, platform, config_json, locator_json, locator_hash,
            collection_policy_json, capabilities_json, lifecycle_status,
            health_status, config_hash, rights_config_hash, source_type, rights_status,
            enabled, version, schedule_cron, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'unknown',
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'unknown',
           ?, ?, ?, 'pending', 0, 1, ?, ?, ?)
       `).bind(
         sourceConfigId,
         proposal.team_id,
         proposal.team_id,
         proposal.requested_by,
-        input.actor.id,
         proposal.name,
         proposal.adapter,
         proposal.platform,

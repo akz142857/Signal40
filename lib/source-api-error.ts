@@ -2,8 +2,8 @@ export const SOURCE_API_ERROR_CODES = [
   'UNAUTHORIZED', 'FORBIDDEN', 'BAD_JSON', 'VALIDATION_ERROR', 'NOT_FOUND',
   'VERSION_CONFLICT', 'STATE_CONFLICT', 'IDEMPOTENCY_REQUIRED',
   'IDEMPOTENCY_CONFLICT', 'RATE_LIMITED', 'BUDGET_EXCEEDED',
-  'CONNECTOR_UNAVAILABLE', 'CONNECTOR_DISABLED', 'CONNECTOR_ROLLOUT_CHANGED', 'AUTH_REQUIRED',
-  'RIGHTS_BLOCKED', 'LEGAL_HOLD_ACTIVE', 'LEASE_LOST', 'POLICY_DRIFT', 'BROKER_CONFIG',
+  'CONNECTOR_UNAVAILABLE', 'CONNECTOR_DISABLED', 'CONNECTOR_ROLLOUT_CHANGED',
+  'RIGHTS_BLOCKED', 'LEGAL_HOLD_ACTIVE', 'LEASE_LOST', 'POLICY_DRIFT',
   'SSRF_BLOCKED', 'NETWORK', 'PERMANENT_UNSUPPORTED', 'SCHEMA_CHANGED',
   'PAYLOAD_LIMIT', 'REDIRECT_LIMIT', 'UPSTREAM_SECRET_REFLECTION',
   'STORAGE_ERROR',
@@ -34,7 +34,6 @@ export function sourceErrorCodeFor(status: number, error: string): SourceApiErro
     }
     if (/权利|授权|使用权/.test(error)) return 'RIGHTS_BLOCKED';
     if (/legal hold/i.test(error)) return 'LEGAL_HOLD_ACTIVE';
-    if (/凭据/.test(error)) return 'AUTH_REQUIRED';
     if (/连接器.*停用/.test(error)) return 'CONNECTOR_DISABLED';
     if (/连接器.*不可用|连接器.*不支持/.test(error)) return 'CONNECTOR_UNAVAILABLE';
     if (/租约|leaseEpoch/.test(error)) return 'LEASE_LOST';
@@ -44,7 +43,7 @@ export function sourceErrorCodeFor(status: number, error: string): SourceApiErro
   if (status === 422) return 'VALIDATION_ERROR';
   if (status === 429) return 'RATE_LIMITED';
   if (status === 503) {
-    return /策略配置|配置无效/.test(error) ? 'BROKER_CONFIG' : 'CONNECTOR_UNAVAILABLE';
+    return 'CONNECTOR_UNAVAILABLE';
   }
   return 'STATE_CONFLICT';
 }

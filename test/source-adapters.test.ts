@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertPublicHttpUrl, mapHttpJson, mapHttpJsonPage, parseRssFeed, validateSourceConfig } from '../lib/source-adapters.ts';
+import { assertPublicHttpUrl, mapHttpJson, mapHttpJsonPage, parsePublicWebPage, parseRssFeed, validateSourceConfig } from '../lib/source-adapters.ts';
 
 void test('RSS adapter reads RSS and Atom records into one article contract', () => {
   const rss = `<?xml version="1.0"?><rss><channel><item><title><![CDATA[铜价上涨 5%]]></title><link>https://example.com/copper</link><description>库存下降</description><pubDate>Tue, 08 Sep 2026 01:00:00 GMT</pubDate></item></channel></rss>`;
@@ -90,14 +90,23 @@ void test('HTTP JSON adapter rejects an oversized page instead of silently dropp
   );
 });
 
+void test('public web adapter reads JSON-LD and falls back to visible links', () => {
+  const jsonLd = `<script type="application/ld+json">{"@type":"NewsArticle","headline":"Quarterly results","url":"/results","datePublished":"2026-09-08T01:00:00Z","author":{"name":"IR"}}</script>`;
+  const structured = parsePublicWebPage(jsonLd, { name: 'Company news', sourceType: 'company', url: 'https://example.com/news' });
+  assert.equal(structured[0].url, 'https://example.com/results');
+  assert.equal(structured[0].author, 'IR');
+  const links = parsePublicWebPage('<a href="/hot/1"><strong>Market headline</strong></a>', { name: 'Hot list', sourceType: 'media', url: 'https://example.com/hot' }, '2026-09-09T00:00:00.000Z');
+  assert.deepEqual(links.map(({ title, url, publishedAt }) => ({ title, url, publishedAt })), [{ title: 'Market headline', url: 'https://example.com/hot/1', publishedAt: '2026-09-09T00:00:00.000Z' }]);
+});
+
 void test('source adapters reject SSRF targets and unapproved rights', () => {
   assert.throws(() => assertPublicHttpUrl('http://127.0.0.1/admin'), /私有网络/);
   assert.throws(() => assertPublicHttpUrl('file:///etc/passwd'), /HTTP/);
   assert.throws(() => assertPublicHttpUrl('https://example.com:8443/feed'), /标准 HTTP/);
   assert.throws(() => assertPublicHttpUrl('https://user:password@example.com/feed'), /用户凭据/);
   assert.throws(() => assertPublicHttpUrl('https://example.com/feed#access_token=secret'), /fragment/);
-  assert.throws(() => assertPublicHttpUrl('https://example.com/feed?api_key=secret'), /敏感 query/);
-  assert.throws(() => assertPublicHttpUrl('https://example.com/feed?X-Amz-Signature=secret'), /敏感 query/);
+  assert.throws(() => assertPublicHttpUrl('https://example.com/feed?api_key=secret'), /访问密钥|签名 query/);
+  assert.throws(() => assertPublicHttpUrl('https://example.com/feed?X-Amz-Signature=secret'), /访问密钥|签名 query/);
   assert.equal(assertPublicHttpUrl('https://example.com/feed?format=json'), 'https://example.com/feed?format=json');
   const result = validateSourceConfig({ name: '未授权源', adapter: 'rss', sourceType: 'media', url: 'https://example.com/rss', rightsStatus: 'pending' });
   assert.equal(result.valid, false);

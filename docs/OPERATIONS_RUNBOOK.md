@@ -120,25 +120,15 @@ WHERE article_revision_id IS NULL;
 SELECT COUNT(*) AS ownership_incomplete
 FROM source_configs
 WHERE lifecycle_status <> 'archived'
-  AND (business_owner_id IS NULL OR credential_steward_id IS NULL);
+  AND business_owner_id IS NULL;
 
-SELECT source.id, source.name, source.business_owner_id,
-       source.credential_steward_id, source.backup_admin_id
+SELECT source.id, source.name, source.business_owner_id
 FROM source_configs source
 LEFT JOIN team_members owner ON owner.user_id = source.business_owner_id
-LEFT JOIN team_members steward ON steward.user_id = source.credential_steward_id
-LEFT JOIN team_members backup ON backup.user_id = source.backup_admin_id
 WHERE source.lifecycle_status <> 'archived'
   AND (
     owner.status IS DISTINCT FROM 'active'
     OR owner.role = 'auditor'
-    OR steward.status IS DISTINCT FROM 'active'
-    OR steward.role IS DISTINCT FROM 'admin'
-    OR (source.backup_admin_id IS NOT NULL AND (
-      backup.status IS DISTINCT FROM 'active'
-      OR backup.role IS DISTINCT FROM 'admin'
-      OR source.backup_admin_id = source.credential_steward_id
-    ))
   );
 ```
 

@@ -22,8 +22,8 @@ export async function POST(request: Request) {
   if (!idempotencyKey) return sourceApiError('Idempotency-Key 必填。', 400);
   let body: {
     name?: string;
-    adapter?: 'rss' | 'http';
-    platform?: 'rss' | 'http_json';
+    adapter?: 'rss' | 'http' | 'web';
+    platform?: 'rss' | 'http_json' | 'web_page' | 'wechat' | 'xiaohongshu';
     sourceType?: 'social' | 'media' | 'market' | 'filing' | 'company';
     url?: string;
     scheduleCron?: string | null;
@@ -31,9 +31,8 @@ export async function POST(request: Request) {
   };
   try { body = (await request.json()) as typeof body; }
   catch { return sourceApiError('请求体必须是 JSON。', 400); }
-  if (!body.adapter || !['rss', 'http'].includes(body.adapter) || !body.platform ||
-      !['rss', 'http_json'].includes(body.platform) ||
-      (body.adapter === 'rss' ? body.platform !== 'rss' : body.platform !== 'http_json') ||
+  if (!body.adapter || !['rss', 'http', 'web'].includes(body.adapter) || !body.platform ||
+      !['rss', 'http_json', 'web_page', 'wechat', 'xiaohongshu'].includes(body.platform) ||
       !body.sourceType || !body.name?.trim() || !body.url || !body.requestNote?.trim() ||
       body.requestNote.trim().length < 10 || body.requestNote.trim().length > 1000) {
     return sourceApiError('来源类型、公网 URL 与 10–1000 字的提案理由必填。', 422);

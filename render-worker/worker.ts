@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { Agent, fetch as undiciFetch } from 'undici';
 import type { ProjectRecord } from '../lib/control-plane.ts';
 import { isPrivateIpAddress } from '../lib/net-guard.ts';
-import { mapHttpJsonPage, parseRssFeed, assertPublicHttpUrl, type HttpJsonPaginationConfig, type SourceConfigInput, type SourceItemRejection } from '../lib/source-adapters.ts';
+import { mapHttpJsonPage, parsePublicWebPage, parseRssFeed, assertPublicHttpUrl, type HttpJsonPaginationConfig, type SourceConfigInput, type SourceItemRejection } from '../lib/source-adapters.ts';
 import { validateArticleInput, type ArticleInput } from '../lib/domain.ts';
 import { sha256Hex } from '../lib/hash.ts';
 import { sourceItemEventAt, type NormalizedSourceItem } from '../lib/source-normalized-item.ts';
@@ -28,7 +28,6 @@ const resolvedWorkerEnvironment = resolveWorkerEnvironment({
   SIGNAL40_CONTROL_URL: process.env.SIGNAL40_CONTROL_URL || (process.env.PORT ? `http://localhost:${process.env.PORT}` : ''),
 });
 const controlUrl = resolvedWorkerEnvironment.controlUrl;
-const credentialBrokerUrl = (process.env.SIGNAL40_CREDENTIAL_BROKER_URL || controlUrl).replace(/\/$/, '');
 const openAiApiKey = process.env.OPENAI_API_KEY;
 const workerProfile = resolvedWorkerEnvironment.profile;
 const workerToken = resolvedWorkerEnvironment.token;
@@ -56,7 +55,6 @@ async function ingestionCommitJson<T>(response: Response): Promise<T> {
   const message = typeof payload.error === 'string' ? payload.error.slice(0, 500) : `采集提交失败：HTTP ${response.status}`;
   if (payload.errorCode === 'RIGHTS_BLOCKED') throw new TerminalJobError(message, 'RIGHTS_BLOCKED');
   if (payload.errorCode === 'CONNECTOR_DISABLED') throw new TerminalJobError(message, 'CONNECTOR_DISABLED');
-  if (payload.errorCode === 'AUTH_REQUIRED') throw new TerminalJobError(message, 'AUTH_REQUIRED');
   throw new Error(`${response.status} ${message}`);
 }
 
@@ -198,8 +196,6 @@ type RuntimeSource = {
   enabled: boolean;
   rights_status: string;
   config_hash: string;
-  credential_ref: string | null;
-  credential_version: number;
   rate_limit_per_minute: number;
   retention_mode: 'metadata' | 'raw';
   retention_days: number;
@@ -269,7 +265,7 @@ async function fetchPublicSource(initialUrl: string, checkpoint: SourceCheckpoin
           retryAfter ?? undefined,
         );
       }
-      if (response.status === 401 || response.status === 403) throw new TerminalJobError(`来源需要重新授权：HTTP ${response.status}。`, 'AUTH_REQUIRED');
+      if (response.status === 401 || response.status === 403) throw new TerminalJobError(`公开来源拒绝访问：HTTP ${response.status}。`, 'PERMANENT_UNSUPPORTED');
       if (response.status >= 500) throw new RetryableJobError(`来源上游暂时不可用：HTTP ${response.status}。`);
       if (!response.ok) throw new TerminalJobError(`来源请求不受支持：HTTP ${response.status}。`, 'PERMANENT_UNSUPPORTED');
       const declaredLength = Number(response.headers.get('content-length') ?? 0);
@@ -291,52 +287,6 @@ async function fetchPublicSource(initialUrl: string, checkpoint: SourceCheckpoin
     }
   }
   throw new TerminalJobError('来源重定向次数超过 3 次。', 'REDIRECT_LIMIT');
-}
-
-type CredentialBinding = { credential_ref?: string | null; credential_version?: number };
-
-async function fetchSourceForJob(
-  initialUrl: string,
-  checkpoint: SourceCheckpoint,
-  source: CredentialBinding,
-  job: WorkerJob,
-) {
-  if (!source.credential_ref) return fetchPublicSource(initialUrl, checkpoint);
-  const jobCredentialRef = typeof job.payload.credentialRef === 'string' ? job.payload.credentialRef : '';
-  const jobCredentialVersion = Number(job.payload.credentialVersion);
-  if (jobCredentialRef !== source.credential_ref || jobCredentialVersion !== source.credential_version) {
-    throw new TerminalJobError('来源凭据已在作业排队后变化。', 'AUTH_REQUIRED');
-  }
-  const response = await fetch(`${credentialBrokerUrl}/api/v1/credential-broker/fetch`, {
-    method: 'POST',
-    headers: workerHeaders,
-    body: JSON.stringify({
-      sourceConfigId: job.payload.sourceConfigId,
-      credentialRef: jobCredentialRef,
-      credentialVersion: jobCredentialVersion,
-      url: initialUrl,
-      workerId,
-      jobId: job.id,
-      leaseEpoch: job.lease_epoch,
-      conditional: {
-        etag: typeof checkpoint.etag === 'string' ? checkpoint.etag : undefined,
-        lastModified: typeof checkpoint.lastModified === 'string' ? checkpoint.lastModified : undefined,
-      },
-    }),
-  });
-  if (response.ok) return response.json() as Promise<{
-    url: string; contentType: string; text: string; byteCount: number; requestCount: number;
-    notModified: boolean; etag: string | null; lastModified: string | null;
-  }>;
-  const payload = await response.json().catch(() => ({})) as {
-    error?: unknown; errorCode?: unknown; retryable?: unknown; retryAfterSeconds?: unknown;
-  };
-  const message = typeof payload.error === 'string' ? payload.error.slice(0, 500) : `Credential broker 请求失败：HTTP ${response.status}`;
-  const code = typeof payload.errorCode === 'string' ? payload.errorCode : 'NETWORK';
-  if (payload.retryable === true) {
-    throw new RetryableJobError(message, code, Number.isFinite(payload.retryAfterSeconds) ? Number(payload.retryAfterSeconds) : undefined);
-  }
-  throw new TerminalJobError(message, code === 'POLICY_DRIFT' ? 'AUTH_REQUIRED' : code);
 }
 
 async function workPagedHttpJsonIngestion(
@@ -412,11 +362,9 @@ async function workPagedHttpJsonIngestion(
         pagination.mode === 'since' ? { ...checkpointBefore, watermark: sinceWatermark } : checkpointBefore,
         state,
       );
-      const response = await fetchSourceForJob(
+      const response = await fetchPublicSource(
         pageUrl,
         pageIndex === 0 && pagination.mode === 'none' ? checkpointBefore : {},
-        source,
-        job,
       );
       let payload: unknown = {};
       let page = { articles: [] as ArticleInput[], items: [] as NormalizedSourceItem[], rejections: [] as SourceItemRejection[], fetchedCount: 0 };
@@ -597,13 +545,13 @@ async function workIngestion(job: WorkerJob) {
   if (!sourceConfigId || !ingestionRunId) throw new Error('采集作业缺少 sourceConfigId 或 ingestionRunId。');
   const { source } = await json<{ source: RuntimeSource }>(await fetch(`${controlUrl}/api/v1/worker/source-configs/${encodeURIComponent(sourceConfigId)}`, { headers: { 'x-worker-token': requiredWorkerToken } }));
   if (!source.enabled || source.rights_status !== 'approved') throw new Error('来源未启用或授权未批准。');
-  if (!source.config.url || !['rss', 'http'].includes(source.adapter)) throw new Error(`后台 Worker 暂不支持 ${source.adapter} 适配器自动拉取。`);
+  if (!source.config.url || !['rss', 'http', 'web'].includes(source.adapter)) throw new Error(`后台 Worker 暂不支持 ${source.adapter} 适配器自动拉取。`);
   const checkpointBefore = job.payload.checkpointJson && typeof job.payload.checkpointJson === 'object' && !Array.isArray(job.payload.checkpointJson)
     ? job.payload.checkpointJson as SourceCheckpoint
     : {};
   const config: SourceConfigInput = {
     name: source.name,
-    adapter: source.adapter as 'rss' | 'http',
+    adapter: source.adapter as 'rss' | 'http' | 'web',
     sourceType: source.config.sourceType,
     url: source.config.url,
     rightsStatus: 'approved',
@@ -631,8 +579,8 @@ async function workIngestion(job: WorkerJob) {
   const rawPages: string[] = [];
   let paginationCursor: string | null = null;
   let paginationMode: HttpJsonPaginationConfig['mode'] = 'none';
-  if (source.adapter === 'rss') {
-    const response = await fetchSourceForJob(source.config.url, checkpointBefore, source, job);
+  if (source.adapter === 'rss' || source.adapter === 'web') {
+    const response = await fetchPublicSource(source.config.url, checkpointBefore);
     requestCount = response.requestCount;
     byteCount = response.byteCount;
     responseEtag = response.etag;
@@ -641,7 +589,9 @@ async function workIngestion(job: WorkerJob) {
     notModified = response.notModified;
     if (!response.notModified) {
       rawPages.push(response.text);
-      articles = parseRssFeed(response.text, { ...config, url: response.url });
+      articles = source.adapter === 'rss'
+        ? parseRssFeed(response.text, { ...config, url: response.url })
+        : parsePublicWebPage(response.text, { ...config, url: response.url }, new Date().toISOString());
       fetchedCount = articles.length;
     }
   } else {
@@ -652,7 +602,7 @@ async function workIngestion(job: WorkerJob) {
     const seenCursors = new Set<string>(state.cursor ? [state.cursor] : []);
     for (let pageIndex = 0; pageIndex < pagination.maxPages; pageIndex += 1) {
       const pageUrl = buildHttpJsonPageUrl(source.config.url, pagination, checkpointBefore, state);
-      const response = await fetchSourceForJob(pageUrl, pageIndex === 0 && pagination.mode === 'none' ? checkpointBefore : {}, source, job);
+      const response = await fetchPublicSource(pageUrl, pageIndex === 0 && pagination.mode === 'none' ? checkpointBefore : {});
       requestCount += response.requestCount;
       byteCount += response.byteCount;
       responseEtag = response.etag;
@@ -801,7 +751,7 @@ async function workIngestion(job: WorkerJob) {
       checkpoint,
       checkpointJson,
       rawObjectKey,
-      ...(source.adapter === 'rss' ? { origins: validArticles.map((article) => ({
+      ...(source.adapter !== 'http' ? { origins: validArticles.map((article) => ({
         namespace: source.platform || source.adapter,
         platformItemId: article.id || sha256Hex(article.url),
         url: article.url,
@@ -823,7 +773,7 @@ async function workSourceTest(job: WorkerJob) {
     headers: { 'x-worker-token': requiredWorkerToken },
   }));
   if (source.config_hash !== configHash) throw new TerminalJobError('来源配置已在测试排队期间变更。');
-  if (!source.config.url || !['rss', 'http'].includes(source.adapter)) throw new TerminalJobError(`连接器不支持测试 ${source.adapter}。`);
+  if (!source.config.url || !['rss', 'http', 'web'].includes(source.adapter)) throw new TerminalJobError(`连接器不支持测试 ${source.adapter}。`);
   const testUrl = source.adapter === 'http'
     ? buildHttpJsonPageUrl(
         source.config.url,
@@ -832,10 +782,10 @@ async function workSourceTest(job: WorkerJob) {
         initialHttpJsonPageState(normalizeHttpJsonPagination(source.config.pagination), {}),
       )
     : source.config.url;
-  const response = await fetchSourceForJob(testUrl, {}, source, job);
+  const response = await fetchPublicSource(testUrl, {});
   const sourceConfig: SourceConfigInput = {
     name: source.name,
-    adapter: source.adapter as 'rss' | 'http',
+    adapter: source.adapter as 'rss' | 'http' | 'web',
     sourceType: source.config.sourceType,
     url: response.url,
     rightsStatus: 'approved',
@@ -848,6 +798,8 @@ async function workSourceTest(job: WorkerJob) {
   try {
     if (source.adapter === 'rss') {
       articles = parseRssFeed(response.text, sourceConfig);
+    } else if (source.adapter === 'web') {
+      articles = parsePublicWebPage(response.text, { ...sourceConfig, url: response.url });
     } else {
       if (!response.contentType.toLowerCase().includes('json')) throw new Error('HTTP 适配器要求 JSON Content-Type。');
       articles = mapHttpJsonPage(JSON.parse(response.text), sourceConfig).articles;

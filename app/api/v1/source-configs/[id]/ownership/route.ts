@@ -13,8 +13,6 @@ export async function PATCH(
   let body: {
     expectedVersion?: number;
     businessOwnerId?: string;
-    credentialStewardId?: string;
-    backupAdminId?: string | null;
     reason?: string;
   };
   try {
@@ -27,8 +25,6 @@ export async function PATCH(
     sourceId: id,
     expectedVersion: Number(body.expectedVersion),
     businessOwnerId: body.businessOwnerId ?? '',
-    credentialStewardId: body.credentialStewardId ?? '',
-    backupAdminId: body.backupAdminId,
     reason: body.reason ?? '',
     actor,
   });

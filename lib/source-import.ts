@@ -209,7 +209,7 @@ export async function persistSourceImportDrafts(
       continue;
     }
     const sourceId = `source_${crypto.randomUUID()}`;
-    const configHash = stableHash({ platform: candidate.platform, adapter: candidate.adapter, config, credentialVersion: 0 });
+    const configHash = stableHash({ platform: candidate.platform, adapter: candidate.adapter, config });
     const rightsConfigHash = stableHash({
       platform: candidate.platform,
       adapter: candidate.adapter,
@@ -222,15 +222,15 @@ export async function persistSourceImportDrafts(
     }
     await db.prepare(`
       INSERT INTO source_configs
-        (id, team_id, owner_team_id, business_owner_id, credential_steward_id,
+        (id, team_id, owner_team_id, business_owner_id,
          name, adapter, platform, config_json, locator_json, locator_hash,
          collection_policy_json, capabilities_json, lifecycle_status, health_status,
          config_hash, rights_config_hash, source_type, rights_status, rate_limit_per_minute, retention_mode,
          retention_days, enabled, version, schedule_cron, created_at, updated_at)
-      VALUES (?, 'default', 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'unknown', ?, ?, ?,
+      VALUES (?, 'default', 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'unknown', ?, ?, ?,
         'pending', 30, 'metadata', 30, 0, 1, ?, ?, ?)
     `).bind(
-      sourceId, input.actor.id, input.actor.id, candidate.name, candidate.adapter,
+      sourceId, input.actor.id, candidate.name, candidate.adapter,
       candidate.platform, JSON.stringify(config),
       JSON.stringify(locator), locatorHash,
       JSON.stringify({ scheduleCron: candidate.scheduleCron, mode: 'standard', maxItems: 100 }),
@@ -262,8 +262,6 @@ export async function persistSourceImportDrafts(
         ownership: {
           ownerTeamId: 'default',
           businessOwnerId: input.actor.id,
-          credentialStewardId: input.actor.id,
-          backupAdminId: null,
         },
       }),
       crypto.randomUUID(), now,

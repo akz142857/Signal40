@@ -19,12 +19,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const source = await tx.prepare(`
       SELECT version, platform, config_hash,
         COALESCE(NULLIF(rights_config_hash, ''), config_hash) AS rights_config_hash,
-        last_tested_config_hash, rights_status, lifecycle_status,
-        credential_ref, credential_version
+        last_tested_config_hash, rights_status, lifecycle_status
       FROM source_configs WHERE id = ? FOR UPDATE
     `).bind(id).first<{
       version: number; platform: string; config_hash: string; rights_config_hash: string; last_tested_config_hash: string | null;
-      rights_status: string; lifecycle_status: string; credential_ref: string | null; credential_version: number;
+      rights_status: string; lifecycle_status: string;
     }>();
     if (!source) return { error: '来源不存在。', status: 404 as const };
     if (source.version !== body.expectedVersion) return { error: `版本冲突：当前版本为 ${source.version}。`, status: 409 as const };
@@ -51,16 +50,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     `).bind(connector.id, connector.version).first<{ rollout_mode: string }>();
     if (!release || release.rollout_mode === 'disabled') {
       return { error: `连接器 ${connector.id}@${connector.version} 当前已停用。`, status: 409 as const };
-    }
-    if (source.credential_ref) {
-      const credential = await tx.prepare(`
-        SELECT id FROM source_credentials
-        WHERE id = ? AND source_config_id = ? AND connector_id = ? AND version = ?
-          AND status = 'active' AND revoked_at IS NULL
-          AND (expires_at IS NULL OR expires_at > ?)
-        LIMIT 1
-      `).bind(source.credential_ref, id, connector.id, source.credential_version, now).first<{ id: string }>();
-      if (!credential) return { error: '来源凭据已撤销、过期或版本不匹配。', status: 409 as const };
     }
     const validTest = await tx.prepare(`
       SELECT id FROM source_connection_tests

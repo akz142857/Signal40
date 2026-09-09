@@ -132,7 +132,7 @@ export const sourceConfigs = pgTable(
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     adapter: text('adapter', {
-      enum: ['rss', 'http', 'opencli', 'csv'],
+      enum: ['rss', 'http', 'web', 'csv'],
     }).notNull(),
     configJson: text('config_json').notNull().default('{}'),
     teamId: text('team_id').notNull().default('default'),
@@ -140,10 +140,6 @@ export const sourceConfigs = pgTable(
     ownerTeamId: text('owner_team_id').notNull().default('default'),
     /** 业务负责人可以是 researcher/editor/producer/publisher/admin；必须是 active 成员。 */
     businessOwnerId: text('business_owner_id'),
-    /** 长期凭据与重新授权的责任人；必须是 active admin。 */
-    credentialStewardId: text('credential_steward_id'),
-    /** credential steward 不可用时的备用 active admin，不能与 steward 相同。 */
-    backupAdminId: text('backup_admin_id'),
     locatorJson: jsonb('locator_json').notNull().default({}),
     locatorHash: text('locator_hash').notNull().default(''),
     collectionPolicyJson: jsonb('collection_policy_json').notNull().default({}),
@@ -163,8 +159,6 @@ export const sourceConfigs = pgTable(
       enum: ['social', 'media', 'market', 'filing', 'company'],
     }),
     publisherEntityId: text('publisher_entity_id'),
-    credentialRef: text('credential_ref'),
-    credentialVersion: integer('credential_version').notNull().default(0),
     checkpointJson: jsonb('checkpoint_json').notNull().default({}),
     checkpointVersion: integer('checkpoint_version').notNull().default(0),
     /** 历史补采与 live 水位完全分离，避免向后翻页覆盖实时游标。 */
@@ -241,10 +235,6 @@ export const sourceConfigs = pgTable(
     ),
     index('idx_source_configs_health').on(table.healthStatus, table.updatedAt),
     index('idx_source_configs_business_owner').on(table.businessOwnerId),
-    index('idx_source_configs_credential_steward').on(
-      table.credentialStewardId,
-    ),
-    index('idx_source_configs_backup_admin').on(table.backupAdminId),
     uniqueIndex('idx_source_configs_locator')
       .on(table.teamId, table.platform, table.locatorHash)
       .where(sql`${table.locatorHash} <> ''`),
@@ -258,8 +248,8 @@ export const sourceProposals = pgTable(
     id: text('id').primaryKey(),
     teamId: text('team_id').notNull().default('default'),
     name: text('name').notNull(),
-    adapter: text('adapter', { enum: ['rss', 'http'] }).notNull(),
-    platform: text('platform', { enum: ['rss', 'http_json'] }).notNull(),
+    adapter: text('adapter', { enum: ['rss', 'http', 'web'] }).notNull(),
+    platform: text('platform', { enum: ['rss', 'http_json', 'web_page', 'wechat', 'xiaohongshu'] }).notNull(),
     sourceType: text('source_type', {
       enum: ['social', 'media', 'market', 'filing', 'company'],
     }).notNull(),
@@ -390,102 +380,6 @@ export const sourceRightsRequests = pgTable(
       table.status,
       table.createdAt,
     ),
-  ],
-);
-
-export const sourceConnectionSessions = pgTable(
-  'source_connection_sessions',
-  {
-    id: text('id').primaryKey(),
-    sourceConfigId: text('source_config_id').notNull(),
-    initiatedBy: text('initiated_by').notNull(),
-    connector: text('connector').notNull(),
-    status: text('status', {
-      enum: ['pending', 'completed', 'failed', 'expired', 'revoked'],
-    }).notNull(),
-    stateHash: text('state_hash').notNull(),
-    pkceChallenge: text('pkce_challenge'),
-    credentialRef: text('credential_ref'),
-    credentialVersion: integer('credential_version').notNull().default(0),
-    errorCode: text('error_code'),
-    errorDetailRedacted: text('error_detail_redacted'),
-    expiresAt: text('expires_at').notNull(),
-    completedAt: text('completed_at'),
-    createdAt: text('created_at').notNull(),
-  },
-  (table) => [
-    index('idx_source_connection_sessions_source').on(
-      table.sourceConfigId,
-      table.createdAt,
-    ),
-  ],
-);
-
-export const sourceConnectionEvents = pgTable(
-  'source_connection_events',
-  {
-    id: text('id').primaryKey(),
-    sourceConfigId: text('source_config_id').notNull(),
-    sessionId: text('session_id'),
-    kind: text('kind', {
-      enum: [
-        'created',
-        'completed',
-        'failed',
-        'rotated',
-        'revoked',
-        'disconnected',
-      ],
-    }).notNull(),
-    actorId: text('actor_id').notNull(),
-    credentialVersion: integer('credential_version').notNull().default(0),
-    detailRedacted: text('detail_redacted').notNull().default(''),
-    createdAt: text('created_at').notNull(),
-  },
-  (table) => [
-    index('idx_source_connection_events_source').on(
-      table.sourceConfigId,
-      table.createdAt,
-    ),
-  ],
-);
-
-/**
- * 来源凭据只保存不可猜测引用与服务端策略快照；长期 Secret 始终留在 provider。
- * `secretAlias` 是运维预配的逻辑名，不是环境变量名，更不是密钥本身。
- */
-export const sourceCredentials = pgTable(
-  'source_credentials',
-  {
-    id: text('id').primaryKey(),
-    teamId: text('team_id').notNull().default('default'),
-    sourceConfigId: text('source_config_id').notNull(),
-    connectorId: text('connector_id').notNull(),
-    provider: text('provider', {
-      enum: ['environment', 'secret_manager', 'local_agent'],
-    }).notNull(),
-    secretAlias: text('secret_alias').notNull(),
-    status: text('status', { enum: ['active', 'revoked'] })
-      .notNull()
-      .default('active'),
-    version: integer('version').notNull(),
-    supersedesCredentialId: text('supersedes_credential_id'),
-    targetOriginsJson: jsonb('target_origins_json').notNull().default([]),
-    headerName: text('header_name').notNull(),
-    expiresAt: text('expires_at'),
-    revokedAt: text('revoked_at'),
-    createdBy: text('created_by').notNull(),
-    createdAt: text('created_at').notNull(),
-    updatedAt: text('updated_at').notNull(),
-  },
-  (table) => [
-    index('idx_source_credentials_source').on(
-      table.sourceConfigId,
-      table.version,
-    ),
-    uniqueIndex('idx_source_credentials_current')
-      .on(table.sourceConfigId)
-      .where(sql`${table.revokedAt} IS NULL`),
   ],
 );
 
@@ -766,8 +660,6 @@ export const ingestionRuns = pgTable(
       .default('live'),
     sourceVersion: integer('source_version').notNull().default(1),
     rightsGrantId: text('rights_grant_id'),
-    credentialRef: text('credential_ref'),
-    credentialVersion: integer('credential_version').notNull().default(0),
     scheduledFor: text('scheduled_for'),
     trigger: text('trigger', { enum: ['schedule', 'manual', 'backfill'] })
       .notNull()
@@ -1015,6 +907,37 @@ export const sourceItemOrigins = pgTable(
     index('idx_source_item_origins_family').on(
       table.evidenceFamilyId,
       table.publisherEntityId,
+    ),
+  ],
+);
+
+/**
+ * origin 人工修正采用不可变版本。当前版本的 supersedes_correction_id 为 NULL；
+ * 新修正把旧行指向自己，既能快速读取当前值，也保留完整审计历史。
+ */
+export const sourceOriginCorrections = pgTable(
+  'source_origin_corrections',
+  {
+    id: text('id').primaryKey(),
+    originId: text('origin_id').notNull(),
+    relationship: text('relationship', {
+      enum: ['original', 'repost', 'quote', 'syndicated', 'unknown'],
+    }).notNull(),
+    evidenceFamilyId: text('evidence_family_id').notNull(),
+    publisherEntityId: text('publisher_entity_id').notNull(),
+    confidence: integer('confidence').notNull(),
+    reason: text('reason').notNull(),
+    createdBy: text('created_by').notNull(),
+    supersedesCorrectionId: text('supersedes_correction_id'),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_source_origin_corrections_current')
+      .on(table.originId)
+      .where(sql`${table.supersedesCorrectionId} IS NULL`),
+    index('idx_source_origin_corrections_history').on(
+      table.originId,
+      table.createdAt,
     ),
   ],
 );
@@ -1740,9 +1663,17 @@ export const calibrationRuns = pgTable(
   {
     id: text('id').primaryKey(),
     algorithmVersion: text('algorithm_version').notNull(),
+    calibrationKind: text('calibration_kind', {
+      enum: ['score', 'social_evidence'],
+    })
+      .notNull()
+      .default('score'),
     datasetLabel: text('dataset_label').notNull(),
+    datasetRef: text('dataset_ref'),
+    datasetSha256: text('dataset_sha256'),
     caseCount: integer('case_count').notNull(),
     metricsJson: text('metrics_json').notNull(),
+    policyJson: jsonb('policy_json').notNull().default({}),
     status: text('status', { enum: ['candidate', 'approved', 'rejected'] })
       .notNull()
       .default('candidate'),
@@ -1754,6 +1685,11 @@ export const calibrationRuns = pgTable(
   },
   (table) => [
     index('idx_calibration_runs_status_created').on(
+      table.status,
+      table.createdAt,
+    ),
+    index('idx_calibration_runs_kind_status').on(
+      table.calibrationKind,
       table.status,
       table.createdAt,
     ),

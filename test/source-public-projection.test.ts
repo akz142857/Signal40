@@ -33,10 +33,6 @@ void test('actor source projection is an exact allowlist and strips execution ma
     version: 3,
     owner_team_id: 'default',
     business_owner_id: 'owner-1',
-    credential_steward_id: 'admin-1',
-    backup_admin_id: null,
-    credential_ref: 'credential_opaque_secret',
-    credential_version: 4,
     schedule_cron: '*/15 * * * *',
     checkpoint: 'checkpoint-secret',
     checkpoint_json: { cursor: 'cursor-secret' },
@@ -69,19 +65,18 @@ void test('actor source projection is an exact allowlist and strips execution ma
   });
 
   assert.deepEqual(Object.keys(projected).sort(), [
-    'autoThrottleEnabled', 'backupAdminId', 'budgetSoftLimitPercent', 'businessOwnerId',
+    'autoThrottleEnabled', 'budgetSoftLimitPercent', 'businessOwnerId',
     'checkpointVersion', 'consecutiveFailures', 'costMicrosPerRequest',
-    'createdAt', 'credentialStewardId', 'credentialVersion', 'deletionRequestId',
+    'createdAt', 'deletionRequestId',
     'deletionStatus', 'pendingRightsRequestId', 'pendingRightsRequestedBy',
     'effectiveScheduleMultiplier', 'enabled', 'estimatedRequestsPerRun', 'hasActiveRun',
-    'hasCredential', 'healthStatus', 'id', 'lastSuccessAt', 'lastTestedAt',
+    'healthStatus', 'id', 'lastSuccessAt', 'lastTestedAt',
     'lifecycleStatus', 'monthlyBudgetMicros', 'name', 'nextRunAt', 'ownerTeamId',
     'platform', 'publicConfig', 'publicErrorCode', 'publicErrorMessage',
     'rateLimitPerMinute', 'retention', 'rightsStatus', 'scheduleCron',
     'schedulePriority', 'scheduleThrottleReason', 'scheduleThrottleRecoveryAt', 'updatedAt',
-    'version', 'adapter',
+    'version', 'adapter', 'publisherEntityId',
   ].sort());
-  assert.equal(projected.hasCredential, true);
   assert.equal(projected.hasActiveRun, true);
   assert.equal(projected.publicErrorMessage, '来源网络暂时不可用。');
   assert.equal(

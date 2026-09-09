@@ -37,7 +37,6 @@ const PUBLIC_PAGINATION_KEYS = new Set([
 const SENSITIVE_QUERY_NAME = /(?:^|[-_.])(access|auth|credential|key|pass(?:word)?|secret|sig(?:nature)?|token)(?:$|[-_.])/i;
 
 const PUBLIC_ERROR_MESSAGES: Record<string, string> = {
-  AUTH_REQUIRED: '来源需要重新授权。',
   RIGHTS_BLOCKED: '来源使用权当前无效，采集已停止。',
   RATE_LIMITED: '来源请求受限，系统会按退避策略重试。',
   BUDGET_EXCEEDED: '来源已达到预算上限。',
@@ -183,10 +182,7 @@ export function projectPublicSourceRecord(row: Record<string, unknown>) {
     version: integer(row.version, 1),
     ownerTeamId: nullableString(row.owner_team_id, 200),
     businessOwnerId: nullableString(row.business_owner_id, 200),
-    credentialStewardId: nullableString(row.credential_steward_id, 200),
-    backupAdminId: nullableString(row.backup_admin_id, 200),
-    hasCredential: Boolean(row.credential_ref),
-    credentialVersion: integer(row.credential_version),
+    publisherEntityId: nullableString(row.publisher_entity_id, 200),
     scheduleCron: nullableString(row.schedule_cron, 200),
     checkpointVersion: integer(row.checkpoint_version),
     nextRunAt: nullableString(row.next_run_at, 100),

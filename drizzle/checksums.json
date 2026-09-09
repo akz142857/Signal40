@@ -31,6 +31,8 @@
     { "file": "0026_source_schedule_throttling.sql", "sha256": "7bdaf346dc0dda697244afe98c0f367b335526b73c3914b202270f79282d07b2" },
     { "file": "0027_legal_hold_epoch_fence.sql", "sha256": "0774fe5f9d02d589d49c914408e2829c5423be961a1fb693974ed595263f1f35" },
     { "file": "0028_connector_canary_rollout.sql", "sha256": "e06756227833d7f5ad429b74fa3b2ee21e8e8707808009fb91427a74770ea311" },
-    { "file": "0029_source_legal_operator.sql", "sha256": "86d7141052a37542a57de0fe88bb3d114ec9342a8f11c8b50623ee0cf178f168" }
+    { "file": "0029_source_legal_operator.sql", "sha256": "86d7141052a37542a57de0fe88bb3d114ec9342a8f11c8b50623ee0cf178f168" },
+    { "file": "0030_social_evidence_gate.sql", "sha256": "e3eef0209bb93653f1f3befd2a23862e3f70cc382e9ebb82b820c965a768fa9b" },
+    { "file": "0031_remove_source_credentials.sql", "sha256": "78f97950a2c455e68819632c5db0fbe36c3fd6f1a1bf7332258e1cb4886e49ad" }
   ]
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runPipeline } from '../lib/domain.ts';
+import { normalizeArticles, runPipeline } from '../lib/domain.ts';
 import {
   loadLatestTopics,
   loadRecentArticles,
@@ -90,7 +90,9 @@ void test('滚动语料注入 evidence family/所有权集团并排除已撤回�
   await db.client.query(`
     INSERT INTO publisher_entities
       (id, legal_name, ownership_group, entity_type, created_at, updated_at)
-    VALUES ('publisher-test', 'Publisher Test', 'group-test', 'company', $1, $1)
+    VALUES
+      ('publisher-test', 'Publisher Test', 'group-test', 'company', $1, $1),
+      ('publisher-test-2', 'Publisher Test 2', 'group-test-2', 'company', $1, $1)
   `, [now.toISOString()]);
   await db.client.query(`
     INSERT INTO source_item_origins
@@ -102,11 +104,38 @@ void test('滚动语料注入 evidence family/所有权集团并排除已撤回�
       'url-hash', 'content-v1', $2, 'original', 'family-test',
       'publisher-test', 100, $3, $3)
   `, [article.id, article.contentHash, now.toISOString()]);
+  await db.client.query(`
+    INSERT INTO source_origin_corrections
+      (id, origin_id, relationship, evidence_family_id, publisher_entity_id,
+       confidence, reason, created_by, created_at)
+    VALUES
+      ('correction-test', 'origin-test', 'original', 'family-test', 'publisher-test',
+       100, 'Verified first publisher and original work', 'editor-test', $1),
+      ('correction-test-2', 'origin-test-2', 'original', 'family-test', 'publisher-test-2',
+       100, 'Verified second publisher and same original work', 'editor-test', $1)
+  `, [now.toISOString()]);
+  await db.client.query(`
+    INSERT INTO source_item_origins
+      (id, source_config_id, namespace, platform_item_id, article_id,
+       ingestion_run_id, canonical_url_hash, fingerprint_version,
+       content_fingerprint, relationship, evidence_family_id,
+       publisher_entity_id, confidence, first_seen_at, last_seen_at)
+    VALUES ('origin-test-2', 'source-test-2', 'rss', 'item-test-2', $1, 'run-test-2',
+      'url-hash-2', 'content-v1', $2, 'original', 'family-test',
+      'publisher-test-2', 100, $3, $3)
+  `, [article.id, article.contentHash, now.toISOString()]);
   const active = await loadRecentArticles(db, new Date(now.valueOf() - 3 * 86_400_000));
+  assert.equal(active.filter((item) => item.id === article.id).length, 2);
   assert.equal(active[0].evidenceFamilyId, 'family-test');
   assert.equal(active[0].publisherOwnershipGroup, 'group-test');
+  const normalized = normalizeArticles(active);
+  assert.equal(normalized[0].evidenceOrigins?.length, 2);
+  assert.equal(runPipeline(active, now, {
+    version: 'test-approved', minimumConfidence: 90,
+    eligibleRelationships: ['original'], socialAutoProductionEnabled: true,
+  })[0].gate.independentSourceCount, 1);
 
-  await db.client.query("UPDATE source_item_origins SET deleted_at = $1 WHERE id = 'origin-test'", [now.toISOString()]);
+  await db.client.query("UPDATE source_item_origins SET deleted_at = $1 WHERE id IN ('origin-test', 'origin-test-2')", [now.toISOString()]);
   const withdrawn = await loadRecentArticles(db, new Date(now.valueOf() - 3 * 86_400_000));
   assert.equal(withdrawn.some((item) => item.id === article.id), false);
 });

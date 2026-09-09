@@ -87,11 +87,6 @@ jobs:
             image: signal40-render-worker:ci
             compose_image: signal40-render-worker:latest
             service: render-worker
-          - profile: broker
-            dockerfile: credential-broker/Dockerfile
-            image: signal40-credential-broker:ci
-            compose_image: signal40-credential-broker:latest
-            service: credential-broker
     env:
       SIGNAL40_IMAGE_SCAN_CANARY: signal40-ci-canary-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}
     steps:

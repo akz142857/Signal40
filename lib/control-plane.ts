@@ -15,6 +15,12 @@ import { sourceConnectorByPlatform } from './source-connectors/registry.ts';
 import { raiseAttentionItem } from './attention.ts';
 import { SourceBudgetExceededError, utcMonthStart } from './source-budget.ts';
 import { effectiveConnectorRollout } from './source-release-control.ts';
+import {
+  independentEvidenceCount,
+  loadApprovedEvidencePolicy,
+  qualifiedEvidenceEdge,
+  type EvidenceOrigin,
+} from './social-evidence.ts';
 
 export type Actor = { id: string; email: string; role: Role };
 
@@ -906,18 +912,38 @@ export async function evaluateProjectGates(
 ): Promise<GateResult[]> {
   const project = await loadContentProject(db, projectId);
   if (!project) return [];
-  const [evidence, assetsResult, approvalsResult, qc, metrics] =
+  const [evidence, assetsResult, approvalsResult, qc, metrics, evidencePolicy] =
     await Promise.all([
       db
         .prepare(`
-      SELECT c.logical_id AS id, c.kind,
-        SUM(CASE WHEN e.stance = 'supports' THEN 1 ELSE 0 END) AS supports,
-        SUM(CASE WHEN e.stance = 'refutes' THEN 1 ELSE 0 END) AS refutes
-      FROM claims c LEFT JOIN evidence_links e ON e.claim_id = c.id
-      WHERE c.project_id = ? GROUP BY c.id, c.kind
+      SELECT c.logical_id AS id, c.kind, e.stance, e.source_hash, e.source_url,
+        a.source, a.source_type, a.content_hash,
+        sc.platform, COALESCE(correction.relationship, o.relationship) AS relationship,
+        COALESCE(correction.confidence, o.confidence) AS confidence,
+        COALESCE(correction.evidence_family_id, o.evidence_family_id) AS evidence_family_id,
+        COALESCE(correction.publisher_entity_id, o.publisher_entity_id) AS publisher_entity_id,
+        COALESCE(cpe.ownership_group, pe.ownership_group, correction.publisher_entity_id, o.publisher_entity_id) AS publisher_ownership_group,
+        (o.id IS NOT NULL) AS origin_managed,
+        (correction.id IS NOT NULL) AS manually_corrected
+      FROM claims c
+      LEFT JOIN evidence_links e ON e.claim_id = c.id
+      LEFT JOIN articles a ON a.id = e.article_id
+      LEFT JOIN source_item_origins o ON o.article_id = a.id AND o.deleted_at IS NULL
+      LEFT JOIN source_configs sc ON sc.id = o.source_config_id
+      LEFT JOIN source_origin_corrections correction
+        ON correction.origin_id = o.id AND correction.supersedes_correction_id IS NULL
+      LEFT JOIN publisher_entities pe ON pe.id = o.publisher_entity_id
+      LEFT JOIN publisher_entities cpe ON cpe.id = correction.publisher_entity_id
+      WHERE c.project_id = ?
     `)
         .bind(projectId)
-        .all<{ id: string; kind: string; supports: number; refutes: number }>(),
+        .all<{
+          id: string; kind: string; stance: string | null; source_hash: string | null;
+          source_url: string | null; source: string | null; source_type: string | null;
+          content_hash: string | null; platform: string | null; relationship: EvidenceOrigin['originRelationship'] | null;
+          confidence: number | null; evidence_family_id: string | null; publisher_entity_id: string | null;
+          publisher_ownership_group: string | null; origin_managed: boolean | null; manually_corrected: boolean | null;
+        }>(),
       db
         .prepare(
           `SELECT COUNT(*) AS total, SUM(CASE WHEN rights_status != 'cleared' THEN 1 ELSE 0 END) AS uncleared FROM assets WHERE project_id = ?`,
@@ -948,6 +974,7 @@ export async function evaluateProjectGates(
         )
         .bind(projectId)
         .first<{ total: number }>(),
+      loadApprovedEvidencePolicy(db),
     ]);
   const latestApproval = new Map<
     string,
@@ -959,17 +986,35 @@ export async function evaluateProjectGates(
   const allEvidenceUrlsValid = project.project.research.claims.every((claim) =>
     claim.evidence.every((item) => /^https?:\/\//.test(item.url)),
   );
-  const distinctSources = new Set(
-    project.project.research.claims.flatMap((claim) =>
-      claim.evidence.map((item) => item.sourceId),
-    ),
-  ).size;
-  const factualClaims = evidence.results.filter(
-    (claim) => !['opinion', 'disclaimer'].includes(claim.kind),
-  );
-  const unsupported = factualClaims.filter(
-    (claim) => Number(claim.supports) < 1,
-  );
+  const evidenceOriginFor = (row: (typeof evidence.results)[number]) => ({
+    source: row.source ?? row.source_url ?? 'external-evidence',
+    sourceType: row.source_type ?? 'media',
+    contentHash: row.content_hash ?? row.source_hash ?? stableHash(row.source_url ?? ''),
+    platform: row.platform ?? undefined,
+    evidenceFamilyId: row.evidence_family_id ?? undefined,
+    publisherEntityId: row.publisher_entity_id ?? undefined,
+    publisherOwnershipGroup: row.publisher_ownership_group ?? undefined,
+    originRelationship: row.relationship ?? undefined,
+    originConfidence: row.confidence ?? undefined,
+    originManaged: row.origin_managed ?? false,
+    originManuallyCorrected: row.manually_corrected ?? false,
+  } satisfies EvidenceOrigin);
+  const evidenceOrigins = evidence.results
+    .filter((row) => row.stance === 'supports')
+    .map(evidenceOriginFor);
+  const distinctSources = independentEvidenceCount(evidenceOrigins, evidencePolicy);
+  const claimRows = new Map<string, { id: string; kind: string; supports: number; refutes: number; qualifiedSupports: number }>();
+  for (const row of evidence.results) {
+    const current = claimRows.get(row.id) ?? { id: row.id, kind: row.kind, supports: 0, refutes: 0, qualifiedSupports: 0 };
+    if (row.stance === 'supports') {
+      current.supports += 1;
+      if (qualifiedEvidenceEdge(evidenceOriginFor(row), evidencePolicy)) current.qualifiedSupports += 1;
+    }
+    if (row.stance === 'refutes') current.refutes += 1;
+    claimRows.set(row.id, current);
+  }
+  const factualClaims = [...claimRows.values()].filter((claim) => !['opinion', 'disclaimer'].includes(claim.kind));
+  const unsupported = factualClaims.filter((claim) => claim.supports < 1 || claim.qualifiedSupports < 1);
   const resolvedConflictIds = new Set(
     project.project.research.conflicts
       .filter((conflict) => conflict.resolution?.trim())
@@ -1014,7 +1059,7 @@ export async function evaluateProjectGates(
       reasons:
         allEvidenceUrlsValid && distinctSources >= 2
           ? []
-          : ['来源 URL 无效或独立来源少于 2 个'],
+          : ['来源 URL 无效，或合格 evidence-family ↔ publisher-group 最大匹配少于 2 个'],
     },
     {
       code: 'G1_INPUT_QUALITY',
@@ -1031,7 +1076,7 @@ export async function evaluateProjectGates(
         unsupported.length === 0 &&
         conflicts.length === 0,
       reasons: [
-        ...unsupported.map((claim) => `${claim.id} 缺少支持证据`),
+        ...unsupported.map((claim) => `${claim.id} 缺少合格的声明级支持证据`),
         ...conflicts.map((claim) => `${claim.id} 存在未解决反驳证据`),
       ],
     },
@@ -1336,7 +1381,7 @@ export async function enqueueIngestionRun(
         SELECT name, version, adapter, platform, config_hash,
           COALESCE(NULLIF(rights_config_hash, ''), config_hash) AS rights_config_hash,
           checkpoint, checkpoint_json, backfill_checkpoint_json,
-          active_run_id, enabled, lifecycle_status, rights_status, credential_ref, credential_version,
+          active_run_id, enabled, lifecycle_status, rights_status,
           cost_micros_per_request, estimated_requests_per_run, monthly_budget_micros,
           budget_soft_limit_percent,
           (SELECT COUNT(DISTINCT origin.article_id) FROM source_item_origins origin
@@ -1362,8 +1407,6 @@ export async function enqueueIngestionRun(
         enabled: number;
         lifecycle_status: string;
         rights_status: string;
-        credential_ref: string | null;
-        credential_version: number;
         cost_micros_per_request: number;
         estimated_requests_per_run: number;
         monthly_budget_micros: number | string;
@@ -1409,25 +1452,6 @@ export async function enqueueIngestionRun(
       canaryEnabled: Boolean(release.canary_enabled),
       canaryPercent: release.canary_percent,
     }, input.sourceConfigId);
-    if (source.credential_ref) {
-      const credential = await tx
-        .prepare(`
-        SELECT id FROM source_credentials
-        WHERE id = ? AND source_config_id = ? AND connector_id = ? AND version = ?
-          AND status = 'active' AND revoked_at IS NULL
-          AND (expires_at IS NULL OR expires_at > ?)
-        LIMIT 1 FOR UPDATE
-      `)
-        .bind(
-          source.credential_ref,
-          input.sourceConfigId,
-          connector.id,
-          source.credential_version,
-          timestamp,
-        )
-        .first<{ id: string }>();
-      if (!credential) throw new Error('来源凭据已撤销、过期或版本不匹配。');
-    }
     if (source.active_run_id) {
       const active = await tx
         .prepare(
@@ -1552,8 +1576,6 @@ export async function enqueueIngestionRun(
       rightsGrantId: rightsGrant.id,
       connectorId: connector.id,
       connectorVersion: connector.version,
-      credentialRef: source.credential_ref,
-      credentialVersion: source.credential_version,
       configuredRolloutMode: release.rollout_mode,
       rolloutMode: effectiveRelease.mode,
       canaryEnabled: Boolean(release.canary_enabled),
@@ -1609,11 +1631,11 @@ export async function enqueueIngestionRun(
       .prepare(`
       INSERT INTO ingestion_runs
         (id, source_config_id, job_id, status, checkpoint_before, checkpoint_before_json, checkpoint_scope,
-         source_version, rights_grant_id, credential_ref, credential_version,
+         source_version, rights_grant_id,
          scheduled_for, trigger, required_capability, connector_version,
          connector_id, payload_schema_version, shadow, cost_micros_per_request,
          cost_micros, created_at)
-      VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
       .bind(
         ingestionRunId,
@@ -1624,8 +1646,6 @@ export async function enqueueIngestionRun(
         checkpointScope,
         sourceVersion,
         rightsGrant.id,
-        source.credential_ref,
-        source.credential_version,
         input.scheduledFor ?? null,
         runTrigger,
         requiredCapability,
@@ -1662,8 +1682,6 @@ export async function enqueueIngestionRun(
         rightsGrantId: rightsGrant.id,
         connectorId: connector.id,
         connectorVersion: connector.version,
-        credentialRef: source.credential_ref,
-        credentialVersion: source.credential_version,
         configuredRolloutMode: release.rollout_mode,
         rolloutMode: effectiveRelease.mode,
         canaryEnabled: Boolean(release.canary_enabled),
@@ -1794,19 +1812,6 @@ export async function leaseNextJob(
             AND release_control.connector_version = jobs.payload_json ->> 'connectorVersion'
             AND release_control.rollout_mode <> 'disabled'
         ))
-        AND (kind != 'ingestion' OR payload_json ->> 'credentialRef' IS NULL OR EXISTS (
-          SELECT 1
-          FROM source_credentials lease_credential
-          JOIN source_configs lease_source ON lease_source.id = lease_credential.source_config_id
-          WHERE lease_credential.id = jobs.payload_json ->> 'credentialRef'
-            AND lease_credential.source_config_id = jobs.payload_json ->> 'sourceConfigId'
-            AND lease_credential.version = CAST(jobs.payload_json ->> 'credentialVersion' AS INTEGER)
-            AND lease_credential.status = 'active'
-            AND lease_credential.revoked_at IS NULL
-            AND (lease_credential.expires_at IS NULL OR lease_credential.expires_at > ?)
-            AND lease_source.credential_ref = lease_credential.id
-            AND lease_source.credential_version = lease_credential.version
-        ))
         AND (kind != 'ingestion' OR payload_json ->> 'ingestionRunId' IS NULL OR EXISTS (
           SELECT 1
           FROM ingestion_runs rights_run
@@ -1838,7 +1843,6 @@ export async function leaseNextJob(
           version,
         ]),
         input.maxPayloadSchemaVersion ?? 1,
-        timestamp,
         timestamp,
         timestamp,
         timestamp,
@@ -2034,8 +2038,7 @@ export async function finishJob(
       : input.terminal
         ? 'SCHEMA_CHANGED'
         : 'NETWORK';
-  const sourceHealthStatus =
-    errorCode === 'AUTH_REQUIRED' ? 'auth_required' : 'degraded';
+  const sourceHealthStatus = 'degraded';
   const costMicros =
     input.result &&
     typeof input.result === 'object' &&
@@ -2137,14 +2140,13 @@ export async function finishJob(
         statements.push(
           db
             .prepare(`
-          UPDATE source_configs SET lifecycle_status = CASE WHEN ? = 'AUTH_REQUIRED' THEN 'auth_required' WHEN enabled = 1 THEN 'degraded' ELSE ? END,
+          UPDATE source_configs SET lifecycle_status = CASE WHEN enabled = 1 THEN 'degraded' ELSE ? END,
             health_status = ?, last_error = ?, last_error_code = ?,
             last_error_detail_redacted = ?, consecutive_failures = consecutive_failures + 1,
             retry_after = ?, backoff_until = ?,
             updated_at = ? WHERE id = ? AND ${jobGuardSql}
         `)
             .bind(
-              errorCode,
               status === 'dead_letter' ? 'draft' : 'connecting',
               sourceHealthStatus,
               input.error ?? '连接测试失败',

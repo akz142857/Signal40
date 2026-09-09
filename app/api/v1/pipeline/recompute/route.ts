@@ -5,6 +5,7 @@ import { loadRecentArticles, persistPipeline } from '@/lib/persistence';
 import { authorizeWorker } from '@/lib/worker-auth';
 import { sha256Hex } from '@/lib/hash';
 import { activeLeaseMatches } from '@/lib/job-lease';
+import { loadApprovedEvidencePolicy } from '@/lib/social-evidence';
 
 type RecomputeBody = { jobId?: string; workerId?: string; leaseEpoch?: number; derivationKey?: string };
 
@@ -53,7 +54,8 @@ export async function POST(request: Request) {
       if (existing) return { response: { pipelineRunId, articleCount: existing.article_count, topicCount: existing.topic_count, replayed: true }, status: 200 as const };
       const rollingWindowStart = new Date(now.valueOf() - 72 * 60 * 60 * 1000);
       const corpus = await loadRecentArticles(tx, rollingWindowStart);
-      const topics = runPipeline(corpus, now);
+      const evidencePolicy = await loadApprovedEvidencePolicy(tx);
+      const topics = runPipeline(corpus, now, evidencePolicy);
       await persistPipeline(tx, topics, 'import', corpus.length, now, { runId: pipelineRunId });
       return { response: { pipelineRunId, articleCount: corpus.length, topicCount: topics.length, replayed: false }, status: 200 as const };
     });

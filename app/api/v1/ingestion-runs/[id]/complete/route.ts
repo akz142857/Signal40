@@ -11,7 +11,6 @@ import {
   ingestionRightsBlockReason,
   quarantineRightsBlockedIngestion,
 } from '@/lib/source-rights';
-import { quarantineCredentialBlockedIngestion } from '@/lib/source-credentials';
 import {
   effectiveConnectorRollout,
   quarantineConnectorDisabledIngestion,
@@ -53,8 +52,6 @@ type LockedRun = {
   result_json: unknown;
   source_version: number;
   rights_grant_id: string | null;
-  credential_ref: string | null;
-  credential_version: number;
   connector_id: string;
   connector_version: string;
   cost_micros_per_request: number;
@@ -78,11 +75,6 @@ type LockedRun = {
   source_rights_status: string;
   source_retention_mode: string;
   source_config_hash: string;
-  current_credential_ref: string | null;
-  current_credential_version: number;
-  credential_status: string | null;
-  credential_revoked_at: string | null;
-  credential_expires_at: string | null;
   grant_id: string | null;
   grant_revoked_at: string | null;
   grant_expires_at: string | null;
@@ -136,7 +128,7 @@ export async function POST(
     const result = await db.transaction(async (tx) => {
       const run = await tx.prepare(`
         SELECT ir.id, ir.source_config_id, ir.status, ir.job_id, ir.result_json,
-          ir.source_version, ir.rights_grant_id, ir.credential_ref, ir.credential_version,
+          ir.source_version, ir.rights_grant_id,
           ir.connector_id, ir.connector_version, ir.cost_micros_per_request, ir.checkpoint_scope,
           ir.checkpoint_before_json, ir.checkpoint_after_json,
           j.status AS job_status, j.lease_owner, j.lease_epoch, j.lease_expires_at,
@@ -149,11 +141,6 @@ export async function POST(
           sc.lifecycle_status AS source_lifecycle_status, sc.rights_status AS source_rights_status,
           sc.retention_mode AS source_retention_mode,
           COALESCE(NULLIF(sc.rights_config_hash, ''), sc.config_hash) AS source_config_hash,
-          sc.credential_ref AS current_credential_ref,
-          sc.credential_version AS current_credential_version,
-          credential_row.status AS credential_status,
-          credential_row.revoked_at AS credential_revoked_at,
-          credential_row.expires_at AS credential_expires_at,
           grant_row.id AS grant_id, grant_row.revoked_at AS grant_revoked_at,
           grant_row.expires_at AS grant_expires_at, grant_row.purpose AS grant_purpose,
           grant_row.usage_scope AS grant_usage_scope,
@@ -168,7 +155,6 @@ export async function POST(
         JOIN jobs j ON j.id = ir.job_id
         JOIN source_configs sc ON sc.id = ir.source_config_id
         LEFT JOIN source_rights_grants grant_row ON grant_row.id = ir.rights_grant_id
-        LEFT JOIN source_credentials credential_row ON credential_row.id = ir.credential_ref
         LEFT JOIN source_connector_releases release_control
           ON release_control.connector_id = ir.connector_id
           AND release_control.connector_version = ir.connector_version
@@ -225,24 +211,6 @@ export async function POST(
           errorCode: 'CONNECTOR_ROLLOUT_CHANGED',
           status: 409 as const,
         };
-      }
-      const credentialBlocked =
-        run.credential_ref !== run.current_credential_ref ||
-        run.credential_version !== run.current_credential_version ||
-        (Boolean(run.credential_ref) && (
-          run.credential_status !== 'active' || Boolean(run.credential_revoked_at) ||
-          Boolean(run.credential_expires_at && run.credential_expires_at <= now.toISOString())
-        ));
-      if (credentialBlocked) {
-        const reason = '来源凭据已在逐页采集期间轮换、撤销或过期，本次运行已隔离。';
-        await quarantineCredentialBlockedIngestion(tx, {
-          sourceConfigId: run.source_config_id,
-          ingestionRunId: id,
-          credentialRef: run.credential_ref,
-          credentialVersion: run.credential_version,
-          reason,
-        }, now);
-        return { error: reason, errorCode: 'AUTH_REQUIRED', status: 409 as const };
       }
       const rightsBlockedReason = ingestionRightsBlockReason({
         sourceEnabled: run.source_enabled,

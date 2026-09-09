@@ -10,7 +10,7 @@ import {
 } from './source-lifecycle-status.ts';
 import type { NormalizedSourceItem } from './source-normalized-item.ts';
 
-export type SourceAdapterName = 'rss' | 'http' | 'opencli' | 'csv';
+export type SourceAdapterName = 'rss' | 'http' | 'web' | 'csv';
 
 export type HttpJsonPaginationConfig = {
   mode: 'none' | 'page' | 'cursor' | 'since';
@@ -56,7 +56,7 @@ export function assertPublicHttpUrl(value: string) {
   if (url.hash) throw new Error('来源 URL 不能包含 fragment。');
   for (const key of url.searchParams.keys()) {
     if (SENSITIVE_SOURCE_QUERY_NAME.test(key) || key.toLowerCase().startsWith('x-amz-')) {
-      throw new Error('来源 URL 不能包含敏感 query；请使用服务端 credential alias。');
+      throw new Error('公开来源 URL 不能包含访问密钥或签名 query。');
     }
   }
   return url.toString();
@@ -171,6 +171,109 @@ export function parseRssFeed(
   });
 }
 
+function decodeHtml(value: string) {
+  return value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function webArticleFromRecord(
+  value: Record<string, unknown>,
+  config: Pick<SourceConfigInput, 'name' | 'sourceType'> & { url: string },
+  observedAt: string,
+) {
+  const type = stringValue(value['@type']).toLowerCase();
+  if (!['article', 'newsarticle', 'blogposting', 'socialmediaposting'].includes(type)) return null;
+  const title = (stringValue(value.headline) || stringValue(value.name)).trim();
+  const urlValue = value.url ?? (record(value.mainEntityOfPage)?.['@id']);
+  if (!title || typeof urlValue !== 'string') return null;
+  const published = stringValue(value.datePublished) || stringValue(value.dateModified) || observedAt;
+  const publishedAt = new Date(published);
+  if (Number.isNaN(publishedAt.valueOf())) return null;
+  const authorValue = Array.isArray(value.author) ? value.author[0] : value.author;
+  const author = typeof authorValue === 'string'
+    ? authorValue
+    : stringValue(record(authorValue)?.name);
+  try {
+    return {
+      source: config.name,
+      sourceType: config.sourceType,
+      title: decodeHtml(title),
+      summary: decodeHtml(stringValue(value.description)),
+      author: decodeHtml(author),
+      url: assertPublicHttpUrl(new URL(urlValue, config.url).toString()),
+      publishedAt: publishedAt.toISOString(),
+    } satisfies ArticleInput;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 公开网页/热榜的轻量解析器：优先读标准 JSON-LD，没有结构化数据时
+ * 回退到同页链接列表。它不执行 JavaScript，不绕过登录、验证码或反自动化保护。
+ */
+export function parsePublicWebPage(
+  html: string,
+  config: Pick<SourceConfigInput, 'name' | 'sourceType'> & { url: string },
+  observedAt = new Date().toISOString(),
+): ArticleInput[] {
+  if (html.length > 5_000_000) throw new Error('网页响应超过 5 MB。');
+  const articles: ArticleInput[] = [];
+  const seen = new Set<string>();
+  for (const match of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const parsed: unknown = JSON.parse(match[1].trim());
+      const queue: unknown[] = Array.isArray(parsed) ? [...parsed] : [parsed];
+      while (queue.length) {
+        const current = queue.shift();
+        if (Array.isArray(current)) { queue.push(...current); continue; }
+        const object = record(current);
+        if (!object) continue;
+        if (Array.isArray(object['@graph'])) queue.push(...object['@graph']);
+        if (Array.isArray(object.itemListElement)) {
+          for (const entry of object.itemListElement) queue.push(record(entry)?.item ?? entry);
+        }
+        const article = webArticleFromRecord(object, config, observedAt);
+        if (article && !seen.has(article.url)) {
+          seen.add(article.url);
+          articles.push(article);
+        }
+      }
+    } catch { /* 无效 JSON-LD 不阻断链接回退。 */ }
+  }
+  if (articles.length) return articles.slice(0, 100);
+  for (const match of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const title = decodeHtml(match[2]);
+    if (title.length < 4 || title.length > 300) continue;
+    try {
+      const url = assertPublicHttpUrl(new URL(match[1], config.url).toString());
+      if (seen.has(url)) continue;
+      seen.add(url);
+      articles.push({
+        source: config.name,
+        sourceType: config.sourceType,
+        title,
+        summary: '',
+        author: '',
+        url,
+        publishedAt: observedAt,
+      });
+      if (articles.length >= 100) break;
+    } catch { /* 跳过非 HTTP、私网或敏感链接。 */ }
+  }
+  return articles;
+}
+
 export function readJsonPath(value: unknown, path: string) {
   return path.split('.').reduce<unknown>((current, key) => current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined, value);
 }
@@ -283,9 +386,9 @@ export function mapHttpJsonPage(payload: unknown, config: SourceConfigInput) {
 export function validateSourceConfig(input: SourceConfigInput, requireApproved = true) {
   const errors: string[] = [];
   if (!input.name?.trim() || input.name.length > 160) errors.push('来源名称必须为 1–160 个字符');
-  if (!['rss', 'http', 'opencli', 'csv'].includes(input.adapter)) errors.push('适配器无效');
-  if (['rss', 'http'].includes(input.adapter)) {
-    try { if (!input.url) throw new Error(); else assertPublicHttpUrl(input.url); } catch { errors.push('RSS/HTTP 适配器必须提供公网 HTTP(S) URL'); }
+  if (!['rss', 'http', 'web', 'csv'].includes(input.adapter)) errors.push('适配器无效');
+  if (['rss', 'http', 'web'].includes(input.adapter)) {
+    try { if (!input.url) throw new Error(); else assertPublicHttpUrl(input.url); } catch { errors.push('RSS/HTTP/网页适配器必须提供公网 HTTP(S) URL'); }
   }
   if (input.scheduleCron && !isValidCron(input.scheduleCron)) errors.push('scheduleCron 格式无效或超出取值范围');
   if (!(SOURCE_RIGHTS_STATUSES as readonly string[]).includes(input.rightsStatus)) errors.push('rightsStatus 无效');

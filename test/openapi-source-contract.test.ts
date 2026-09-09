@@ -42,10 +42,10 @@ function resolveLocalRef(document: unknown, ref: string) {
 const SOURCE_ROUTE_PREFIXES = [
   'source-configs/',
   'source-connectors/',
-  'source-credentials/',
   'source-proposals/',
+  'source-origins/',
+  'publisher-entities/',
   'ingestion-runs/',
-  'credential-broker/',
   'pipeline/',
   'worker/source-configs/',
   'worker/legal-deletion-withdrawals/',
@@ -57,6 +57,7 @@ function actorSourceRouteToOpenApiPath(route: string) {
     .replace(/\/route\.ts$/, '')
     .replace('source-configs/[id]', 'source-configs/{sourceId}')
     .replace('source-proposals/[id]', 'source-proposals/{proposalId}')
+    .replace('source-origins/[id]', 'source-origins/{originId}')
     .replace('ingestion-runs/[id]', 'ingestion-runs/{ingestionRunId}')
     .replace('worker/source-configs/[id]', 'worker/source-configs/{sourceId}')
     .replace('[connectorId]', '{connectorId}')
@@ -128,21 +129,19 @@ void test('source error envelope freezes every connector error emitted by the cu
   assert.deepEqual(schema.enum, [...SOURCE_API_ERROR_CODES]);
   const actualCodes = new Set<string>();
   for (const relative of [
-    '../app/api/v1/credential-broker/fetch/route.ts',
     '../app/api/v1/ingestion-runs/[id]/commit/route.ts',
     '../app/api/v1/ingestion-runs/[id]/complete/route.ts',
     '../app/api/v1/ingestion-runs/[id]/raw/route.ts',
     '../app/api/v1/source-configs/[id]/runs/route.ts',
     '../app/api/v1/source-configs/[id]/backfills/route.ts',
     '../app/api/v1/pipeline/recompute/route.ts',
-    '../lib/source-egress.ts',
   ]) {
     const source = await readFile(new URL(relative, import.meta.url), 'utf8');
     for (const match of source.matchAll(/(?:errorCode:\s*|SourceEgressError\([^,]+,\s*)['"]([A-Z][A-Z0-9_]+)['"]/g)) {
       actualCodes.add(match[1]);
     }
   }
-  assert.ok(actualCodes.size >= 10);
+  assert.ok(actualCodes.size >= 5);
   const documentedCodes = new Set<unknown>(schema.enum ?? []);
   for (const code of actualCodes) assert.ok(documentedCodes.has(code), code);
 });
@@ -184,19 +183,15 @@ void test('source governance operations have machine-readable success schemas', 
   const document = yaml.load(text) as OpenApi;
   const expected: Array<[string, string, string[]]> = [
     ['/source-connectors', 'get', ['200']],
-    ['/source-credentials/policies', 'get', ['200']],
     ['/source-connectors/{connectorId}/versions/{connectorVersion}/control', 'get', ['200']],
     ['/source-connectors/{connectorId}/versions/{connectorVersion}/control', 'patch', ['200']],
     ['/source-configs/{sourceId}/ownership', 'patch', ['200']],
     ['/source-configs/{sourceId}/rights', 'get', ['200']],
     ['/source-configs/{sourceId}/rights', 'post', ['200']],
     ['/source-configs/{sourceId}/rights', 'put', ['200', '201']],
-    ['/source-configs/{sourceId}/credentials', 'post', ['200']],
-    ['/source-configs/{sourceId}/credentials', 'delete', ['200']],
     ['/source-configs/{sourceId}/checkpoint-cutovers', 'get', ['200']],
     ['/source-configs/{sourceId}/checkpoint-cutovers', 'post', ['200', '201']],
     ['/source-configs/{sourceId}/checkpoint-cutovers/{cutoverId}', 'patch', ['200']],
-    ['/source-configs/{sourceId}/disconnect', 'post', ['200']],
     ['/source-configs/{sourceId}/archive', 'post', ['200']],
     ['/source-configs/{sourceId}/content-withdrawals', 'get', ['200']],
     ['/source-configs/{sourceId}/content-withdrawals', 'post', ['200', '202']],
@@ -227,7 +222,6 @@ void test('source worker protocol operations have machine-readable success schem
     ['/ingestion-runs/{ingestionRunId}/pages', 'get', '200', 'IngestionRunRecovery'],
     ['/ingestion-runs/{ingestionRunId}/pages/{pageKey}', 'put', '200', 'IngestionPageCommitResult'],
     ['/ingestion-runs/{ingestionRunId}/complete', 'post', '200', 'IngestionRunCompleteResult'],
-    ['/credential-broker/fetch', 'post', '200', 'CredentialBrokerFetchResult'],
     ['/pipeline/recompute', 'post', '200', 'PipelineRecomputeResult'],
     ['/worker/legal-deletion-withdrawals/{jobId}/authorize', 'post', '200', 'SourceWithdrawalAuthorizationResult'],
   ];
@@ -256,7 +250,6 @@ void test('every documented source error response requires a machine-readable er
     path.startsWith('/ingestion-runs/') ||
     path.startsWith('/worker/source-configs/') ||
     path.startsWith('/worker/legal-deletion-withdrawals/') ||
-    path === '/credential-broker/fetch' ||
     path === '/pipeline/recompute';
   let documentedErrors = 0;
   for (const [path, operations] of Object.entries(document.paths)) {
@@ -294,7 +287,6 @@ void test('every documented source error response requires a machine-readable er
     ['/source-configs/{sourceId}/backfills/estimates', 'post', ['400', '403', '404', '409', '422']],
     ['/ingestion-runs/{ingestionRunId}/commit', 'post', ['400', '401', '404', '409', '413', '422', '503']],
     ['/ingestion-runs/{ingestionRunId}/complete', 'post', ['400', '401', '404', '409', '422', '503']],
-    ['/credential-broker/fetch', 'post', ['400', '401', '409', '422', '503']],
     ['/pipeline/recompute', 'post', ['400', '401', '404', '409', '422', '503']],
     ['/ingestion-runs/{ingestionRunId}/raw', 'put', ['401', '409', '413', '422', '503']],
   ];
@@ -324,14 +316,11 @@ void test('source control-plane and worker routes do not return untyped error ob
     '../app/api/v1/worker/source-configs/[id]/route.ts',
     '../app/api/v1/worker/legal-deletion-withdrawals/[jobId]/authorize/route.ts',
     '../app/api/v1/source-connectors/route.ts',
-    '../app/api/v1/source-credentials/policies/route.ts',
     '../app/api/v1/source-connectors/[connectorId]/versions/[version]/control/route.ts',
     '../app/api/v1/source-configs/[id]/ownership/route.ts',
     '../app/api/v1/source-configs/[id]/rights/route.ts',
-    '../app/api/v1/source-configs/[id]/credentials/route.ts',
     '../app/api/v1/source-configs/[id]/checkpoint-cutovers/route.ts',
     '../app/api/v1/source-configs/[id]/checkpoint-cutovers/[cutoverId]/route.ts',
-    '../app/api/v1/source-configs/[id]/disconnect/route.ts',
     '../app/api/v1/source-configs/[id]/archive/route.ts',
     '../app/api/v1/source-configs/[id]/content-withdrawals/route.ts',
     '../app/api/v1/source-configs/[id]/content-withdrawals/[requestId]/retry/route.ts',
@@ -343,7 +332,6 @@ void test('source control-plane and worker routes do not return untyped error ob
     '../app/api/v1/ingestion-runs/[id]/raw/route.ts',
     '../app/api/v1/ingestion-runs/[id]/pages/route.ts',
     '../app/api/v1/ingestion-runs/[id]/pages/[pageKey]/route.ts',
-    '../app/api/v1/credential-broker/fetch/route.ts',
     '../app/api/v1/pipeline/recompute/route.ts',
   ];
   for (const route of routes) {
@@ -370,8 +358,6 @@ void test('actor source read models are strict allowlists and the worker uses a 
     'SourceRunRecord',
     'CheckpointCutoverRecord',
     'SourceDeletionRequestRecord',
-    'SourceCredentialPolicyPublic',
-    'SourceCredentialBindingResult',
     'SourceConnectorDescriptor',
     'SourceConnectorRuntime',
     'SourceLegalHoldRecord',

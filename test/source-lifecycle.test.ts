@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { archiveSource, disconnectSource, withdrawSourceContent } from '../lib/source-lifecycle.ts';
+import { archiveSource, withdrawSourceContent } from '../lib/source-lifecycle.ts';
 import { createMemoryPg } from './pg-memory.ts';
 
 const now = new Date('2026-09-09T01:00:00.000Z');
@@ -11,10 +11,9 @@ async function seedSource(id: string) {
   await db.client.query(`
     INSERT INTO source_configs
       (id, name, adapter, config_json, rights_status, enabled, version,
-       lifecycle_status, health_status, config_hash, credential_ref,
-       credential_version, created_at, updated_at)
+       lifecycle_status, health_status, config_hash, created_at, updated_at)
     VALUES ($1, 'Feed', 'rss', '{}', 'approved', 1, 3, 'enabled', 'healthy',
-      'hash-v3', 'secret-ref', 2, $2, $2)
+      'hash-v3', $2, $2)
   `, [id, now.toISOString()]);
   await db.client.query(`
     INSERT INTO jobs
@@ -43,30 +42,6 @@ void test('archiving disables a source and atomically cancels work that has not 
   });
   assert.equal(((await db.client.query("SELECT status FROM jobs WHERE id = 'job-queued'")).rows[0] as { status: string }).status, 'cancelled');
   assert.equal(((await db.client.query("SELECT status FROM ingestion_runs WHERE id = 'run-queued'")).rows[0] as { status: string }).status, 'cancelled');
-});
-
-void test('disconnecting revokes pending sessions, rotates the credential version, and rejects stale versions', async () => {
-  const db = await seedSource('source-disconnect');
-  await db.client.query(`
-    INSERT INTO source_connection_sessions
-      (id, source_config_id, initiated_by, connector, status, state_hash, expires_at, created_at)
-    VALUES ('session-1', 'source-disconnect', 'admin-1', 'rss-v1', 'pending', 'state-hash', $1, $2)
-  `, [new Date(now.valueOf() + 60_000).toISOString(), now.toISOString()]);
-  const result = await disconnectSource(db, {
-    sourceId: 'source-disconnect', expectedVersion: 3, reason: 'Rotate access', actor,
-  }, now);
-  assert.equal('error' in result, false);
-  const source = await db.client.query("SELECT enabled, lifecycle_status, health_status, credential_ref, credential_version, version FROM source_configs WHERE id = 'source-disconnect'");
-  assert.deepEqual(source.rows[0], {
-    enabled: 0, lifecycle_status: 'auth_required', health_status: 'auth_required',
-    credential_ref: null, credential_version: 3, version: 4,
-  });
-  assert.equal(((await db.client.query("SELECT status FROM source_connection_sessions WHERE id = 'session-1'")).rows[0] as { status: string }).status, 'revoked');
-  assert.equal(((await db.client.query("SELECT kind FROM source_connection_events WHERE source_config_id = 'source-disconnect'")).rows[0] as { kind: string }).kind, 'disconnected');
-  assert.deepEqual(
-    await disconnectSource(db, { sourceId: 'source-disconnect', expectedVersion: 3, reason: 'stale', actor }, now),
-    { status: 409, error: '版本冲突：当前版本为 4。' },
-  );
 });
 
 void test('content withdrawal tombstones origins, revokes rights, and enqueues one idempotent recompute', async () => {

@@ -44,7 +44,6 @@ services:
       SIGNAL40_IDENTITY_HEADER_ID: ${SIGNAL40_IDENTITY_HEADER_ID:-oai-authenticated-user-id}
       SIGNAL40_IDENTITY_HEADER_EMAIL: ${SIGNAL40_IDENTITY_HEADER_EMAIL:-oai-authenticated-user-email}
       SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS: ${SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS:-true}
-      SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON: ${SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON:-{}}
       RENDER_CONCURRENCY_LIMIT: ${RENDER_CONCURRENCY_LIMIT:-2}
       MONTHLY_RENDER_BUDGET_MICROS: ${MONTHLY_RENDER_BUDGET_MICROS:-0}
       SIGNAL40_DEPLOYMENT_MODE: development
@@ -75,26 +74,6 @@ services:
     mem_limit: 4g
     shm_size: 1g
 
-  credential-broker:
-    build:
-      context: .
-      dockerfile: credential-broker/Dockerfile
-    # Broker 只持有 DB、source token、目标策略和对应 provider Secret；
-    # 不得到对象存储、OpenAI、YouTube、发布、调度器或 render 凭据。
-    environment:
-      DATABASE_URL: postgres://signal40:signal40@postgres:5432/signal40
-      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-5}
-      DATABASE_CONNECT_TIMEOUT_MS: ${DATABASE_CONNECT_TIMEOUT_MS:-5000}
-      SIGNAL40_SOURCE_WORKER_TOKEN: ${SIGNAL40_SOURCE_WORKER_TOKEN:-${SIGNAL40_WORKER_TOKEN:-local-development}}
-      SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON: ${SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON:-{}}
-      SIGNAL40_MARKET_DATA_KEY: ${SIGNAL40_MARKET_DATA_KEY:-}
-      SIGNAL40_DEPLOYMENT_MODE: development
-      PORT: 3002
-    depends_on:
-      postgres: {condition: service_healthy}
-    restart: unless-stopped
-    mem_limit: 256m
-
   source-worker:
     build:
       context: .
@@ -102,12 +81,11 @@ services:
     # 来源 Worker 不读取整份 .env，因此拿不到 OpenAI、YouTube 或对象存储长期凭据。
     environment:
       SIGNAL40_CONTROL_URL: http://control-plane:3000
-      SIGNAL40_CREDENTIAL_BROKER_URL: http://credential-broker:3002
       SIGNAL40_WORKER_PROFILE: source
       SIGNAL40_SOURCE_WORKER_TOKEN: ${SIGNAL40_SOURCE_WORKER_TOKEN:-${SIGNAL40_WORKER_TOKEN:-local-development}}
       SIGNAL40_SOURCE_WORKER_ID: ${SIGNAL40_SOURCE_WORKER_ID:-source-worker-1}
       SIGNAL40_DEPLOYMENT_MODE: development
-    depends_on: [control-plane, credential-broker]
+    depends_on: [control-plane]
     restart: unless-stopped
     mem_limit: 512m
 

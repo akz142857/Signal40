@@ -3,7 +3,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { sourceApiError } from '../lib/source-api-error.ts';
-import { assertNoSensitiveReflection, SourceEgressError } from '../lib/source-egress.ts';
 import {
   projectPublicCheckpointCutover,
   projectPublicDeletionRequest,
@@ -36,7 +35,7 @@ async function publicContractSurfaces(canary: string): Promise<SensitiveCanarySu
   const source = projectPublicSourceRecord({
     id: 'source-canary', name: 'Canary source', adapter: 'http', platform: 'http_json',
     lifecycle_status: 'enabled', health_status: 'healthy', rights_status: 'approved',
-    enabled: 1, version: 1, credential_ref: canary, credential_version: 1,
+    enabled: 1, version: 1,
     checkpoint_version: 1, active_run_id: 'run-canary', last_error_code: 'NETWORK',
     checkpoint_json: { cursor: canary }, checkpoint: canary,
     locator_json: { objectKey: `raw/${canary}` }, capabilities_json: { etag: canary },
@@ -44,7 +43,6 @@ async function publicContractSurfaces(canary: string): Promise<SensitiveCanarySu
       sourceType: 'market', url: secretUrl,
       mapping: { items: 'data.items', secret: canary },
       pagination: { mode: 'cursor', cursorPath: 'next.cursor', checkpoint: canary },
-      credentialRef: canary,
     },
   });
   const sourceTest = projectPublicSourceTestRecord({
@@ -92,7 +90,7 @@ async function publicContractSurfaces(canary: string): Promise<SensitiveCanarySu
     { label: 'redacted-log', value: 'source request failed errorCode=NETWORK url=[redacted-url]' },
     { label: 'redacted-trace', value: { span: 'source.fetch', attributes: { url: '[redacted-url]' } } },
     { label: 'redacted-snapshot', value: { sourceId: 'source-canary', checkpointVersion: 1 } },
-    { label: 'redacted-export', value: { sourceId: 'source-canary', hasCredential: true } },
+    { label: 'redacted-export', value: { sourceId: 'source-canary', enabled: true } },
   ];
 }
 
@@ -117,27 +115,12 @@ async function main() {
   );
   if (!selfTest.length) throw new Error('敏感值扫描器自检失败：未检出注入值。');
 
-  let reflectionBlocked = false;
-  try {
-    assertNoSensitiveReflection(
-      JSON.stringify({ preview: { summary: canary }, etag: canary }),
-      [canary],
-    );
-  } catch (error) {
-    reflectionBlocked = error instanceof SourceEgressError &&
-      error.code === 'UPSTREAM_SECRET_REFLECTION';
-  }
-  if (!reflectionBlocked) {
-    throw new Error('Broker 敏感回显门禁自检失败：preview/ETag 注入未被阻断。');
-  }
-
   assertNoSensitiveCanary(surfaces, canary);
   console.log(JSON.stringify({
     status: 'passed',
     scannedSurfaces: surfaces.length,
     suppliedArtifacts: files.length,
     checkedEncodings: sensitiveCanaryVariants(canary).map(({ encoding }) => encoding),
-    brokerReflectionGuard: true,
     canaryPrinted: false,
   }));
 }

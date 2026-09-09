@@ -7,7 +7,6 @@ type SourceState = {
   version: number;
   lifecycle_status: string;
   config_hash: string;
-  credential_version: number;
 };
 
 export type SourceLifecycleResult =
@@ -37,7 +36,7 @@ async function cancelNotStartedRuns(db: SqlDatabase, sourceId: string, now: stri
 
 async function lockSource(db: SqlDatabase, sourceId: string) {
   return db.prepare(`
-    SELECT id, version, lifecycle_status, config_hash, credential_version
+    SELECT id, version, lifecycle_status, config_hash
     FROM source_configs WHERE id = ? FOR UPDATE
   `).bind(sourceId).first<SourceState>();
 }
@@ -79,60 +78,10 @@ export async function archiveSource(
       WHERE id = ? AND version = ?
     `).bind(timestamp, timestamp, source.id, source.version).run();
     if (!updated.meta.changes) return { status: 409 as const, error: '来源已被其他管理员修改。' };
-    await tx.prepare(`
-      UPDATE source_credentials SET status = 'revoked', revoked_at = ?, updated_at = ?
-      WHERE source_config_id = ? AND revoked_at IS NULL
-    `).bind(timestamp, timestamp, source.id).run();
     const cancelledRuns = await cancelNotStartedRuns(tx, source.id, timestamp);
     await auditLifecycle(tx, {
       actor: input.actor, action: 'source.archived', source, nextVersion: source.version + 1,
       metadata: { reason: input.reason.slice(0, 500), cancelledRuns }, now: timestamp,
-    });
-    return { status: 200 as const, sourceId: source.id, version: source.version + 1, cancelledRuns };
-  });
-}
-
-export async function disconnectSource(
-  db: SqlDatabase,
-  input: { sourceId: string; expectedVersion: number; reason: string; actor: Actor },
-  now = new Date(),
-): Promise<SourceLifecycleResult> {
-  return db.transaction(async (tx) => {
-    const source = await lockSource(tx, input.sourceId);
-    if (!source) return { status: 404 as const, error: '来源不存在。' };
-    if (source.version !== input.expectedVersion) return { status: 409 as const, error: `版本冲突：当前版本为 ${source.version}。` };
-    if (source.lifecycle_status === 'archived') return { status: 409 as const, error: '已归档来源不能断开连接。' };
-    const timestamp = now.toISOString();
-    const nextCredentialVersion = source.credential_version + 1;
-    const updated = await tx.prepare(`
-      UPDATE source_configs SET enabled = 0, lifecycle_status = 'auth_required',
-        health_status = 'auth_required', next_run_at = NULL, active_run_id = NULL,
-        credential_ref = NULL, credential_version = ?, last_error_code = 'AUTH_REQUIRED',
-        last_error = '来源连接已断开。', last_error_detail_redacted = '来源连接已断开，需重新连接后测试。',
-        version = version + 1, updated_at = ?
-      WHERE id = ? AND version = ?
-    `).bind(nextCredentialVersion, timestamp, source.id, source.version).run();
-    if (!updated.meta.changes) return { status: 409 as const, error: '来源已被其他管理员修改。' };
-    await tx.prepare(`
-      UPDATE source_credentials SET status = 'revoked', revoked_at = ?, updated_at = ?
-      WHERE source_config_id = ? AND revoked_at IS NULL
-    `).bind(timestamp, timestamp, source.id).run();
-    await tx.prepare(`
-      UPDATE source_connection_sessions SET status = 'revoked'
-      WHERE source_config_id = ? AND status = 'pending'
-    `).bind(source.id).run();
-    await tx.prepare(`
-      INSERT INTO source_connection_events
-        (id, source_config_id, kind, actor_id, credential_version, detail_redacted, created_at)
-      VALUES (?, ?, 'disconnected', ?, ?, ?, ?)
-    `).bind(
-      `connection_event_${crypto.randomUUID()}`, source.id, input.actor.id,
-      nextCredentialVersion, input.reason.slice(0, 500), timestamp,
-    ).run();
-    const cancelledRuns = await cancelNotStartedRuns(tx, source.id, timestamp);
-    await auditLifecycle(tx, {
-      actor: input.actor, action: 'source.disconnected', source, nextVersion: source.version + 1,
-      metadata: { reason: input.reason.slice(0, 500), cancelledRuns, credentialVersion: nextCredentialVersion }, now: timestamp,
     });
     return { status: 200 as const, sourceId: source.id, version: source.version + 1, cancelledRuns };
   });

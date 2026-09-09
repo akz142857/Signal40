@@ -28,7 +28,7 @@ export async function GET(
   const source = await db
     .prepare(`
     SELECT id, name, adapter, platform, team_id, owner_team_id,
-      business_owner_id, credential_steward_id, backup_admin_id,
+      business_owner_id, publisher_entity_id,
       config_json, lifecycle_status, health_status, rights_status,
       rate_limit_per_minute, retention_mode,
       cost_micros_per_request, estimated_requests_per_run, monthly_budget_micros,
@@ -36,7 +36,7 @@ export async function GET(
       schedule_priority, auto_throttle_enabled, effective_schedule_multiplier,
       schedule_throttle_reason, schedule_throttle_recovery_at,
       retention_days, enabled, version, schedule_cron, checkpoint_version,
-      credential_ref, credential_version, next_run_at, last_success_at,
+      next_run_at, last_success_at,
       last_tested_at, last_error_code, consecutive_failures, active_run_id,
       (SELECT status FROM source_deletion_requests dr WHERE dr.source_config_id = source_configs.id AND dr.status <> 'completed' ORDER BY dr.created_at DESC LIMIT 1) AS deletion_status,
       (SELECT id FROM source_deletion_requests dr WHERE dr.source_config_id = source_configs.id AND dr.status <> 'completed' ORDER BY dr.created_at DESC LIMIT 1) AS deletion_request_id,
@@ -66,6 +66,7 @@ export async function PATCH(
     billingPolicy?: unknown;
     schedulePolicy?: unknown;
     pauseReason?: string;
+    publisherEntityId?: string | null;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -104,8 +105,7 @@ export async function PATCH(
       rate_limit_per_minute, retention_mode, retention_days, enabled, lifecycle_status,
       cost_micros_per_request, estimated_requests_per_run, monthly_budget_micros,
       budget_soft_limit_percent,
-      schedule_priority, auto_throttle_enabled,
-      credential_ref, credential_version
+      schedule_priority, auto_throttle_enabled, publisher_entity_id
     FROM source_configs WHERE id = ? LIMIT 1
   `)
     .bind(id)
@@ -129,8 +129,7 @@ export async function PATCH(
       budget_soft_limit_percent: number;
       schedule_priority: number;
       auto_throttle_enabled: number;
-      credential_ref: string | null;
-      credential_version: number;
+      publisher_entity_id: string | null;
     }>();
   if (!existing)
     return sourceApiError('来源不存在。', 404);
@@ -152,26 +151,7 @@ export async function PATCH(
         ? (body.pagination ?? { mode: 'none' as const })
         : undefined,
   };
-  if (existing.credential_ref) {
-    if (body.adapter !== existing.adapter || platform !== existing.platform) {
-      return sourceApiError('已绑定凭据的来源不能直接切换 adapter/platform；请先撤销凭据。', 409);
-    }
-    const previous =
-      typeof existing.config_json === 'string'
-        ? (JSON.parse(existing.config_json) as { url?: unknown })
-        : (existing.config_json as { url?: unknown });
-    const previousOrigin =
-      typeof previous?.url === 'string' ? new URL(previous.url).origin : '';
-    if (previousOrigin !== new URL(normalizedUrl).origin) {
-      return sourceApiError('已绑定凭据的来源不能直接修改 target origin；请先撤销凭据。', 409);
-    }
-  }
-  const nextConfigHash = stableHash({
-    platform,
-    adapter: body.adapter,
-    config: nextConfig,
-    credentialVersion: existing.credential_version,
-  });
+  const nextConfigHash = stableHash({ platform, adapter: body.adapter, config: nextConfig });
   const configChanged = nextConfigHash !== existing.config_hash;
   if (
     !configChanged &&
@@ -190,11 +170,20 @@ export async function PATCH(
     mode: existing.retention_mode as 'metadata' | 'raw',
     days: existing.retention_days,
   };
+  const publisherEntityId = body.publisherEntityId === undefined
+    ? existing.publisher_entity_id
+    : body.publisherEntityId?.trim() || null;
+  if (publisherEntityId) {
+    const publisher = await db.prepare('SELECT id FROM publisher_entities WHERE id = ? LIMIT 1')
+      .bind(publisherEntityId).first<{ id: string }>();
+    if (!publisher) return sourceApiError('publisher entity 不存在。', 422);
+  }
   const nextRightsConfigHash = stableHash({
     platform,
     adapter: body.adapter,
     config: nextConfig,
     retention,
+    publisherEntityId,
   });
   const billing = parseSourceBillingPolicy(body.billingPolicy, {
     costMicrosPerRequest: existing.cost_micros_per_request,
@@ -231,7 +220,7 @@ export async function PATCH(
     const updated = await tx
       .prepare(`
       UPDATE source_configs SET name = ?, adapter = ?, platform = ?, config_json = ?,
-        locator_json = ?, locator_hash = ?, config_hash = ?, rights_config_hash = ?, source_type = ?, rights_status = ?, enabled = 0,
+        locator_json = ?, locator_hash = ?, config_hash = ?, rights_config_hash = ?, source_type = ?, publisher_entity_id = ?, rights_status = ?, enabled = 0,
         lifecycle_status = ?, health_status = ?, last_tested_config_hash = ?,
         rate_limit_per_minute = ?, retention_mode = ?, retention_days = ?,
         cost_micros_per_request = ?, estimated_requests_per_run = ?,
@@ -254,6 +243,7 @@ export async function PATCH(
         nextConfigHash,
         nextRightsConfigHash,
         body.sourceType,
+        publisherEntityId,
         grantMustChange ? 'pending' : existing.rights_status,
         configChanged ? 'draft' : 'paused',
         configChanged ? 'unknown' : 'paused',

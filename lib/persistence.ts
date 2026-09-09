@@ -30,6 +30,11 @@ type ArticleRow = {
   evidence_family_id?: string | null;
   publisher_entity_id?: string | null;
   publisher_ownership_group?: string | null;
+  platform?: string | null;
+  origin_relationship?: Article['originRelationship'] | null;
+  origin_confidence?: number | null;
+  origin_managed?: boolean | null;
+  origin_manually_corrected?: boolean | null;
 };
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -108,26 +113,38 @@ export async function loadRecentArticles(
   limit = 1_000,
 ) {
   const result = await db.prepare(`
+    WITH recent_articles AS (
+      SELECT a.* FROM articles a
+      WHERE a.published_at >= ?
+        AND (
+          NOT EXISTS (SELECT 1 FROM source_item_origins any_origin WHERE any_origin.article_id = a.id)
+          OR EXISTS (
+            SELECT 1 FROM source_item_origins active_origin
+            LEFT JOIN source_origin_corrections active_correction
+              ON active_correction.origin_id = active_origin.id
+              AND active_correction.supersedes_correction_id IS NULL
+            WHERE active_origin.article_id = a.id AND active_origin.deleted_at IS NULL
+              AND COALESCE(active_correction.evidence_family_id, active_origin.evidence_family_id) IS NOT NULL
+          )
+        )
+      ORDER BY a.published_at DESC LIMIT ?
+    )
     SELECT a.id, a.source, a.source_type, a.author, a.title, a.summary, a.url,
       a.published_at, a.metrics_json, a.content_hash,
-      origin.evidence_family_id, origin.publisher_entity_id,
-      origin.publisher_ownership_group
-    FROM articles a
-    LEFT JOIN LATERAL (
-      SELECT o.evidence_family_id, o.publisher_entity_id,
-        COALESCE(pe.ownership_group, o.publisher_entity_id) AS publisher_ownership_group
-      FROM source_item_origins o
-      LEFT JOIN publisher_entities pe ON pe.id = o.publisher_entity_id
-      WHERE o.article_id = a.id AND o.deleted_at IS NULL
-      ORDER BY o.first_seen_at ASC, o.id ASC
-      LIMIT 1
-    ) origin ON TRUE
-    WHERE a.published_at >= ?
-      AND (
-        NOT EXISTS (SELECT 1 FROM source_item_origins any_origin WHERE any_origin.article_id = a.id)
-        OR origin.evidence_family_id IS NOT NULL
-      )
-    ORDER BY a.published_at DESC LIMIT ?
+      COALESCE(c.evidence_family_id, o.evidence_family_id) AS evidence_family_id,
+      COALESCE(c.publisher_entity_id, o.publisher_entity_id) AS publisher_entity_id,
+      COALESCE(cpe.ownership_group, pe.ownership_group, c.publisher_entity_id, o.publisher_entity_id) AS publisher_ownership_group,
+      sc.platform, COALESCE(c.relationship, o.relationship) AS origin_relationship,
+      COALESCE(c.confidence, o.confidence) AS origin_confidence,
+      (o.id IS NOT NULL) AS origin_managed,
+      (c.id IS NOT NULL) AS origin_manually_corrected
+    FROM recent_articles a
+    LEFT JOIN source_item_origins o ON o.article_id = a.id AND o.deleted_at IS NULL
+    LEFT JOIN source_configs sc ON sc.id = o.source_config_id
+    LEFT JOIN source_origin_corrections c ON c.origin_id = o.id AND c.supersedes_correction_id IS NULL
+    LEFT JOIN publisher_entities pe ON pe.id = o.publisher_entity_id
+    LEFT JOIN publisher_entities cpe ON cpe.id = c.publisher_entity_id
+    ORDER BY a.published_at DESC, o.first_seen_at ASC, o.id ASC
   `).bind(since.toISOString(), limit).all<Omit<ArticleRow, 'topic_id'>>();
   return result.results.map((row) => ({
     id: row.id,
@@ -143,6 +160,11 @@ export async function loadRecentArticles(
     evidenceFamilyId: row.evidence_family_id ?? undefined,
     publisherEntityId: row.publisher_entity_id ?? undefined,
     publisherOwnershipGroup: row.publisher_ownership_group ?? undefined,
+    platform: row.platform ?? undefined,
+    originRelationship: row.origin_relationship ?? undefined,
+    originConfidence: row.origin_confidence ?? undefined,
+    originManaged: row.origin_managed ?? undefined,
+    originManuallyCorrected: row.origin_manually_corrected ?? undefined,
   }));
 }
 

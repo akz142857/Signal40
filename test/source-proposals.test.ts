@@ -54,7 +54,7 @@ void test('researcher proposal stays separate from source lifecycle until anothe
   assert.equal(decided.proposal.status, 'proposal_approved');
   assert.ok(decided.proposal.sourceConfigId);
   const source = await db.client.query(
-    'SELECT lifecycle_status, health_status, rights_status, enabled, business_owner_id, credential_steward_id FROM source_configs WHERE id = $1',
+    'SELECT lifecycle_status, health_status, rights_status, enabled, business_owner_id FROM source_configs WHERE id = $1',
     [decided.proposal.sourceConfigId],
   );
   assert.deepEqual(source.rows[0], {
@@ -63,7 +63,6 @@ void test('researcher proposal stays separate from source lifecycle until anothe
     rights_status: 'pending',
     enabled: 0,
     business_owner_id: researcher.id,
-    credential_steward_id: admin.id,
   });
   assert.equal(Number(((await db.client.query('SELECT COUNT(*) AS total FROM source_rights_grants')).rows[0] as { total: number }).total), 0);
   const rightsRequest = await db.client.query('SELECT status, requested_by FROM source_rights_requests WHERE source_config_id = $1', [decided.proposal.sourceConfigId]);
@@ -104,4 +103,26 @@ void test('proposal creation and decisions are idempotent without creating dupli
   if ('error' in approved || 'error' in approvedReplay) return;
   assert.equal(approvedReplay.replayed, true);
   assert.equal(Number(((await db.client.query('SELECT COUNT(*) AS total FROM source_configs')).rows[0] as { total: number }).total), 1);
+});
+
+void test('public web and platform feed proposals use the same governed workflow', async () => {
+  const db = await createMemoryPg();
+  const cases = [
+    { platform: 'web_page' as const, adapter: 'web' as const, url: 'https://example.com/hot' },
+    { platform: 'wechat' as const, adapter: 'rss' as const, url: 'https://example.com/wechat.xml' },
+    { platform: 'xiaohongshu' as const, adapter: 'rss' as const, url: 'https://example.com/xhs.xml' },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const created = await createSourceProposal(db, {
+      ...item,
+      name: `Public source ${index}`,
+      sourceType: 'social',
+      scheduleCron: null,
+      requestNote: '已确认该公开 URL 可进入来源权利审核流程。',
+      idempotencyKey: `public-source-proposal-${index}`,
+      actor: researcher,
+    }, now);
+    assert.equal('error' in created, false);
+  }
+  assert.equal((await listSourceProposals(db, researcher)).length, 3);
 });

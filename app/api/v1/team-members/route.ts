@@ -11,13 +11,7 @@ export async function GET(request: Request) {
       member.created_at, member.updated_at,
       CAST((SELECT COUNT(*) FROM source_configs source
        WHERE source.business_owner_id = member.user_id
-         AND source.lifecycle_status <> 'archived') AS integer) AS business_source_count,
-      CAST((SELECT COUNT(*) FROM source_configs source
-       WHERE source.credential_steward_id = member.user_id
-         AND source.lifecycle_status <> 'archived') AS integer) AS credential_source_count,
-      CAST((SELECT COUNT(*) FROM source_configs source
-       WHERE source.backup_admin_id = member.user_id
-         AND source.lifecycle_status <> 'archived') AS integer) AS backup_source_count
+         AND source.lifecycle_status <> 'archived') AS integer) AS business_source_count
     FROM team_members member ORDER BY member.email
   `).all();
   return Response.json({ members: result.results });

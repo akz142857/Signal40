@@ -15,11 +15,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   const result = await db.transaction(async (tx) => {
     const source = await tx.prepare(`
-      SELECT id, platform, config_hash, lifecycle_status, credential_ref, credential_version FROM source_configs
+      SELECT id, platform, config_hash, lifecycle_status FROM source_configs
       WHERE id = ? FOR UPDATE
     `).bind(id).first<{
       id: string; platform: string; config_hash: string; lifecycle_status: string;
-      credential_ref: string | null; credential_version: number;
     }>();
     if (!source) return { error: '来源不存在。', status: 404 as const };
     if (source.lifecycle_status === 'archived') return { error: '已归档来源不能测试。', status: 409 as const };
@@ -34,16 +33,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     `).bind(connector.id, connector.version).first<{ rollout_mode: string }>();
     if (!release || release.rollout_mode === 'disabled') {
       return { error: `连接器 ${connector.id}@${connector.version} 当前已停用。`, status: 409 as const };
-    }
-    if (source.credential_ref) {
-      const credential = await tx.prepare(`
-        SELECT id FROM source_credentials
-        WHERE id = ? AND source_config_id = ? AND connector_id = ? AND version = ?
-          AND status = 'active' AND revoked_at IS NULL
-          AND (expires_at IS NULL OR expires_at > ?)
-        LIMIT 1
-      `).bind(source.credential_ref, id, connector.id, source.credential_version, timestamp).first<{ id: string }>();
-      if (!credential) return { error: '来源凭据已撤销、过期或版本不匹配。', status: 409 as const };
     }
     const replay = await tx.prepare(`
       SELECT sct.id, sct.status, sct.job_id FROM source_connection_tests sct
@@ -62,8 +51,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       configHash: source.config_hash,
       connectorId: connector.id,
       connectorVersion: connector.version,
-      credentialRef: source.credential_ref,
-      credentialVersion: source.credential_version,
       rolloutMode: release.rollout_mode,
     };
     await tx.prepare(`

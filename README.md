@@ -36,11 +36,8 @@ R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com
 | `DATABASE_URL` | 控制面 + 脚本 | PostgreSQL 连接串 |
 | `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 控制面 | R2 的 S3 端点与 API Token；`S3_REGION` 固定 `auto` |
 | `BOOTSTRAP_ADMIN_EMAILS` / `MEDIA_SIGNING_SECRET` / `SCHEDULER_TOKEN` / `WEBHOOK_SECRET` | 控制面 | 鉴权与签名 |
-| `SIGNAL40_CONTROL_URL` / `SIGNAL40_WORKER_TOKEN` | Worker | 本机开发填 `local-development`；共享令牌只用于兼容 combined profile |
+| `SIGNAL40_CONTROL_URL` | Worker | 控制面地址 |
 | `SIGNAL40_SOURCE_WORKER_TOKEN` / `SIGNAL40_RENDER_WORKER_TOKEN` | 对应 Worker + 控制面 | 生产必须为两个 profile 配置不同值，控制面按作业类型和端点拒绝越界令牌 |
-| `SIGNAL40_CREDENTIAL_BROKER_URL` | Source Worker | 独立 Broker 地址；本机未另启 Broker 时可省略并回退到控制面兼容路由 |
-| `SIGNAL40_SOURCE_CREDENTIAL_POLICIES_JSON` | 控制面 + Broker | alias、目标 origin、Header 与 provider 环境变量名；不含 Secret 值 |
-| `SIGNAL40_*_KEY`（策略引用的 provider Secret） | **部署时只有 Credential Broker** | 示例为 `SIGNAL40_MARKET_DATA_KEY`；不得注入控制面或 Worker |
 | `SIGNAL40_IDENTITY_HEADER_ID` / `SIGNAL40_IDENTITY_HEADER_EMAIL` | 控制面 | 认证反向代理注入的身份头名 |
 | `SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS` | 控制面 | 生产必须 `false`，否则本机请求可伪造角色 |
 | `SIGNAL40_AUTOMATION_ACTOR_ID` | 控制面 + 调度器 | 自动化服务账号；必须是 `team_members` 里 active 的 admin，不配则引擎不写入 |
@@ -54,7 +51,7 @@ R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com
 
 ```bash
 npm run db:migrate      # schema
-npm test                # 当前 252 项；未配安全可用的对象存储测试凭据时有 3 项远程契约测试跳过
+npm test                # 当前 253 项；未配安全可用的对象存储测试凭据时有 3 项远程契约测试跳过
 npm run source:chaos   # 固定 seed 的本地采集事务/租约故障演练（不代表目标环境验收）
 npm run source:sensitive-canary # 扫描公开 DTO；可重复传 --artifact 扫描 HAR/log/trace/export
 npm run test:evaluation # 100 个门禁回归场景
@@ -62,39 +59,30 @@ npm run drill:restore   # 备份 → 隔离库恢复 → 逐表比对行数 → 
 npm run test:render     # 三个模板 + 预览成片（需要 FFmpeg/Chromium）
 ```
 
-五类工作负载分开跑：控制面 `npm run dev`（或 `npm run build && npm run start`）、
+四类工作负载分开跑：控制面 `npm run dev`（或 `npm run build && npm run start`）、
 Source Worker `npm run worker:source`、Render Worker `npm run worker:render`、
-Credential Broker `npm run credential-broker`、调度器 `npm run scheduler`。
+调度器 `npm run scheduler`。
 Worker 启动后会打印 `connected to <控制面地址>`，并在空闲轮询时上报心跳，
 界面据此判断「入队的作业有没有人会执行」。
 来源 Worker 还会上报每项 capability 支持的最大整数协议版本；HTTP JSON
 metadata 采集使用 v2 逐页提交/恢复协议，旧 v1 Worker 不会误领该类作业。
-本地 Compose 会常驻拉起 `control-plane` / `source-worker` / `render-worker` / `credential-broker` / `scheduler`，
+本地 Compose 会常驻拉起 `control-plane` / `source-worker` / `render-worker` / `scheduler`，
 均设置 `restart: unless-stopped`，日常使用不需要手工启动它们。
 按上述 Makefile 命令，`npm run dev` 监听 `127.0.0.1:3001`；
 `SIGNAL40_CONTROL_URL` 可使用 `http://127.0.0.1:3001`。
 
 页面：`/` 选题雷达，`/sources` 来源与调度，`/projects/{id}` 全流程工作台，`/operations` SLO、成本和 DLQ，
 `/governance` 成员、实验和评分校准，`/automation` 自动化策略与近期自动动作，`/inbox` 待办箱，
-`/settings/diagnostics` 系统自检（数据库、迁移版本、对象存储读写、各类凭据、Worker 在线数、队列积压、调度器上次 tick）。
+`/settings/diagnostics` 系统自检（数据库、迁移版本、对象存储读写、Worker 在线数、队列积压、调度器上次 tick）。
 
-首次接入来源前，先在 `/governance` 登记至少两个 active admin，并只给其中需要审核来源权利的人开启“来源权利审批”能力。创建、批量导入或批准来源 proposal 只会生成 provisional request；请求人不能自批，必须由另一位具备该能力的 active admin 核验主体、允许字段、地域、证据与条款快照后形成 verified grant。每个来源还必须明确业务负责人、凭据管理员和可选备用管理员；负责人失效时系统产生 `/inbox` 待办，重新分配前禁止绑定凭据或启用来源。历史 draft 不会被迁移脚本擅自分配给不存在的成员。
+首次接入来源前，先在 `/governance` 登记至少两个 active admin，并只给其中需要审核来源权利的人开启“来源权利审批”能力。创建、批量导入或批准来源 proposal 只会生成 provisional request；请求人不能自批，必须由另一位具备该能力的 active admin 核验主体、允许字段、地域、证据与条款快照后形成 verified grant。每个来源还必须明确业务负责人；负责人失效时系统产生 `/inbox` 待办，重新分配前禁止启用来源。历史 draft 不会被迁移脚本擅自分配给不存在的成员。
 
 日常流程全部在界面里完成，命令行只保留部署与排障：
 `db:migrate`、`drill:restore`、备份恢复属于运维流程；
 `walk`、`ingest:real`、`check:storage`、`project:migrate`、`voice:local`、`render`、`qc:media`
 是开发者与排障工具，不属于产品流程。
 
-手工 JSON/CSV 导入必须在界面明确勾选元数据授权确认。OpenCLI 只输出本地 JSON 时不需要该确认；直接提交到服务端时需要显式设置：
-
-```bash
-SIGNAL40_API_URL=http://127.0.0.1:3001 \
-SIGNAL40_RIGHTS_CONFIRMED=true \
-SIGNAL40_IDEMPOTENCY_KEY=weixin-2026-09-08-01 \
-npm run ingest:weixin -- "财经主题" 20
-```
-
-相同幂等键和相同请求会返回第一次的精确结果；相同键不得用于另一批数据。生产环境还会校验当前成员角色，客户端伪造的角色头无效。
+手工 JSON/CSV 导入必须在界面明确勾选元数据授权确认。相同幂等键和相同请求会返回第一次的精确结果；相同键不得用于另一批数据。生产环境还会校验当前成员角色，客户端伪造的角色头无效。
 
 `contracts:rehash-local`（读 `DATABASE_URL`）只在从旧的 8 位指纹升级开发库时执行；它会将已进入审批后的项目退回 `CHANGES_REQUESTED`，要求重新审批。生产环境使用管理员接口 `POST /api/v1/contracts/rehash`。
 

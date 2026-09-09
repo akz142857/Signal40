@@ -70,7 +70,6 @@ export async function POST(request: Request) {
   }
   const ownership = await validateSourceOwnershipMembers(db, {
     businessOwnerId: actor.id,
-    credentialStewardId: actor.id,
   });
   if ('error' in ownership) {
     return sourceApiError(`批量接入前请先在治理页登记有效负责人：${ownership.error ?? '维护责任无效。'}`, 422);

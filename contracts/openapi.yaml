@@ -637,20 +637,6 @@ paths:
             '403': { $ref: '#/components/responses/SourceForbidden' },
           },
       }
-  /source-credentials/policies:
-    get:
-      summary: List browser-safe credential aliases and their target/header allowlists without provider lookup names, prefixes, or Secret material
-      x-source-action: source.governance.read
-      responses:
-        {
-          '200':
-            {
-              description: Redacted credential policies,
-              content: { application/json: { schema: { $ref: '#/components/schemas/SourceCredentialPolicyCollection' } } },
-            },
-          '403': { $ref: '#/components/responses/SourceForbidden' },
-          '503': { $ref: '#/components/responses/SourceUnavailable' },
-        }
   /source-connectors/{connectorId}/versions/{connectorVersion}/control:
     get:
       summary: Read one persistent connector-version rollout control
@@ -918,7 +904,7 @@ paths:
     patch:
       {
         x-source-action: source.ownership.manage,
-        summary: "Transfer a source business owner, active-admin credential steward, and optional distinct backup admin using an expected version and audited reason",
+        summary: "Transfer a source business owner using an expected version and audited reason",
         parameters:
           [
             {
@@ -987,68 +973,6 @@ paths:
             '409': { $ref: '#/components/responses/SourceConflict' },
           },
       }
-  /source-configs/{sourceId}/credentials:
-    post:
-      summary: Bind or rotate a server-preconfigured credential alias; disable and invalidate tests while preserving only an opaque ref/version and policy snapshot
-      x-source-action: source.credentials.manage
-      parameters:
-        [{ name: sourceId, in: path, required: true, schema: { type: string } }]
-      requestBody:
-        {
-          required: true,
-          content:
-            {
-              application/json:
-                {
-                  schema:
-                    { $ref: '#/components/schemas/SourceCredentialBinding' },
-                },
-            },
-        }
-      responses:
-        {
-          '200':
-            {
-              description: Credential bound or rotated,
-              content: { application/json: { schema: { $ref: '#/components/schemas/SourceCredentialBindingResult' } } },
-            },
-          '400': { $ref: '#/components/responses/SourceBadRequest' },
-          '403': { $ref: '#/components/responses/SourceForbidden' },
-          '404': { $ref: '#/components/responses/SourceNotFound' },
-          '409': { $ref: '#/components/responses/SourceConflict' },
-          '422': { $ref: '#/components/responses/SourceValidationError' },
-          '503': { $ref: '#/components/responses/SourceUnavailable' },
-        }
-    delete:
-      summary: Revoke the current credential immediately, disable the source, cancel unleased work, and invalidate in-flight commits by version
-      x-source-action: source.credentials.manage
-      parameters:
-        [{ name: sourceId, in: path, required: true, schema: { type: string } }]
-      requestBody:
-        {
-          required: true,
-          content:
-            {
-              application/json:
-                {
-                  schema:
-                    { $ref: '#/components/schemas/SourceCredentialRevocation' },
-                },
-            },
-        }
-      responses:
-        {
-          '200':
-            {
-              description: Credential revoked,
-              content: { application/json: { schema: { $ref: '#/components/schemas/SourceCredentialRevocationResult' } } },
-            },
-          '400': { $ref: '#/components/responses/SourceBadRequest' },
-          '403': { $ref: '#/components/responses/SourceForbidden' },
-          '404': { $ref: '#/components/responses/SourceNotFound' },
-          '409': { $ref: '#/components/responses/SourceConflict' },
-          '422': { $ref: '#/components/responses/SourceValidationError' },
-        }
   /source-configs/{sourceId}/tests/{testId}:
     get:
       {
@@ -1368,35 +1292,6 @@ paths:
           '409': { $ref: '#/components/responses/SourceConflict' },
           '422': { $ref: '#/components/responses/SourceValidationError' },
         }
-  /source-configs/{sourceId}/disconnect:
-    post:
-      {
-        x-source-action: source.disconnect,
-        summary: "Revoke pending connection sessions, rotate the credential version, disable the source, cancel unstarted work, and audit the reason",
-        parameters:
-          [
-            {
-              name: sourceId,
-              in: path,
-              required: true,
-              schema: { type: string },
-            },
-          ],
-        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceLifecycleAction' } } } },
-        responses:
-          {
-            '200':
-              {
-                description: Disconnected,
-                content: { application/json: { schema: { $ref: '#/components/schemas/SourceLifecycleResult' } } },
-              },
-            '400': { $ref: '#/components/responses/SourceBadRequest' },
-            '403': { $ref: '#/components/responses/SourceForbidden' },
-            '404': { $ref: '#/components/responses/SourceNotFound' },
-            '409': { $ref: '#/components/responses/SourceConflict' },
-            '422': { $ref: '#/components/responses/SourceValidationError' },
-          },
-      }
   /source-configs/{sourceId}/archive:
     post:
       {
@@ -1807,7 +1702,7 @@ paths:
   /diagnostics:
     get:
       {
-        summary: "Self-check database, migrations, object storage, credentials, workers, queue, and last scheduler tick without echoing secrets",
+        summary: "Self-check database, migrations, object storage, workers, queue, and last scheduler tick without echoing secrets",
         responses:
           {
             '200': { description: Diagnostics },
@@ -2021,35 +1916,6 @@ paths:
         '409': { $ref: '#/components/responses/SourceConflict' }
         '422': { $ref: '#/components/responses/SourceValidationError' }
         '503': { $ref: '#/components/responses/SourceUnavailable' }
-  /credential-broker/fetch:
-    post:
-      summary: Execute one bounded DNS-pinned GET while injecting a source/version/origin-bound Secret Header inside the dedicated broker workload; never returns credential material
-      security: [{ sourceWorkerToken: [] }]
-      requestBody:
-        {
-          required: true,
-          content:
-            {
-              application/json:
-                {
-                  schema:
-                    { $ref: '#/components/schemas/CredentialBrokerFetch' },
-                },
-            },
-        }
-      responses:
-        {
-          '200':
-            {
-              description: Bounded upstream response without request credentials,
-              content: { application/json: { schema: { $ref: '#/components/schemas/CredentialBrokerFetchResult' } } },
-            },
-          '400': { $ref: '#/components/responses/SourceBadRequest' },
-          '401': { $ref: '#/components/responses/SourceUnauthorized' },
-          '409': { $ref: '#/components/responses/SourceConflict' },
-          '422': { $ref: '#/components/responses/SourceValidationError' },
-          '503': { $ref: '#/components/responses/SourceUnavailable' },
-        }
   /ingestion-runs/{ingestionRunId}/quarantine:
     post:
       summary: Hold, release, or irreversibly discard one completed ingestion batch and enqueue deterministic topic recomputation
@@ -2194,8 +2060,8 @@ paths:
               schema: { $ref: '#/components/schemas/TeamMemberMutationResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
   /team-members/{userId}:
     patch:
       summary: Change a member role, status, or source governance capabilities
@@ -2295,6 +2161,62 @@ paths:
         requestBody: { $ref: '#/components/requestBodies/JsonBody' },
         responses: { '200': { description: Decision } },
       }
+  /publisher-entities:
+    get:
+      summary: List governed publisher identities and ownership groups
+      x-source-action: source.evidence.read
+      responses:
+        '200':
+          description: Publisher entities
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entities]
+                properties:
+                  entities:
+                    type: array
+                    items: { $ref: '#/components/schemas/PublisherEntity' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+    post:
+      summary: Register a governed publisher identity
+      x-source-action: source.evidence.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PublisherEntityCreate' }
+      responses:
+        '201': { description: Publisher entity registered }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
+  /source-origins:
+    get:
+      summary: List current source origins and their effective manual corrections
+      x-source-action: source.evidence.read
+      responses:
+        '200': { description: Source origins }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+  /source-origins/{originId}/corrections:
+    post:
+      summary: Append an immutable evidence-family and publisher correction and enqueue topic recomputation
+      x-source-action: source.evidence.correct
+      parameters:
+        - { name: originId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceOriginCorrectionCreate' }
+      responses:
+        '201': { description: Correction recorded and recomputation queued }
+        '400': { $ref: '#/components/responses/SourceBadRequest' }
+        '403': { $ref: '#/components/responses/SourceForbidden' }
+        '404': { $ref: '#/components/responses/SourceNotFound' }
+        '409': { $ref: '#/components/responses/SourceConflict' }
+        '422': { $ref: '#/components/responses/SourceValidationError' }
 components:
   securitySchemes:
     sitesSession: { type: apiKey, in: cookie, name: sites_session }
@@ -2327,6 +2249,41 @@ components:
         content: { application/json: { schema: { type: object } } },
       }
   schemas:
+    EvidenceRelationship:
+      type: string
+      enum: [original, repost, quote, syndicated, unknown]
+    PublisherEntity:
+      type: object
+      additionalProperties: true
+      required: [id, legal_name, ownership_group, entity_type]
+      properties:
+        id: { type: string }
+        legal_name: { type: string }
+        ownership_group: { type: string }
+        entity_type: { type: string }
+    PublisherEntityCreate:
+      type: object
+      additionalProperties: false
+      required: [id, legalName, ownershipGroup, entityType]
+      properties:
+        id: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$' }
+        legalName: { type: string, minLength: 1, maxLength: 300 }
+        ownershipGroup: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$' }
+        entityType: { type: string, minLength: 1, maxLength: 80 }
+        identifiers:
+          type: object
+          maxProperties: 30
+          additionalProperties: { type: string, maxLength: 500 }
+    SourceOriginCorrectionCreate:
+      type: object
+      additionalProperties: false
+      required: [relationship, evidenceFamilyId, publisherEntityId, confidence, reason]
+      properties:
+        relationship: { $ref: '#/components/schemas/EvidenceRelationship' }
+        evidenceFamilyId: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$' }
+        publisherEntityId: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$' }
+        confidence: { type: integer, minimum: 0, maximum: 100 }
+        reason: { type: string, minLength: 10, maxLength: 1000 }
     TeamRole:
       type: string
       enum: [researcher, editor, producer, publisher, auditor, admin]
@@ -2364,7 +2321,7 @@ components:
       required:
         [user_id, email, role, status, can_approve_source_rights,
          can_manage_source_legal, created_at, updated_at,
-         business_source_count, credential_source_count, backup_source_count]
+         business_source_count]
       properties:
         user_id: { type: string }
         email: { type: string, format: email }
@@ -2375,8 +2332,6 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         business_source_count: { type: integer, minimum: 0 }
-        credential_source_count: { type: integer, minimum: 0 }
-        backup_source_count: { type: integer, minimum: 0 }
     TeamMemberCollection:
       type: object
       additionalProperties: false
@@ -2422,9 +2377,9 @@ components:
          VERSION_CONFLICT, STATE_CONFLICT, IDEMPOTENCY_REQUIRED,
          IDEMPOTENCY_CONFLICT, RATE_LIMITED, BUDGET_EXCEEDED,
          CONNECTOR_UNAVAILABLE,
-         CONNECTOR_DISABLED, CONNECTOR_ROLLOUT_CHANGED, AUTH_REQUIRED,
+         CONNECTOR_DISABLED, CONNECTOR_ROLLOUT_CHANGED,
          RIGHTS_BLOCKED, LEGAL_HOLD_ACTIVE, LEASE_LOST,
-         POLICY_DRIFT, BROKER_CONFIG, SSRF_BLOCKED, NETWORK,
+         POLICY_DRIFT, SSRF_BLOCKED, NETWORK,
          PERMANENT_UNSUPPORTED, SCHEMA_CHANGED, PAYLOAD_LIMIT,
          REDIRECT_LIMIT, UPSTREAM_SECRET_REFLECTION, STORAGE_ERROR]
     ErrorEnvelope:
@@ -2473,8 +2428,7 @@ components:
       required:
         [id, name, adapter, platform, lifecycleStatus, healthStatus,
          rightsStatus, enabled, version, ownerTeamId, businessOwnerId,
-         credentialStewardId, backupAdminId, hasCredential,
-         credentialVersion, scheduleCron, checkpointVersion, nextRunAt,
+         publisherEntityId, scheduleCron, checkpointVersion, nextRunAt,
          lastSuccessAt, lastTestedAt, publicErrorCode, publicErrorMessage,
          consecutiveFailures, hasActiveRun, deletionStatus,
          deletionRequestId, rateLimitPerMinute, costMicrosPerRequest,
@@ -2486,9 +2440,9 @@ components:
       properties:
         id: { type: string, minLength: 1 }
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http] }
+        adapter: { type: string, enum: [rss, http, web] }
         platform:
-          { type: string, enum: [rss, http_json] }
+          { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         lifecycleStatus: { $ref: '#/components/schemas/SourceLifecycleStatus' }
         healthStatus: { $ref: '#/components/schemas/SourceHealthStatus' }
         rightsStatus: { $ref: '#/components/schemas/SourceRightsStatus' }
@@ -2496,10 +2450,7 @@ components:
         version: { type: integer, minimum: 1 }
         ownerTeamId: { type: [string, 'null'], maxLength: 200 }
         businessOwnerId: { type: [string, 'null'], maxLength: 200 }
-        credentialStewardId: { type: [string, 'null'], maxLength: 200 }
-        backupAdminId: { type: [string, 'null'], maxLength: 200 }
-        hasCredential: { type: boolean }
-        credentialVersion: { type: integer, minimum: 0 }
+        publisherEntityId: { type: [string, 'null'], maxLength: 200 }
         scheduleCron: { type: [string, 'null'], maxLength: 200 }
         checkpointVersion: { type: integer, minimum: 0 }
         nextRunAt: { type: [string, 'null'], format: date-time }
@@ -2587,13 +2538,13 @@ components:
         rightsRequestId: { type: [string, 'null'], maxLength: 200 }
     SourceLifecycleStatus:
       type: string
-      enum: [draft, connecting, tested, enabled, degraded, auth_required, paused, archived]
+      enum: [draft, connecting, tested, enabled, degraded, paused, archived]
     SourceProposalStatus:
       type: string
       enum: [proposal_pending, proposal_approved, proposal_rejected]
     SourceHealthStatus:
       type: string
-      enum: [unknown, healthy, degraded, auth_required, paused, waiting_capacity]
+      enum: [unknown, healthy, degraded, paused, waiting_capacity]
     SourceRightsStatus:
       type: string
       enum: [pending, approved, revoked, expired]
@@ -2615,8 +2566,8 @@ components:
       required: [name, adapter, platform, sourceType, url, requestNote]
       properties:
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http] }
-        platform: { type: string, enum: [rss, http_json] }
+        adapter: { type: string, enum: [rss, http, web] }
+        platform: { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         sourceType: { type: string, enum: [social, media, market, filing, company] }
         url: { type: string, format: uri, maxLength: 2000 }
         scheduleCron: { type: [string, 'null'], maxLength: 160 }
@@ -2638,8 +2589,8 @@ components:
       properties:
         id: { type: string, minLength: 1 }
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http] }
-        platform: { type: string, enum: [rss, http_json] }
+        adapter: { type: string, enum: [rss, http, web] }
+        platform: { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         sourceType: { type: string, enum: [social, media, market, filing, company] }
         url: { type: string, format: uri, maxLength: 2048 }
         scheduleCron: { type: [string, 'null'], maxLength: 160 }
@@ -2693,18 +2644,15 @@ components:
       additionalProperties: false
       required:
         [id, name, adapter, platform, enabled, rights_status, config_hash,
-         credential_ref, credential_version, rate_limit_per_minute,
-         retention_mode, retention_days, config]
+         rate_limit_per_minute, retention_mode, retention_days, config]
       properties:
         id: { type: string, minLength: 1 }
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http] }
-        platform: { type: string, enum: [rss, http_json] }
+        adapter: { type: string, enum: [rss, http, web] }
+        platform: { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         enabled: { type: boolean }
         rights_status: { $ref: '#/components/schemas/SourceRightsStatus' }
         config_hash: { type: string, minLength: 1 }
-        credential_ref: { type: [string, 'null'] }
-        credential_version: { type: integer, minimum: 0 }
         rate_limit_per_minute: { type: integer, minimum: 1, maximum: 600 }
         retention_mode: { type: string, enum: [metadata, raw] }
         retention_days: { type: integer, minimum: 1, maximum: 3650 }
@@ -3033,12 +2981,12 @@ components:
         version: { type: string, minLength: 1 }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
-        adapter: { type: string, enum: [rss, http, opencli, csv] }
+        adapter: { type: string, enum: [rss, http, web] }
         label: { type: string, minLength: 1 }
         availability: { type: string, enum: [available, blocked] }
         unavailableReason: { type: string, minLength: 1, maxLength: 1000 }
         authMode:
-          { type: string, enum: [public-confirmation, public-or-secret, secret, account-login, none] }
+          { type: string, enum: [public-confirmation, none] }
         requiredCapability: { type: string, pattern: '^source:[a-z0-9-]{1,40}$' }
         capabilityProtocolVersion: { type: integer, minimum: 1, maximum: 100 }
         minimumIntervalMinutes: { type: integer, minimum: 1 }
@@ -3068,12 +3016,12 @@ components:
         version: { type: string, minLength: 1 }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
-        adapter: { type: string, enum: [rss, http, opencli, csv] }
+        adapter: { type: string, enum: [rss, http, web] }
         label: { type: string, minLength: 1 }
         availability: { type: string, enum: [available, blocked] }
         unavailableReason: { type: string, minLength: 1, maxLength: 1000 }
         authMode:
-          { type: string, enum: [public-confirmation, public-or-secret, secret, account-login, none] }
+          { type: string, enum: [public-confirmation, none] }
         requiredCapability: { type: string, pattern: '^source:[a-z0-9-]{1,40}$' }
         capabilityProtocolVersion: { type: integer, minimum: 1, maximum: 100 }
         minimumIntervalMinutes: { type: integer, minimum: 1 }
@@ -3107,23 +3055,6 @@ components:
         connectors:
           type: array
           items: { $ref: '#/components/schemas/SourceConnectorRuntime' }
-    SourceCredentialPolicyPublic:
-      type: object
-      additionalProperties: false
-      required: [alias, targetOrigins, headerName]
-      properties:
-        alias: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$' }
-        targetOrigins:
-          { type: array, minItems: 1, maxItems: 20, items: { type: string, format: uri } }
-        headerName: { type: string, pattern: '^[A-Za-z][A-Za-z0-9-]{0,79}$' }
-    SourceCredentialPolicyCollection:
-      type: object
-      additionalProperties: false
-      required: [policies]
-      properties:
-        policies:
-          type: array
-          items: { $ref: '#/components/schemas/SourceCredentialPolicyPublic' }
     ConnectorReleaseControl:
       type: object
       additionalProperties: false
@@ -3167,12 +3098,10 @@ components:
     SourceOwnershipAssignment:
       type: object
       additionalProperties: false
-      required: [ownerTeamId, businessOwnerId, credentialStewardId, backupAdminId]
+      required: [ownerTeamId, businessOwnerId]
       properties:
         ownerTeamId: { type: string, minLength: 1 }
         businessOwnerId: { type: string, minLength: 1 }
-        credentialStewardId: { type: string, minLength: 1 }
-        backupAdminId: { type: [string, 'null'] }
     SourceOwnershipUpdateResult:
       type: object
       additionalProperties: false
@@ -3180,24 +3109,6 @@ components:
       properties:
         assignment: { $ref: '#/components/schemas/SourceOwnershipAssignment' }
         version: { type: integer, minimum: 2 }
-    SourceCredentialBindingResult:
-      type: object
-      additionalProperties: false
-      required: [status, credentialVersion, sourceVersion, cancelledJobs]
-      properties:
-        status: { type: integer, const: 200 }
-        credentialVersion: { type: integer, minimum: 1 }
-        sourceVersion: { type: integer, minimum: 2 }
-        cancelledJobs: { type: integer, minimum: 0 }
-    SourceCredentialRevocationResult:
-      type: object
-      additionalProperties: false
-      required: [status, credentialVersion, sourceVersion, cancelledJobs]
-      properties:
-        status: { type: integer, const: 200 }
-        credentialVersion: { type: integer, minimum: 1 }
-        sourceVersion: { type: integer, minimum: 2 }
-        cancelledJobs: { type: integer, minimum: 0 }
     CheckpointCutoverRecord:
       type: object
       additionalProperties: false
@@ -3487,26 +3398,6 @@ components:
         checkpointScope: { type: string, enum: [live, backfill] }
         pipelineJobId: { type: string, minLength: 1 }
         leaseEpoch: { type: integer, minimum: 1 }
-    CredentialBrokerFetchResult:
-      type: object
-      additionalProperties: false
-      required:
-        [url, contentType, text, byteCount, requestCount, notModified,
-         etag, lastModified]
-      properties:
-        url: { type: string, format: uri }
-        contentType: { type: string }
-        text:
-          {
-            type: string,
-            maxLength: 5000000,
-            description: Bounded upstream response body; never request credentials,
-          }
-        byteCount: { type: integer, minimum: 0, maximum: 5000000 }
-        requestCount: { type: integer, minimum: 1, maximum: 4 }
-        notModified: { type: boolean }
-        etag: { type: [string, 'null'] }
-        lastModified: { type: [string, 'null'] }
     PipelineRecomputeResult:
       type: object
       additionalProperties: false
@@ -3765,7 +3656,7 @@ components:
         [name, adapter, sourceType, rightsStatus, publicUseConfirmed]
       properties:
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http, opencli, csv] }
+        adapter: { type: string, enum: [rss, http, web] }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         sourceType:
@@ -3783,8 +3674,7 @@ components:
         billingPolicy: { $ref: '#/components/schemas/SourceBillingPolicy' }
         schedulePolicy: { $ref: '#/components/schemas/SourceSchedulePolicy' }
         businessOwnerId: { type: string, minLength: 1 }
-        credentialStewardId: { type: string, minLength: 1 }
-        backupAdminId: { type: [string, 'null'] }
+        publisherEntityId: { type: [string, 'null'], maxLength: 200 }
     SourceConfigUpdate:
       type: object
       additionalProperties: false
@@ -3795,7 +3685,7 @@ components:
         enabled:
           { type: boolean, const: false, description: Enable uses the gated action }
         name: { type: string, minLength: 1, maxLength: 160 }
-        adapter: { type: string, enum: [rss, http, opencli, csv] }
+        adapter: { type: string, enum: [rss, http, web] }
         platform:
           { type: string, enum: [rss, http_json, web_page, wechat, xiaohongshu] }
         sourceType:
@@ -3812,6 +3702,7 @@ components:
         pagination: { $ref: '#/components/schemas/HttpJsonPagination' }
         billingPolicy: { $ref: '#/components/schemas/SourceBillingPolicy' }
         schedulePolicy: { $ref: '#/components/schemas/SourceSchedulePolicy' }
+        publisherEntityId: { type: [string, 'null'], maxLength: 200 }
         pauseReason:
           { type: string, minLength: 3, maxLength: 500, description: Required when an enabled source is explicitly paused without a config change; opens an auditable SLO exclusion window }
     SourceSloExclusion:
@@ -4018,53 +3909,11 @@ components:
     SourceOwnershipUpdate:
       type: object
       additionalProperties: false
-      required:
-        [expectedVersion, businessOwnerId, credentialStewardId, reason]
+      required: [expectedVersion, businessOwnerId, reason]
       properties:
         expectedVersion: { type: integer, minimum: 1 }
         businessOwnerId: { type: string, minLength: 1 }
-        credentialStewardId: { type: string, minLength: 1 }
-        backupAdminId: { type: [string, 'null'] }
         reason: { type: string, minLength: 5, maxLength: 500 }
-    SourceCredentialBinding:
-      type: object
-      additionalProperties: false
-      required: [alias, expectedVersion, reason]
-      properties:
-        alias: { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$' }
-        expectedVersion: { type: integer, minimum: 1 }
-        reason: { type: string, minLength: 1, maxLength: 500 }
-    SourceCredentialRevocation:
-      type: object
-      additionalProperties: false
-      required: [expectedVersion, reason]
-      properties:
-        expectedVersion: { type: integer, minimum: 1 }
-        reason: { type: string, minLength: 1, maxLength: 500 }
-    CredentialBrokerFetch:
-      type: object
-      additionalProperties: false
-      required:
-        [sourceConfigId, credentialRef, credentialVersion, url, workerId, jobId,
-         leaseEpoch]
-      properties:
-        sourceConfigId: { type: string }
-        credentialRef:
-          {
-            type: string,
-            description: "Opaque ref, never provider Secret material",
-          }
-        credentialVersion: { type: integer, minimum: 1 }
-        url: { type: string, format: uri }
-        workerId: { type: string }
-        jobId: { type: string }
-        leaseEpoch: { type: integer, minimum: 1 }
-        conditional:
-          type: object
-          additionalProperties: false
-          properties:
-            etag: { type: string, maxLength: 500 }
-            lastModified: { type: string, maxLength: 500 }
     ConnectorReleaseControlUpdate:
       type: object
       additionalProperties: false
@@ -4132,7 +3981,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
     SourceConflict:
-      description: Source state, version, rights, credential, lease, checkpoint, or idempotency conflict
+      description: Source state, version, rights, lease, checkpoint, or idempotency conflict
       content:
         application/json:
           schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
@@ -4157,7 +4006,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }
     SourceUnavailable:
-      description: Source provider, storage, broker, or upstream dependency is unavailable
+      description: Source provider, storage, or upstream dependency is unavailable
       content:
         application/json:
           schema: { $ref: '#/components/schemas/SourceErrorEnvelope' }

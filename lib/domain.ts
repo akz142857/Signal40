@@ -1,4 +1,11 @@
 import { sha256Hex } from './hash.ts';
+import {
+  independentEvidenceCount,
+  SOCIAL_EVIDENCE_FAIL_CLOSED_POLICY,
+  type EvidenceQualificationPolicy,
+  type EvidenceOrigin,
+  type EvidenceRelationship,
+} from './social-evidence.ts';
 
 export const SOURCE_TYPES = [
   'social',
@@ -23,6 +30,14 @@ export type ArticleInput = {
   evidenceFamilyId?: string;
   publisherEntityId?: string;
   publisherOwnershipGroup?: string;
+  /** 仅由持久化治理层注入；连接器与浏览器输入不能自行提权。 */
+  platform?: string;
+  originRelationship?: EvidenceRelationship;
+  originConfidence?: number;
+  originManaged?: boolean;
+  originManuallyCorrected?: boolean;
+  /** 同一规范化文章可能保留多个来源 origin；仅由持久化治理层填充。 */
+  evidenceOrigins?: EvidenceOrigin[];
 };
 
 export type Article = Required<
@@ -36,6 +51,12 @@ export type Article = Required<
   evidenceFamilyId?: string;
   publisherEntityId?: string;
   publisherOwnershipGroup?: string;
+  platform?: string;
+  originRelationship?: EvidenceRelationship;
+  originConfidence?: number;
+  originManaged?: boolean;
+  originManuallyCorrected?: boolean;
+  evidenceOrigins?: EvidenceOrigin[];
 };
 
 export type ScoreBreakdown = {
@@ -202,9 +223,33 @@ export function normalizeArticles(inputs: ArticleInput[]) {
       continue;
     const canonicalUrl = input.url.trim().replace(/#.*$/, '');
     const contentHash = shortHash(`${canonicalUrl}|${clean(input.title)}`);
-    if (byHash.has(contentHash)) continue;
     const publishedAt = new Date(input.publishedAt);
     if (Number.isNaN(publishedAt.valueOf())) continue;
+    const evidenceOrigins = input.evidenceOrigins?.length ? input.evidenceOrigins : [{
+      source: input.source.trim(),
+      sourceType: input.sourceType,
+      contentHash,
+      evidenceFamilyId: input.evidenceFamilyId,
+      publisherEntityId: input.publisherEntityId,
+      publisherOwnershipGroup: input.publisherOwnershipGroup,
+      platform: input.platform,
+      originRelationship: input.originRelationship,
+      originConfidence: input.originConfidence,
+      originManaged: input.originManaged,
+      originManuallyCorrected: input.originManuallyCorrected,
+    }];
+    const existing = byHash.get(contentHash);
+    if (existing) {
+      const seen = new Set((existing.evidenceOrigins ?? []).map((origin) => JSON.stringify(origin)));
+      for (const origin of evidenceOrigins) {
+        const key = JSON.stringify(origin);
+        if (!seen.has(key)) {
+          (existing.evidenceOrigins ??= []).push(origin);
+          seen.add(key);
+        }
+      }
+      continue;
+    }
     byHash.set(contentHash, {
       id: input.id ?? `article_${contentHash}`,
       source: input.source.trim(),
@@ -219,6 +264,12 @@ export function normalizeArticles(inputs: ArticleInput[]) {
       evidenceFamilyId: input.evidenceFamilyId,
       publisherEntityId: input.publisherEntityId,
       publisherOwnershipGroup: input.publisherOwnershipGroup,
+      platform: input.platform,
+      originRelationship: input.originRelationship,
+      originConfidence: input.originConfidence,
+      originManaged: input.originManaged,
+      originManuallyCorrected: input.originManuallyCorrected,
+      evidenceOrigins: [...evidenceOrigins],
     });
   }
   return [...byHash.values()].sort((a, b) =>
@@ -260,6 +311,7 @@ function clamp(value: number) {
 function scoreCluster(
   cluster: Cluster,
   now: Date,
+  evidencePolicy: EvidenceQualificationPolicy,
 ): Omit<
   TopicCandidate,
   | 'id'
@@ -273,11 +325,10 @@ function scoreCluster(
   const uniqueSources = new Set(
     cluster.articles.map((article) => article.source),
   );
-  // 同一证据家族的改写/转载，或同一所有权集团的多个账号，都不能
-  // 通过改显示名称就增加独立证据数。旧/手工数据没有治理元数据时才回退到 source。
-  const evidenceFamilies = new Set(cluster.articles.map((article) => article.evidenceFamilyId || `legacy-content:${article.contentHash}`));
-  const publisherGroups = new Set(cluster.articles.map((article) => article.publisherOwnershipGroup || article.publisherEntityId || `legacy-source:${article.source}`));
-  const independentSourceCount = Math.min(evidenceFamilies.size, publisherGroups.size);
+  const independentSourceCount = independentEvidenceCount(
+    cluster.articles.flatMap((article) => article.evidenceOrigins?.length ? article.evidenceOrigins : [article]),
+    evidencePolicy,
+  );
   const sourceTypes = new Set(
     cluster.articles.map((article) => article.sourceType),
   );
@@ -356,6 +407,7 @@ function scoreCluster(
 export function runPipeline(
   inputs: ArticleInput[],
   now = new Date(),
+  evidencePolicy: EvidenceQualificationPolicy = SOCIAL_EVIDENCE_FAIL_CLOSED_POLICY,
 ): TopicCandidate[] {
   const articles = normalizeArticles(inputs);
   return clusterArticles(articles)
@@ -368,7 +420,7 @@ export function runPipeline(
               Number(FINANCE_TERMS.includes(a)) || b.length - a.length,
         )
         .slice(0, 6);
-      const scored = scoreCluster(cluster, now);
+      const scored = scoreCluster(cluster, now, evidencePolicy);
       return {
         id: `topic_${shortHash(
           cluster.articles
