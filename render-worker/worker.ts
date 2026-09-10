@@ -306,7 +306,13 @@ async function fetchPublicSource(initialUrl: string, checkpoint: SourceCheckpoin
     // 避免“先校验、fetch 再解析”留下 DNS rebinding/TOCTOU 窗口。
     const dispatcher = new Agent({
       connect: {
-        lookup: (_hostname, _options, callback) => callback(null, pinned.address, pinned.family),
+        // Node 20+ 默认打开 autoSelectFamily，socket 会以 all:true 调用 lookup 并要求数组回调；
+        // 只回字符串会被判成 ERR_INVALID_IP_ADDRESS，连接还没建立就失败。
+        lookup: (_hostname, options, callback) => (
+          options.all
+            ? callback(null, [{ address: pinned.address, family: pinned.family }])
+            : callback(null, pinned.address, pinned.family)
+        ),
       },
     });
     const headers: Record<string, string> = {
