@@ -1,10 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import {
   Activity,
-  ArrowLeft,
   Bot,
   CircleAlert,
   Clock3,
@@ -12,8 +10,9 @@ import {
   Cpu,
   LoaderCircle,
 } from 'lucide-react';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { PageContainer, PageHeader } from '@/components/page-shell';
 
 type Metric = {
   total: number;
@@ -283,26 +282,8 @@ export function OperationsDashboard() {
   };
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-7">
-          <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <Activity className="size-5" />
-            </div>
-            <div>
-              <p className="text-lg font-semibold">运行与 SLO</p>
-              <p className="text-xs text-muted-foreground">
-                近 30 天作业、质量与事件
-              </p>
-            </div>
-          </div>
-          <Link className={buttonVariants({ variant: 'outline' })} href="/">
-            <ArrowLeft />
-            返回雷达
-          </Link>
-        </div>
-      </header>
-      <div className="mx-auto max-w-6xl px-4 py-7 sm:px-7">
+      <PageHeader icon={<Activity className="size-5" />} title="运行与 SLO" subtitle="近 30 天作业、质量与事件" />
+      <PageContainer className="py-7">
         {!data && !error && (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderCircle className="size-4 animate-spin" />
@@ -882,7 +863,7 @@ export function OperationsDashboard() {
             </section>
           </>
         )}
-      </div>
+      </PageContainer>
     </main>
   );
 }

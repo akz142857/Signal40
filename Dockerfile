@@ -10,6 +10,7 @@ FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
 ENV SIGNAL40_DEPLOYMENT_MODE=production
+ENV SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS=false
 COPY package.json package-lock.json ./
 # 运行层不留包管理器：11 项 HIGH/CRITICAL 全部来自基础镜像自带的 npm 依赖
 # （tar/brace-expansion/ip-address/pacote/picomatch/sigstore），升级 npm 也清不干净。

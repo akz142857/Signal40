@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, CircleAlert, Inbox, LoaderCircle } from 'lucide-react';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { CircleAlert, Inbox, LoaderCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PageContainer, PageHeader } from '@/components/page-shell';
 
 type AttentionItem = {
   id: string;
@@ -77,9 +78,9 @@ export function AttentionInbox() {
   };
 
   return <main className="min-h-screen bg-background text-foreground">
-    <header className="border-b"><div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4 sm:px-7"><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div><div><p className="text-lg font-semibold">待办箱</p><p className="text-xs text-muted-foreground">自动化处理不了、需要人判断的每一件事</p></div></div><div className="flex gap-2"><Button variant={status === 'open' ? 'default' : 'outline'} onClick={() => setStatus('open')}>未处理</Button><Button variant={status === 'resolved' ? 'default' : 'outline'} onClick={() => setStatus('resolved')}>已处理</Button><Link className={buttonVariants({ variant: 'outline' })} href="/"><ArrowLeft />返回雷达</Link></div></div></header>
+    <PageHeader icon={<Inbox className="size-5" />} title="待办箱" subtitle="自动化处理不了、需要人判断的每一件事" actions={<><Button variant={status === 'open' ? 'default' : 'outline'} onClick={() => setStatus('open')}>未处理</Button><Button variant={status === 'resolved' ? 'default' : 'outline'} onClick={() => setStatus('resolved')}>已处理</Button></>} />
 
-    <div className="mx-auto max-w-5xl px-4 py-7 sm:px-7">
+    <PageContainer className="py-7">
       {error && <p className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>}
       {loading && <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />读取待办…</p>}
       <div className="grid gap-3">
@@ -107,6 +108,6 @@ export function AttentionInbox() {
         </article>;})}
         {!loading && !items.length && <p className="rounded-xl border border-dashed p-7 text-center text-sm text-muted-foreground">{status === 'open' ? '没有待处理事项。' : '还没有已处理的记录。'}</p>}
       </div>
-    </div>
+    </PageContainer>
   </main>;
 }

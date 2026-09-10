@@ -43,7 +43,8 @@ pg_run() {
     printf '%s 不在 PATH 上，且没有 docker 可用作回退。\n' "$tool" >&2
     return 127
   fi
-  docker run --rm \
+  # `-i` 必须保留 stdin：恢复路径会把 pg_restore 的 SQL 管道送入容器内 psql。
+  docker run --rm -i \
     -e PGPASSWORD \
     -v "${PG_WORK_DIR:-$PWD}:/work" \
     -w /work \

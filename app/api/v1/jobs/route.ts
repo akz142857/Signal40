@@ -1,6 +1,7 @@
 import { config, db, resolveRequestActor } from '@/lib/runtime';
 import { enqueueJob, loadContentProject } from '@/lib/control-plane';
 import { stableHash } from '@/lib/workflow';
+import { abandonIdempotentRequest, beginIdempotentRequest, completeIdempotencyStatement, validIdempotencyKey } from '@/lib/idempotency';
 
 const kinds = ['voice', 'preview', 'render'] as const;
 
@@ -8,7 +9,7 @@ export async function POST(request: Request) {
   const actor = await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   const idempotencyKey = request.headers.get('idempotency-key');
-  if (!idempotencyKey) return Response.json({ error: 'Idempotency-Key 必填。' }, { status: 400 });
+  if (!validIdempotencyKey(idempotencyKey)) return Response.json({ error: '有效的 Idempotency-Key 必填。' }, { status: 400 });
   let body: { kind?: string; projectId?: string; payload?: unknown; maxAttempts?: number; priority?: number; timeoutSeconds?: number; estimatedCostMicros?: number };
   try {
     body = (await request.json()) as typeof body;
@@ -38,23 +39,49 @@ export async function POST(request: Request) {
       if (Number(used?.total ?? 0) + Number(body.estimatedCostMicros ?? 0) > budget) return Response.json({ error: '本月渲染成本预算不足。' }, { status: 409 });
     }
   }
-  try {
-    const job = await enqueueJob(db, {
-      kind: body.kind as (typeof kinds)[number],
+  const idempotency = await beginIdempotentRequest(db, {
+    scope: `jobs.create:${actor.id}`,
+    key: idempotencyKey!,
+    request: {
+      kind: body.kind,
       projectId: body.projectId,
       payload,
-      idempotencyKey,
-      maxAttempts: body.maxAttempts,
-      priority: body.priority,
-      timeoutSeconds: body.timeoutSeconds,
-      estimatedCostMicros: body.estimatedCostMicros,
-      actor,
+      maxAttempts: body.maxAttempts ?? null,
+      priority: body.priority ?? null,
+      timeoutSeconds: body.timeoutSeconds ?? null,
+      estimatedCostMicros: body.estimatedCostMicros ?? null,
+    },
+  });
+  if (idempotency.kind === 'conflict') return Response.json({ error: '该 Idempotency-Key 已用于不同的作业请求。' }, { status: 409 });
+  if (idempotency.kind === 'pending') return Response.json({ error: '相同请求正在处理中，请稍后重试。' }, { status: 425 });
+  if (idempotency.kind === 'replay') return Response.json(idempotency.body, { status: idempotency.status });
+  try {
+    const result = await db.transaction(async (tx) => {
+      const job = await enqueueJob(tx, {
+        kind: body.kind as (typeof kinds)[number],
+        projectId: body.projectId,
+        payload,
+        idempotencyKey: idempotencyKey!,
+        maxAttempts: body.maxAttempts,
+        priority: body.priority,
+        timeoutSeconds: body.timeoutSeconds,
+        estimatedCostMicros: body.estimatedCostMicros,
+        actor,
+      });
+      if ((body.kind === 'preview' || body.kind === 'render') && job.created) {
+        await tx.prepare('INSERT INTO render_snapshots (id, project_id, snapshot_json, snapshot_hash, template_id, template_version, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING').bind(`render_${crypto.randomUUID()}`, project.id, JSON.stringify(project.project), project.project.render.snapshotHash, project.project.render.templateId ?? 'signal40-editorial', project.project.render.templateVersion, actor.id, new Date().toISOString()).run();
+      }
+      const status = job.created ? 202 : 200;
+      const responseBody = { job };
+      await completeIdempotencyStatement(tx, idempotency.reservation, status, responseBody).run();
+      return { job, status, responseBody };
     });
-    if ((body.kind === 'preview' || body.kind === 'render') && job.created) {
-      await db.prepare('INSERT INTO render_snapshots (id, project_id, snapshot_json, snapshot_hash, template_id, template_version, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING').bind(`render_${crypto.randomUUID()}`, project.id, JSON.stringify(project.project), project.project.render.snapshotHash, project.project.render.templateId ?? 'signal40-editorial', project.project.render.templateVersion, actor.id, new Date().toISOString()).run();
+    return Response.json(result.responseBody, { status: result.status });
+  } catch (error) {
+    await abandonIdempotentRequest(db, idempotency.reservation);
+    if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT') {
+      return Response.json({ error: '该 Idempotency-Key 已用于不同的作业请求。' }, { status: 409 });
     }
-    return Response.json({ job }, { status: job.created ? 202 : 200 });
-  } catch {
     return Response.json({ error: '作业入队失败。' }, { status: 503 });
   }
 }

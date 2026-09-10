@@ -1,6 +1,7 @@
 import { db, resolveRequestActor } from '@/lib/runtime';
 import { loadContentProject } from '@/lib/control-plane';
 import { stableHash } from '@/lib/workflow';
+import { abandonIdempotentRequest, beginIdempotentRequest, completeIdempotencyStatement, validIdempotencyKey } from '@/lib/idempotency';
 
 type MetricsInput = {
   publishJobId?: string;
@@ -21,7 +22,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const actor = await resolveRequestActor(request);
   if (!actor || !['publisher', 'auditor', 'admin'].includes(actor.role)) return Response.json({ error: '当前角色无权写入发布指标。' }, { status: 403 });
   const key = request.headers.get('idempotency-key');
-  if (!key) return Response.json({ error: 'Idempotency-Key 必填。' }, { status: 400 });
+  if (!validIdempotencyKey(key)) return Response.json({ error: '有效的 Idempotency-Key 必填。' }, { status: 400 });
   let body: MetricsInput;
   try { body = (await request.json()) as MetricsInput; }
   catch { return Response.json({ error: '请求体必须是 JSON。' }, { status: 400 }); }
@@ -38,16 +39,27 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!['PUBLISHED', 'MEASURED'].includes(project.state)) return Response.json({ error: '项目尚未确认发布。' }, { status: 409 });
   const publishJob = await db.prepare("SELECT id FROM publish_jobs WHERE id = ? AND project_id = ? AND status = 'published'").bind(body.publishJobId, id).first();
   if (!publishJob) return Response.json({ error: '发布任务不存在或尚未发布。' }, { status: 409 });
-  const existing = await db.prepare('SELECT id FROM metric_snapshots WHERE project_id = ? AND idempotency_key = ?').bind(id, key).first<{ id: string }>();
-  if (existing) return Response.json({ snapshot: { id: existing.id }, replayed: true });
+  const started = await beginIdempotentRequest(db, { scope: `project.metrics:${id}`, key: key!, request: body });
+  if (started.kind === 'conflict') return Response.json({ error: '该 Idempotency-Key 已用于不同的指标请求。' }, { status: 409 });
+  if (started.kind === 'pending') return Response.json({ error: '相同指标请求正在处理中。' }, { status: 425, headers: { 'Retry-After': '2' } });
+  if (started.kind === 'replay') return Response.json(started.body, { status: started.status, headers: { 'Idempotency-Replayed': 'true' } });
   const snapshotId = `metric_${crypto.randomUUID()}`;
   const now = new Date().toISOString();
   const assignments = await db.prepare('SELECT experiment_id, variant, assignment_hash FROM project_experiment_assignments WHERE project_id = ?').bind(id).all();
   const attribution = { source: body.attribution?.source ?? 'manual', window: body.attribution?.window ?? 'custom', externalId: body.attribution?.externalId ?? null, projectVersion: project.version, snapshotHash: project.project.render.snapshotHash, experiments: assignments.results };
-  await db.batch([
-    db.prepare('INSERT INTO metric_snapshots (id, project_id, publish_job_id, idempotency_key, captured_at, metrics_json, attribution_json) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(snapshotId, id, body.publishJobId, key, capturedAt.toISOString(), JSON.stringify(body.metrics), JSON.stringify(attribution)),
-    db.prepare("UPDATE content_projects SET state = 'MEASURED', version = version + 1, updated_at = ? WHERE id = ? AND state = 'PUBLISHED'").bind(now, id),
-    db.prepare("INSERT INTO audit_events (id, project_id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at) VALUES (?, ?, ?, ?, 'metrics.captured', 'metric_snapshot', ?, ?, ?, ?, ?)").bind(`audit_${crypto.randomUUID()}`, id, actor.id, actor.role, snapshotId, stableHash(body.metrics), JSON.stringify(attribution), crypto.randomUUID(), now),
-  ]);
-  return Response.json({ snapshot: { id: snapshotId, capturedAt: capturedAt.toISOString(), metrics: body.metrics, attribution } }, { status: 201 });
+  const responseBody = { snapshot: { id: snapshotId, capturedAt: capturedAt.toISOString(), metrics: body.metrics, attribution } };
+  try {
+    await db.transaction(async (tx) => {
+      await tx.batch([
+        tx.prepare('INSERT INTO metric_snapshots (id, project_id, publish_job_id, idempotency_key, captured_at, metrics_json, attribution_json) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(snapshotId, id, body.publishJobId, key, capturedAt.toISOString(), JSON.stringify(body.metrics), JSON.stringify(attribution)),
+        tx.prepare("UPDATE content_projects SET state = 'MEASURED', version = version + 1, updated_at = ? WHERE id = ? AND state = 'PUBLISHED'").bind(now, id),
+        tx.prepare("INSERT INTO audit_events (id, project_id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at) VALUES (?, ?, ?, ?, 'metrics.captured', 'metric_snapshot', ?, ?, ?, ?, ?)").bind(`audit_${crypto.randomUUID()}`, id, actor.id, actor.role, snapshotId, stableHash(body.metrics), JSON.stringify(attribution), crypto.randomUUID(), now),
+        completeIdempotencyStatement(tx, started.reservation, 201, responseBody),
+      ]);
+    });
+  } catch {
+    await abandonIdempotentRequest(db, started.reservation);
+    return Response.json({ error: '指标快照保存失败。' }, { status: 503 });
+  }
+  return Response.json(responseBody, { status: 201 });
 }

@@ -55,6 +55,8 @@ jobs:
       - run: npm ci
       - run: npm audit --omit=dev
       - run: npm run lint
+      - name: Typecheck
+        run: npm exec tsc -- --noEmit
       - run: npm run openapi:lint
       # 比对锚定的已发布 baseline，而不是「上一个提交」。用 github.event.before 会让
       # baseline 随每次推送漂移：真实的破坏性变更在下一个提交后就自动「消失」，

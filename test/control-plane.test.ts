@@ -207,7 +207,7 @@ void test('同键并发入队由唯一索引裁决，落败方回读既有作业
   const db = await createMemoryPg();
   // 另一个请求已经用同一个幂等键抢先入队。
   await db.client.query(
-    "INSERT INTO jobs (id, kind, payload_json, status, idempotency_key, available_at, created_at, updated_at) VALUES ('job_winner', 'metrics', '{}', 'queued', 'key-race', $1, $1, $1)",
+    "INSERT INTO jobs (id, kind, payload_json, status, idempotency_key, available_at, created_at, updated_at) VALUES ('job_winner', 'metrics', '{\"a\":1}', 'queued', 'key-race', $1, $1, $1)",
     [baseTime.toISOString()],
   );
 
@@ -216,6 +216,15 @@ void test('同键并发入队由唯一索引裁决，落败方回读既有作业
 
   const counted = await db.client.query("SELECT COUNT(*) AS total FROM jobs WHERE idempotency_key = 'key-race'");
   assert.equal(Number((counted.rows[0] as { total: number }).total), 1, '不该产生第二条作业');
+});
+
+void test('同一作业幂等键不能复用于不同 payload', async () => {
+  const db = await createMemoryPg();
+  await enqueueJob(db, { kind: 'metrics', payload: { a: 1 }, idempotencyKey: 'key-conflict', actor }, baseTime);
+  await assert.rejects(
+    enqueueJob(db, { kind: 'metrics', payload: { a: 2 }, idempotencyKey: 'key-conflict', actor }, at(1)),
+    /IDEMPOTENCY_CONFLICT/,
+  );
 });
 
 void test('渲染作业按项目状态领取，租约未过期时不会被第二个 Worker 重复领取', async () => {

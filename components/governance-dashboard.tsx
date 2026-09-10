@@ -1,15 +1,15 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Beaker, Check, FlaskConical, Plus, Shield, UsersRound, X } from 'lucide-react';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Beaker, Check, FlaskConical, Plus, Shield, UsersRound, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ROLES, type Role } from '@/lib/workflow';
+import { PageContainer, PageHeader } from '@/components/page-shell';
 
 type Member = {
   user_id: string;
@@ -171,8 +171,8 @@ export function GovernanceDashboard() {
   };
 
   return <main className="min-h-screen bg-background text-foreground">
-    <header className="border-b"><div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4"><div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground"><Shield className="size-5" /></span><div><h1 className="font-semibold">治理与增长实验</h1><p className="text-xs text-muted-foreground">成员权限、受控实验与离线校准</p></div></div><Link href="/" className={buttonVariants({ variant: 'outline' })}><ArrowLeft />返回雷达</Link></div></header>
-    <div className="mx-auto max-w-7xl space-y-7 px-5 py-7">{message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">{message}</output>}
+    <PageHeader width="wide" icon={<Shield className="size-5" />} title="治理与增长实验" subtitle="成员权限、受控实验与离线校准" />
+    <PageContainer width="wide" className="space-y-7 py-7">{message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">{message}</output>}
       <Section icon={UsersRound} title="团队与最小权限" description="权利审批和法律操作都是独立 capability；active legal hold 期间必须保留两名法律操作人。">
         <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[1fr_1fr_160px_190px_190px_auto]">
           <Field label="用户 ID"><Input value={memberForm.userId} onChange={(event) => setMemberForm({ ...memberForm, userId: event.target.value })} /></Field>
@@ -202,7 +202,7 @@ export function GovernanceDashboard() {
         <div className="mt-6 grid gap-3 md:grid-cols-2 lg:grid-cols-4"><Field label="算法版本"><Input value={socialCalibrationForm.algorithmVersion} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, algorithmVersion: event.target.value })} /></Field><Field label="数据集标签"><Input value={socialCalibrationForm.datasetLabel} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, datasetLabel: event.target.value })} /></Field><Field label="数据集引用"><Input value={socialCalibrationForm.datasetRef} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, datasetRef: event.target.value })} /></Field><Field label="数据集 SHA-256"><Input value={socialCalibrationForm.datasetSha256} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, datasetSha256: event.target.value })} /></Field><Field label="标注数"><Input type="number" min="100" value={socialCalibrationForm.caseCount} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, caseCount: event.target.value })} /></Field><Field label="误独立率"><Input type="number" min="0" max="0.02" step="0.001" value={socialCalibrationForm.falseIndependentRate} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, falseIndependentRate: event.target.value })} /></Field><Field label="独立召回率"><Input type="number" min="0.8" max="1" step="0.01" value={socialCalibrationForm.independentRecall} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, independentRecall: event.target.value })} /></Field><Field label="生产抽样数"><Input type="number" min="30" value={socialCalibrationForm.productionSampleSize} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, productionSampleSize: event.target.value })} /></Field><Field label="最低置信度"><Input type="number" min="0" max="100" value={socialCalibrationForm.minimumConfidence} onChange={(event) => setSocialCalibrationForm({ ...socialCalibrationForm, minimumConfidence: event.target.value })} /></Field></div>
         <Button className="mt-3" disabled={!socialCalibrationForm.datasetLabel || !socialCalibrationForm.datasetRef || !/^[a-f0-9]{64}$/.test(socialCalibrationForm.datasetSha256)} onClick={() => void createSocialCalibration()}><FlaskConical />冻结门禁候选</Button>
       </Section>
-    </div>
+    </PageContainer>
   </main>;
 }
 

@@ -69,3 +69,19 @@ export function controlPlaneWorkerTokens(env: Environment) {
     render: env.SIGNAL40_RENDER_WORKER_TOKEN || (!production ? env.WORKER_TOKEN || env.SIGNAL40_WORKER_TOKEN : undefined),
   };
 }
+
+/** 生产控制面在模块初始化时校验信任边界，避免缺失 Secret 后静默降级。 */
+export function validateControlPlaneEnvironment(env: Environment) {
+  if (env.SIGNAL40_DEPLOYMENT_MODE !== 'production') return;
+  const tokens = controlPlaneWorkerTokens(env);
+  const missing = [
+    ['SIGNAL40_SOURCE_WORKER_TOKEN', tokens.source],
+    ['SIGNAL40_RENDER_WORKER_TOKEN', tokens.render],
+    ['MEDIA_SIGNING_SECRET', env.MEDIA_SIGNING_SECRET],
+    ['SIGNAL40_IDENTITY_HEADER_ID', env.SIGNAL40_IDENTITY_HEADER_ID],
+    ['SIGNAL40_IDENTITY_HEADER_EMAIL', env.SIGNAL40_IDENTITY_HEADER_EMAIL],
+  ].filter(([, value]) => !value).map(([name]) => name);
+  if (missing.length) throw new Error(`生产控制面缺少必需配置：${missing.join(', ')}`);
+  if (tokens.source === tokens.render) throw new Error('生产控制面的 source 与 render Worker token 必须不同。');
+  if (env.MEDIA_SIGNING_SECRET!.length < 32) throw new Error('生产控制面的 MEDIA_SIGNING_SECRET 至少需要 32 个字符。');
+}

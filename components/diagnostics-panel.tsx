@@ -1,9 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, CheckCircle2, CircleAlert, CircleHelp, LoaderCircle, Stethoscope, TriangleAlert } from 'lucide-react';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { CheckCircle2, CircleAlert, CircleHelp, LoaderCircle, Stethoscope, TriangleAlert } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { PageContainer, PageHeader } from '@/components/page-shell';
 
 type Check = { id: string; label: string; status: 'ok' | 'degraded' | 'failed' | 'unconfigured'; detail: string; hint?: string };
 type Worker = { id: string; hostname: string; kinds: string[]; version: string; lastHeartbeatAt: string; online: boolean };
@@ -39,9 +39,9 @@ export function DiagnosticsPanel() {
   }, [refresh]);
 
   return <main className="min-h-screen bg-background text-foreground">
-    <header className="border-b"><div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4 sm:px-7"><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground"><Stethoscope className="size-5" /></div><div><p className="text-lg font-semibold">系统自检</p><p className="text-xs text-muted-foreground">数据库、对象存储、凭据、Worker 与调度器</p></div></div><div className="flex gap-2"><Button variant="outline" disabled={loading} onClick={() => void refresh()}>{loading ? <LoaderCircle className="animate-spin" /> : null}重新检查</Button><Link className={buttonVariants({ variant: 'outline' })} href="/"><ArrowLeft />返回雷达</Link></div></div></header>
+    <PageHeader icon={<Stethoscope className="size-5" />} title="系统自检" subtitle="数据库、对象存储、凭据、Worker 与调度器" actions={<Button variant="outline" disabled={loading} onClick={() => void refresh()}>{loading ? <LoaderCircle className="animate-spin" /> : null}重新检查</Button>} />
 
-    <div className="mx-auto max-w-5xl px-4 py-7 sm:px-7">
+    <PageContainer className="py-7">
       {error && <p className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>}
       {!data && !error && <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />正在自检…</p>}
       {data && <>
@@ -76,6 +76,6 @@ export function DiagnosticsPanel() {
           </tbody></table></div>
         </section>
       </>}
-    </div>
+    </PageContainer>
   </main>;
 }

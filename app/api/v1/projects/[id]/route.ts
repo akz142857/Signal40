@@ -1,13 +1,34 @@
-import { db, resolveRequestActor } from '@/lib/runtime';
+import { config, db, resolveRequestActor } from '@/lib/runtime';
 import { loadContentProject, pauseAutomationStatement } from '@/lib/control-plane';
+import { loadActiveJobLease } from '@/lib/job-lease';
 import { computeRenderSnapshotHash, validateProjectV2, type VideoProjectV2 } from '@/lib/project-v2';
+import { authorizeWorker } from '@/lib/worker-auth';
 import { getVideoTemplate } from '@/lib/templates';
 import { parseIfMatch, quoteEtag, stableHash } from '@/lib/workflow';
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   const actor = await resolveRequestActor(request);
-  if (!actor) return Response.json({ error: '用户未加入 Signal 40 团队。' }, { status: 403 });
   const { id } = await context.params;
+  if (!actor) {
+    if (!(await authorizeWorker(request, config.renderWorkerToken))) {
+      return Response.json({ error: '用户或 Worker 未授权。' }, { status: 403 });
+    }
+    const url = new URL(request.url);
+    const jobId = url.searchParams.get('jobId') ?? '';
+    const workerId = url.searchParams.get('workerId') ?? '';
+    const leaseEpoch = Number(url.searchParams.get('leaseEpoch'));
+    if (!jobId || !workerId || !Number.isInteger(leaseEpoch) || leaseEpoch < 1) {
+      return Response.json({ error: 'Worker 读取项目必须提供 jobId、workerId 和有效 leaseEpoch。' }, { status: 422 });
+    }
+    const lease = await loadActiveJobLease(db, {
+      jobId,
+      workerId: workerId.slice(0, 160),
+      leaseEpoch,
+      projectId: id,
+      kinds: ['voice', 'preview', 'render'],
+    });
+    if (!lease) return Response.json({ error: '作业租约已过期、已接管或与项目不匹配。' }, { status: 409 });
+  }
   try {
     const project = await loadContentProject(db, id);
     if (!project) return Response.json({ error: '项目不存在。' }, { status: 404 });

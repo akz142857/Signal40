@@ -1307,15 +1307,21 @@ export async function enqueueJob(
     if (!inserted) {
       const existing = await tx
         .prepare(
-          'SELECT id, status FROM jobs WHERE kind = ? AND idempotency_key = ? LIMIT 1',
+          'SELECT id, status, project_id, payload_json FROM jobs WHERE kind = ? AND idempotency_key = ? LIMIT 1',
         )
         .bind(input.kind, input.idempotencyKey)
-        .first<{ id: string; status: string }>();
+        .first<{ id: string; status: string; project_id: string | null; payload_json: unknown }>();
       if (!existing)
         throw new Error(
           `作业 ${input.kind}/${input.idempotencyKey} 入队冲突但回读不到既有行。`,
         );
-      return { ...existing, created: false };
+      const existingPayload = parseJsonColumn<unknown>(existing.payload_json);
+      if (
+        existing.project_id !== (input.projectId ?? null) ||
+        existingPayload === null ||
+        stableHash(existingPayload) !== stableHash(input.payload)
+      ) throw new Error('IDEMPOTENCY_CONFLICT');
+      return { id: existing.id, status: existing.status, created: false };
     }
     await auditStatement(tx, {
       projectId: input.projectId,

@@ -2,7 +2,7 @@ import pg from 'pg';
 import { configurePgTypeParsers, createPgDatabase } from './sql-pg.ts';
 import type { SqlDatabase } from './sql.ts';
 import type { ObjectStorage } from './storage.ts';
-import { controlPlaneWorkerTokens } from './workload-env.ts';
+import { controlPlaneWorkerTokens, validateControlPlaneEnvironment } from './workload-env.ts';
 import { createS3Client, createS3Storage } from './storage-s3.ts';
 import { resolveActor, type Actor } from './workflow.ts';
 
@@ -16,6 +16,7 @@ import { resolveActor, type Actor } from './workflow.ts';
 
 // int8（COUNT/SUM）默认按字符串返回，必须在建池之前改掉，否则 `total > 0` 这类判断会静默失效。
 configurePgTypeParsers(pg.types);
+validateControlPlaneEnvironment(process.env);
 
 function required(name: string) {
   const value = process.env[name];
@@ -89,6 +90,9 @@ export const storage: ObjectStorage = {
  * 各个鉴权函数自己决定「未配置」意味着拒绝还是本地放行，这个语义不能在这里替它们定。
  */
 export const config = {
+  get production() {
+    return process.env.SIGNAL40_DEPLOYMENT_MODE === 'production';
+  },
   get bootstrapAdminEmails() {
     return process.env.BOOTSTRAP_ADMIN_EMAILS ?? '';
   },
@@ -111,6 +115,12 @@ export const config = {
   },
   get mediaSigningSecret() {
     return process.env.MEDIA_SIGNING_SECRET;
+  },
+  /** 固定开发签名只存在于显式 development 运行时，不能由请求 Host 激活。 */
+  get localMediaSigningSecret() {
+    return process.env.SIGNAL40_DEPLOYMENT_MODE === 'production'
+      ? undefined
+      : 'signal40-local-media-signing-key';
   },
   get renderConcurrencyLimit() {
     return process.env.RENDER_CONCURRENCY_LIMIT;
@@ -144,7 +154,26 @@ export const config = {
    * 身份由前端说了算时，G7 的「独立发布人」就不成立。
    */
   get allowLocalRoleHeaders() {
-    return (process.env.SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS ?? 'true') !== 'false';
+    return process.env.SIGNAL40_DEPLOYMENT_MODE !== 'production' &&
+      (process.env.SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS ?? 'true') !== 'false';
+  },
+  /** 自检所需配置统一从装配层读取；调用方只能把它交给脱敏诊断器。 */
+  get diagnosticsEnvironment() {
+    return {
+      s3Endpoint: process.env.S3_ENDPOINT,
+      s3Bucket: process.env.S3_BUCKET,
+      s3AccessKeyId: process.env.S3_ACCESS_KEY_ID,
+      s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+      openAiApiKey: process.env.OPENAI_API_KEY,
+      youtubeAccessToken: process.env.YOUTUBE_ACCESS_TOKEN,
+      workerToken: controlPlaneWorkerTokens(process.env).shared,
+      sourceWorkerToken: process.env.SIGNAL40_SOURCE_WORKER_TOKEN,
+      renderWorkerToken: process.env.SIGNAL40_RENDER_WORKER_TOKEN,
+      schedulerToken: process.env.SCHEDULER_TOKEN,
+      mediaSigningSecret: process.env.MEDIA_SIGNING_SECRET,
+      automationActorId: process.env.SIGNAL40_AUTOMATION_ACTOR_ID,
+      allowPublicPublish: process.env.SIGNAL40_ALLOW_PUBLIC_PUBLISH === 'true',
+    };
   },
 };
 

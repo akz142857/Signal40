@@ -1,13 +1,13 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Bot, LoaderCircle, ShieldAlert } from 'lucide-react';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Bot, LoaderCircle, ShieldAlert } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { AUTOMATION_STAGES, STAGE_MODES, type AutomationPolicy, type AutomationStage, type StageMode } from '@/lib/automation';
+import { PageContainer, PageHeader } from '@/components/page-shell';
 
 type Member = { user_id: string; email: string; role: string; status: string };
 type PolicyCost = { projectCount: number; costMicros: number };
@@ -117,9 +117,9 @@ export function AutomationConsole() {
   const publishCandidates = members.filter((member) => ['publisher', 'admin'].includes(member.role));
 
   return <main className="min-h-screen bg-background text-foreground">
-    <header className="border-b"><div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-7"><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground"><Bot className="size-5" /></div><div><p className="text-lg font-semibold">自动化控制台</p><p className="text-xs text-muted-foreground">策略、预先授权、近期自动动作与熔断状态</p></div></div><div className="flex gap-2"><Link className={buttonVariants({ variant: 'outline' })} href="/inbox">待办箱</Link><Link className={buttonVariants({ variant: 'outline' })} href="/"><ArrowLeft />返回雷达</Link></div></div></header>
+    <PageHeader icon={<Bot className="size-5" />} title="自动化控制台" subtitle="策略、预先授权、近期自动动作与熔断状态" />
 
-    <div className="mx-auto max-w-6xl px-4 py-7 sm:px-7">
+    <PageContainer className="py-7">
       {message && <p className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{message}</p>}
       {loading && <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />读取中…</p>}
 
@@ -217,6 +217,6 @@ export function AutomationConsole() {
           {!runs.length && <p className="rounded-xl border border-dashed p-7 text-center text-sm text-muted-foreground">调度器还没有跑过。启动 scheduler 服务后这里会出现每轮记录。</p>}
         </div>
       </section>
-    </div>
+    </PageContainer>
   </main>;
 }

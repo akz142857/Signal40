@@ -1,8 +1,9 @@
 'use client';
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Circle, CircleAlert, FileText, Film, Gauge, Layers3, LoaderCircle, Mic2, PackageCheck, Play, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, Circle, CircleAlert, FileText, Film, Gauge, Layers3, LoaderCircle, Mic2, PackageCheck, Play, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
+import { PageContainer, PageHeader } from '@/components/page-shell';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
@@ -323,21 +324,21 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <div className="flex items-center gap-4">
-            <Link href="/" className="grid size-10 place-items-center rounded-xl border border-border" aria-label="返回选题雷达"><ArrowLeft className="size-5" /></Link>
-            <div><p className="font-mono text-xs uppercase tracking-[0.16em] text-chart-1">Production workspace · v{project.version}</p><h1 className="mt-1 text-xl font-semibold tracking-tight">{project.title}</h1></div>
-          </div>
-          <div className="flex items-center gap-3">
+      <PageHeader
+        width="workspace"
+        icon={<Layers3 className="size-5" />}
+        title={project.title}
+        subtitle={<><Link href="/" className="hover:text-foreground hover:underline">雷达</Link><span> / 项目工作台 · v{project.version}</span></>}
+        actions={
+          <>
             <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-semibold">{stateLabels[project.state]}</span>
             <span className="font-mono text-xs text-muted-foreground">Gates {gateSummary.passed}/{gateSummary.total}</span>
             <span className="text-xs text-muted-foreground">{session.actor ? `${session.actor.email} · ${session.actor.role}` : session.loading ? '读取身份…' : '未识别身份'}{session.localRoleHeadersAllowed && '（本机开发身份）'}</span>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
-      <div className="mx-auto grid max-w-[1500px] gap-5 px-5 py-5 sm:px-8 xl:grid-cols-[210px_minmax(0,1fr)_330px]">
+      <PageContainer width="workspace" className="grid gap-5 py-5 xl:grid-cols-[210px_minmax(0,1fr)_330px]">
         <nav className="space-y-2" aria-label="生产阶段">
           {phases.map((phase, index) => { const Icon = phase.icon; const complete = index < activePhase; const active = index === activePhase; return <div key={phase.label} className={`flex items-center gap-3 rounded-xl border p-3 ${active ? 'border-chart-1 bg-chart-1/10' : 'border-transparent'}`}><span className={`grid size-9 place-items-center rounded-lg ${complete ? 'bg-chart-1 text-primary' : 'bg-secondary'}`}>{complete ? <CheckCircle2 className="size-4" /> : <Icon className="size-4" />}</span><div><p className="text-sm font-semibold">{phase.label}</p><p className="text-xs text-muted-foreground">{complete ? '已通过' : active ? '当前阶段' : '待开始'}</p></div></div>; })}
         </nav>
@@ -390,7 +391,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
           <section className="rounded-2xl border border-border bg-card p-4"><h2 className="font-semibold">当前操作</h2><Textarea className="mt-3 min-h-24 text-sm" value={note} onChange={(event) => setNote(event.target.value)} /><div className="mt-3 grid gap-2">{requiredApproval && <Button variant="outline" disabled={busy || note.trim().length < 10} onClick={() => void approve(requiredApproval)}><ShieldCheck />批准当前 {requiredApproval}</Button>}{project.state === 'SCRIPT_APPROVED' && !project.project.audio.objectKey && <Button variant="outline" disabled={busy} onClick={() => void enqueueVoice()}><Mic2 />生成配音与字幕</Button>}{project.state === 'PUBLISH_SCHEDULED' && <><Button variant="outline" disabled={busy} onClick={() => void enqueuePublish('package')}><PackageCheck />生成发布包</Button><Button disabled={busy} onClick={() => void enqueuePublish('youtube')}><Film />YouTube 私密上传</Button></>}{project.state === 'ASSETS_READY' ? <><Button variant="outline" disabled={busy} onClick={() => void enqueuePreview()}>{busy ? <LoaderCircle className="animate-spin" /> : <Play />}生成低码率预览片</Button><Button disabled={busy} onClick={() => void enqueueRender()}>{busy ? <LoaderCircle className="animate-spin" /> : <Film />}创建正式渲染任务</Button></> : project.state !== 'PUBLISH_SCHEDULED' && currentNext && <Button disabled={busy} onClick={() => void transition(currentNext)}>{busy ? <LoaderCircle className="animate-spin" /> : <Play />}推进到 {stateLabels[currentNext]}</Button>}{canRequestChanges && <Button variant="destructive" disabled={busy || note.trim().length < 10} onClick={() => void transition('CHANGES_REQUESTED')}><CircleAlert />要求修改</Button>}</div><p className="mt-3 text-xs leading-5 text-muted-foreground">若对应门禁未通过，服务端会拒绝推进并返回具体原因。</p></section>
           <section className="rounded-2xl border border-border bg-card p-4"><h2 className="font-semibold">审计流</h2><div className="mt-3 space-y-3">{audit.slice(0, 8).map((event) => { const trigger = event.metadata?.trigger === 'automation' ? '自动化' : event.metadata?.trigger === 'human' ? '人工' : '历史记录'; const policyId = typeof event.metadata?.policyId === 'string' ? event.metadata.policyId : null; return <div key={event.id} className="border-l-2 border-border pl-3"><p className="text-sm font-medium">{event.action}</p><p className="mt-1 text-xs text-muted-foreground">{trigger} · {event.actor_id} · {event.actor_role} · {new Date(event.created_at).toLocaleString('zh-CN')}</p>{policyId ? <p className="mt-1 font-mono text-[11px] text-muted-foreground">Policy: {policyId}</p> : null}</div>; })}{!audit.length && <p className="text-sm text-muted-foreground">正在读取审计记录…</p>}</div></section>
         </aside>
-      </div>
+      </PageContainer>
     </main>
   );
 }

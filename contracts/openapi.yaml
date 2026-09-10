@@ -7,6 +7,8 @@ servers:
   - url: /api/v1
 security:
   - sitesSession: []
+    trustedIdentityId: []
+    trustedIdentityEmail: []
 paths:
   /projects:
     get:
@@ -24,8 +26,16 @@ paths:
         }
   /projects/{projectId}:
     get:
-      summary: Read the current project and ETag
-      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      summary: Read the current project and ETag; render workers must prove an active job-scoped lease
+      x-worker-authentication:
+        scheme: renderWorkerToken
+        leaseIdentity: [jobId, workerId, leaseEpoch]
+        note: Worker access is an internal alternative to the actor-facing edge session and is accepted only for the project bound to an active lease.
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: jobId, in: query, schema: { type: string }, description: Required with renderWorkerToken }
+        - { name: workerId, in: query, schema: { type: string, maxLength: 160 }, description: Required with renderWorkerToken }
+        - { name: leaseEpoch, in: query, schema: { type: integer, minimum: 1 }, description: Required with renderWorkerToken }
       responses:
         {
           '200': { description: Project },
@@ -156,7 +166,15 @@ paths:
       }
     post:
       summary: Upload a small asset directly (50 MB maximum)
-      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      x-worker-authentication:
+        scheme: renderWorkerToken
+        leaseIdentity: [X-Job-Id, X-Worker-Id, X-Lease-Epoch]
+        note: Generated assets use the internal Worker alternative; actor uploads continue through the edge session.
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: X-Job-Id, in: header, schema: { type: string }, description: Required for generated Worker assets }
+        - { name: X-Worker-Id, in: header, schema: { type: string, maxLength: 160 }, description: Required for generated Worker assets }
+        - { name: X-Lease-Epoch, in: header, schema: { type: integer, minimum: 1 }, description: Required for generated Worker assets }
       requestBody:
         {
           required: true,
@@ -347,7 +365,12 @@ paths:
         summary: "Commit TTS audio, provider alignment, and captions",
         security: [{ renderWorkerToken: [] }],
         parameters: [{ $ref: '#/components/parameters/ProjectId' }],
-        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        requestBody:
+          {
+            required: true,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/VoiceTrackCommit' } } },
+          },
         responses:
           {
             '200': { description: Committed },
@@ -366,7 +389,12 @@ paths:
         summary: Commit QC for a leased render job,
         security: [{ renderWorkerToken: [] }],
         parameters: [{ $ref: '#/components/parameters/ProjectId' }],
-        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        requestBody:
+          {
+            required: true,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/QcReportCommit' } } },
+          },
         responses: { '201': { description: Created } },
       }
   /projects/{projectId}/publish-jobs:
@@ -426,7 +454,12 @@ paths:
               schema: { type: string },
             },
           ],
-        requestBody: { $ref: '#/components/requestBodies/JsonBody' },
+        requestBody:
+          {
+            required: true,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/PublishResultCommit' } } },
+          },
         responses:
           {
             '200': { description: Publication committed },
@@ -2219,7 +2252,12 @@ paths:
         '422': { $ref: '#/components/responses/SourceValidationError' }
 components:
   securitySchemes:
-    sitesSession: { type: apiKey, in: cookie, name: sites_session }
+    sitesSession:
+      { type: apiKey, in: cookie, name: sites_session, description: Legacy edge session handled by the authenticating reverse proxy; application routes do not consume this cookie directly }
+    trustedIdentityId:
+      { type: apiKey, in: header, name: oai-authenticated-user-id, description: Trusted reverse-proxy identity header; deployments may configure a different header name }
+    trustedIdentityEmail:
+      { type: apiKey, in: header, name: oai-authenticated-user-email, description: Trusted reverse-proxy email header; deployments may configure a different header name }
     workerToken: { type: apiKey, in: header, name: X-Worker-Token }
     sourceWorkerToken: { type: apiKey, in: header, name: X-Worker-Token }
     renderWorkerToken: { type: apiKey, in: header, name: X-Worker-Token }
@@ -2240,7 +2278,7 @@ components:
         name: Idempotency-Key,
         in: header,
         required: true,
-        schema: { type: string, maxLength: 160 },
+        schema: { type: string, minLength: 1, maxLength: 160, pattern: '^[!-~]+$' },
       }
   requestBodies:
     JsonBody:
@@ -2249,6 +2287,55 @@ components:
         content: { application/json: { schema: { type: object } } },
       }
   schemas:
+    WorkerLeaseIdentity:
+      type: object
+      additionalProperties: false
+      required: [workerId, leaseEpoch]
+      properties:
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+    VoiceTrackCommit:
+      allOf:
+        - { $ref: '#/components/schemas/WorkerLeaseIdentity' }
+        - type: object
+          required: [jobId, assetId, provider, voice, durationMs, alignment, captions, scriptVersion, scriptHash]
+          properties:
+            jobId: { type: string, minLength: 1 }
+            assetId: { type: string, minLength: 1 }
+            provider: { type: string, minLength: 1 }
+            voice: { type: string, minLength: 1 }
+            durationMs: { type: integer, minimum: 500 }
+            alignment: { type: array, items: { type: object } }
+            captions: { type: array, items: { type: object } }
+            scriptVersion: { type: integer, minimum: 1 }
+            scriptHash: { type: string, minLength: 1 }
+            speed: { type: number, minimum: 0.5, maximum: 2 }
+            pronunciationDictionary: { type: object, additionalProperties: { type: string } }
+            fallbackProvider: { type: [string, 'null'] }
+            estimatedCostMicros: { type: integer, minimum: 0 }
+    QcReportCommit:
+      allOf:
+        - { $ref: '#/components/schemas/WorkerLeaseIdentity' }
+        - type: object
+          additionalProperties: false
+          required: [renderJobId, status, checks]
+          properties:
+            renderJobId: { type: string, minLength: 1 }
+            status: { type: string, enum: [passed, failed] }
+            checks: { type: array, items: { type: object } }
+    PublishResultCommit:
+      allOf:
+        - { $ref: '#/components/schemas/WorkerLeaseIdentity' }
+        - type: object
+          additionalProperties: false
+          required: [jobId, channel]
+          properties:
+            jobId: { type: string, minLength: 1 }
+            channel: { type: string, enum: [package, youtube] }
+            externalId: { type: string }
+            finalUrl: { type: string, format: uri }
+            manifest: {}
+            platformResponse: {}
     EvidenceRelationship:
       type: string
       enum: [original, repost, quote, syndicated, unknown]

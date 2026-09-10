@@ -1,7 +1,5 @@
 export async function authorizeWorker(request: Request, configuredToken?: string) {
   const supplied = request.headers.get('x-worker-token') || '';
-  const host = new URL(request.url).hostname;
-  if (!configuredToken && ['localhost', '127.0.0.1'].includes(host)) return supplied === 'local-development';
   if (!configuredToken || !supplied) return false;
   const encoder = new TextEncoder();
   const [expectedHash, suppliedHash] = await Promise.all([

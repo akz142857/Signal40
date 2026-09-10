@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   if (!objectKey?.startsWith('projects/') || objectKey.length > 500) return Response.json({ error: '媒体键无效。' }, { status: 422 });
   const expires = Number(requestUrl.searchParams.get('expires'));
   const signature = requestUrl.searchParams.get('signature') ?? '';
-  const secret = config.mediaSigningSecret || (requestUrl.hostname === 'localhost' || requestUrl.hostname === '127.0.0.1' ? 'signal40-local-media-signing-key' : '');
+  const secret = config.mediaSigningSecret || config.localMediaSigningSecret || '';
   const signed = secret && await verifyMediaAccess(secret, objectKey, expires, signature);
   const actor = worker || signed ? { role: 'producer' } : await resolveRequestActor(request);
   if (!actor) return Response.json({ error: '媒体访问未授权。' }, { status: 401 });

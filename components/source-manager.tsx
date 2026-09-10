@@ -1,11 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   Archive,
-  ArrowLeft,
   CalendarClock,
   CheckCircle2,
   DatabaseZap,
@@ -21,7 +19,7 @@ import {
   UsersRound,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -31,6 +29,7 @@ import {
 } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
+import { PageContainer, PageHeader } from '@/components/page-shell';
 import type {
   ConnectorReleaseMode,
   IngestionQuarantineStatus,
@@ -301,31 +300,7 @@ const proposalLabels: Record<SourceProposal['status'], string> = {
 };
 
 function SourcesHeader({ subtitle }: { subtitle: string }) {
-  return (
-    <header className="border-b border-border/80 bg-background/95">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-7">
-        <div className="flex items-center gap-3">
-          <div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground">
-            <DatabaseZap className="size-5" />
-          </div>
-          <div>
-            <p className="text-lg font-semibold">来源控制台</p>
-            <p className="text-xs text-muted-foreground">{subtitle}</p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Link className={buttonVariants({ variant: 'outline' })} href="/operations">
-            <Activity />
-            运行
-          </Link>
-          <Link className={buttonVariants({ variant: 'outline' })} href="/">
-            <ArrowLeft />
-            返回雷达
-          </Link>
-        </div>
-      </div>
-    </header>
-  );
+  return <PageHeader width="wide" icon={<DatabaseZap className="size-5" />} title="来源控制台" subtitle={subtitle} />;
 }
 
 function ProposalList({
@@ -456,7 +431,7 @@ function SourceProposalWorkspace() {
   return (
     <main className="min-h-screen bg-background text-foreground">
       <SourcesHeader subtitle="提案来源，由管理员独立审批" />
-      <div className="mx-auto grid max-w-5xl gap-6 px-4 py-6 sm:px-7 lg:grid-cols-[360px_1fr]">
+      <PageContainer width="wide" className="grid gap-6 py-6 lg:grid-cols-[360px_1fr]">
         <section className="h-fit rounded-2xl border bg-card p-5">
           <h1 className="text-xl font-semibold">提案新来源</h1>
           <p className="mt-2 text-sm text-muted-foreground">这里只提交建议，不会自动授权或启用采集。</p>
@@ -476,7 +451,7 @@ function SourceProposalWorkspace() {
           <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-xl font-semibold">我的提案</h2><ProposalList proposals={proposals} /></section>
           <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-xl font-semibold">已登记来源（只读）</h2><ReadOnlySourceList sources={sources} /></section>
         </div>
-      </div>
+      </PageContainer>
     </main>
   );
 }
@@ -504,11 +479,11 @@ function SourceReadOnlyWorkspace({ includeProposals }: { includeProposals: boole
   return (
     <main className="min-h-screen bg-background text-foreground">
       <SourcesHeader subtitle="只读来源与治理记录" />
-      <div className="mx-auto grid max-w-5xl gap-6 px-4 py-6 sm:px-7">
+      <PageContainer width="wide" className="grid gap-6 py-6">
         {message && <p className="rounded-xl border border-destructive/30 p-4 text-sm">{message}</p>}
         <section className="rounded-2xl border bg-card p-5"><h1 className="mb-4 text-xl font-semibold">已登记来源</h1><ReadOnlySourceList sources={sources} /></section>
         {includeProposals && <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-xl font-semibold">来源提案审计</h2><ProposalList proposals={proposals} /></section>}
-      </div>
+      </PageContainer>
     </main>
   );
 }
@@ -538,11 +513,13 @@ function SourceProposalInbox() {
   };
   const pending = proposals.filter((proposal) => proposal.status === 'proposal_pending');
   return (
-    <section className="mx-auto mt-6 max-w-6xl rounded-2xl border bg-card p-5">
-      <div className="mb-4"><h2 className="text-lg font-semibold">待审来源提案</h2><p className="text-xs text-muted-foreground">批准只创建待配置 draft，不代表权利已批准。</p></div>
-      <ProposalList proposals={pending} onDecision={(proposal, decision) => void decide(proposal, decision)} />
-      {message && <p className="mt-3 text-sm text-muted-foreground">{message}</p>}
-    </section>
+    <PageContainer width="wide" className="pt-6">
+      <section className="rounded-2xl border bg-card p-5">
+        <div className="mb-4"><h2 className="text-lg font-semibold">待审来源提案</h2><p className="text-xs text-muted-foreground">批准只创建待配置 draft，不代表权利已批准。</p></div>
+        <ProposalList proposals={pending} onDecision={(proposal, decision) => void decide(proposal, decision)} />
+        {message && <p className="mt-3 text-sm text-muted-foreground">{message}</p>}
+      </section>
+    </PageContainer>
   );
 }
 
@@ -1717,36 +1694,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border/80 bg-background/95">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-7">
-          <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <DatabaseZap className="size-5" />
-            </div>
-            <div>
-              <p className="text-lg font-semibold">来源控制台</p>
-              <p className="text-xs text-muted-foreground">
-                一次接入，持续采集
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Link
-              className={buttonVariants({ variant: 'outline' })}
-              href="/operations"
-            >
-              <Activity />
-              运行
-            </Link>
-            <Link className={buttonVariants({ variant: 'outline' })} href="/">
-              <ArrowLeft />
-              返回雷达
-            </Link>
-          </div>
-        </div>
-      </header>
+      <PageHeader width="wide" icon={<DatabaseZap className="size-5" />} title="来源控制台" subtitle="一次接入，持续采集" />
       <SourceProposalInbox />
-      <div className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-7 lg:grid-cols-[380px_1fr]">
+      <PageContainer width="wide" className="grid gap-6 py-6 lg:grid-cols-[380px_1fr]">
         <section className="h-fit rounded-2xl border bg-card p-5">
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
             Step {step} / 3
@@ -3260,7 +3210,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
             )}
           </div>
         </section>
-      </div>
+      </PageContainer>
     </main>
   );
 }

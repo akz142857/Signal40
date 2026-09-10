@@ -1,29 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import {
-  Activity,
   ArrowUpRight,
   BarChart3,
-  Bot,
   CheckCircle2,
   CircleAlert,
   Clock3,
-  DatabaseZap,
   Download,
   ExternalLink,
   FileUp,
   Film,
-  Inbox,
   LoaderCircle,
   Radar,
   ShieldCheck,
-  Stethoscope,
-  UsersRound,
   XCircle,
 } from 'lucide-react';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -43,6 +36,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { Label } from '@/components/ui/label';
+import { PageContainer, PageHeader } from '@/components/page-shell';
 import type {
   ArticleInput,
   TopicCandidate,
@@ -491,42 +485,21 @@ export function RadarDashboard({
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border/80 bg-background/95">
-        <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-3 px-4 py-4 sm:px-7">
-          <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <Radar className="size-5" />
-            </div>
-            <div>
-              <p className="text-lg font-semibold tracking-[-0.03em]">
-                Signal 40
-              </p>
-              <p className="text-xs text-muted-foreground">财经选题雷达</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden items-center gap-2 text-sm text-muted-foreground lg:flex">
-              <span className="size-2 rounded-full bg-chart-1 shadow-[0_0_0_4px_var(--color-signal-glow)]" />
-              {sourceLabel}
-            </span>
-            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/sources"><DatabaseZap /> <span className="hidden md:inline">来源</span></Link>
-            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/operations"><Activity /> <span className="hidden md:inline">运行</span></Link>
-            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/governance"><UsersRound /> <span className="hidden md:inline">治理</span></Link>
-            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/automation"><Bot /> <span className="hidden md:inline">自动化</span></Link>
-            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/inbox"><Inbox /> <span className="hidden md:inline">待办</span></Link>
-            <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href="/settings/diagnostics"><Stethoscope /> <span className="hidden md:inline">自检</span></Link>
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={() => setImportOpen(true)}
-            >
-              <FileUp /> 导入文章
-            </Button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        width="wide"
+        icon={<Radar className="size-5" />}
+        title="Signal 40"
+        subtitle="财经选题雷达"
+        actions={<>
+          <span className="hidden items-center gap-2 text-sm text-muted-foreground xl:flex">
+            <span className="size-2 rounded-full bg-chart-1 shadow-[0_0_0_4px_var(--color-signal-glow)]" />
+            {sourceLabel}
+          </span>
+          <Button variant="outline" onClick={() => setImportOpen(true)}><FileUp />导入文章</Button>
+        </>}
+      />
 
-      <div className="mx-auto grid max-w-[1480px] gap-5 px-4 py-5 sm:px-7 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <PageContainer width="wide" className="grid gap-5 py-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="min-w-0">
           <div className="mb-5 flex flex-col justify-between gap-4 border-b border-border pb-5 sm:flex-row sm:items-end">
             <div>
@@ -726,7 +699,7 @@ export function RadarDashboard({
             </div>
           </section>
         </aside>
-      </div>
+      </PageContainer>
 
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent className="sm:max-w-2xl">

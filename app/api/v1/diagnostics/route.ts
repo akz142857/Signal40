@@ -11,21 +11,7 @@ export async function GET(request: Request) {
   const result = await runDiagnostics({
     db,
     storage,
-    env: {
-      s3Endpoint: process.env.S3_ENDPOINT,
-      s3Bucket: process.env.S3_BUCKET,
-      s3AccessKeyId: process.env.S3_ACCESS_KEY_ID,
-      s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
-      openAiApiKey: process.env.OPENAI_API_KEY,
-      youtubeAccessToken: process.env.YOUTUBE_ACCESS_TOKEN,
-      workerToken: config.workerToken,
-      sourceWorkerToken: process.env.SIGNAL40_SOURCE_WORKER_TOKEN,
-      renderWorkerToken: process.env.SIGNAL40_RENDER_WORKER_TOKEN,
-      schedulerToken: config.schedulerToken,
-      mediaSigningSecret: config.mediaSigningSecret,
-      automationActorId: config.automationActorId,
-      allowPublicPublish: process.env.SIGNAL40_ALLOW_PUBLIC_PUBLISH === 'true',
-    },
+    env: config.diagnosticsEnvironment,
   });
   return Response.json(result);
 }

@@ -12,10 +12,17 @@
 
 import type { Actor } from '../lib/workflow.ts';
 import type { SqlDatabase } from '../lib/sql.ts';
+import type { ObjectStorage } from '../lib/storage.ts';
 
 type RouteTestContext = {
   db: SqlDatabase;
   actor: Actor | null;
+  storage?: ObjectStorage;
+  config?: {
+    workerToken?: string;
+    sourceWorkerToken?: string;
+    renderWorkerToken?: string;
+  };
 };
 
 let context: RouteTestContext | null = null;
@@ -43,25 +50,30 @@ export const db: SqlDatabase = {
 export async function closeDatabase() {}
 
 export const storage = {
-  put: async () => { throw new Error('路由测试未提供对象存储。'); },
-  get: async () => { throw new Error('路由测试未提供对象存储。'); },
-  delete: async () => { throw new Error('路由测试未提供对象存储。'); },
-  list: async () => { throw new Error('路由测试未提供对象存储。'); },
+  put: (...args: Parameters<ObjectStorage['put']>) => required().storage?.put(...args) ?? Promise.reject(new Error('路由测试未提供对象存储。')),
+  get: (...args: Parameters<ObjectStorage['get']>) => required().storage?.get(...args) ?? Promise.reject(new Error('路由测试未提供对象存储。')),
+  delete: (...args: Parameters<ObjectStorage['delete']>) => required().storage?.delete(...args) ?? Promise.reject(new Error('路由测试未提供对象存储。')),
+  list: (...args: Parameters<ObjectStorage['list']>) => required().storage?.list(...args) ?? Promise.reject(new Error('路由测试未提供对象存储。')),
+  createMultipartUpload: (...args: Parameters<ObjectStorage['createMultipartUpload']>) => required().storage?.createMultipartUpload(...args) ?? Promise.reject(new Error('路由测试未提供对象存储。')),
+  resumeMultipartUpload: (...args: Parameters<ObjectStorage['resumeMultipartUpload']>) => required().storage?.resumeMultipartUpload(...args) ?? Promise.reject(new Error('路由测试未提供对象存储。')),
 } as never;
 
 export const config = {
-  bootstrapAdminEmails: '',
-  workerToken: undefined,
-  sourceWorkerToken: undefined,
-  renderWorkerToken: undefined,
-  schedulerToken: undefined,
-  webhookSecret: undefined,
-  mediaSigningSecret: undefined,
-  identityHeaders: { id: 'oai-authenticated-user-id', email: 'oai-authenticated-user-email' },
-  allowLocalRoleHeaders: false,
-  renderConcurrencyLimit: 2,
-  monthlyRenderBudgetMicros: 0,
-  automationActorId: undefined,
+  get bootstrapAdminEmails() { return ''; },
+  get workerToken() { return required().config?.workerToken; },
+  get sourceWorkerToken() { return required().config?.sourceWorkerToken; },
+  get renderWorkerToken() { return required().config?.renderWorkerToken; },
+  get schedulerToken() { return undefined; },
+  get webhookSecret() { return undefined; },
+  get mediaSigningSecret() { return undefined; },
+  get localMediaSigningSecret() { return 'signal40-local-media-signing-key'; },
+  get identityHeaders() { return { id: 'oai-authenticated-user-id', email: 'oai-authenticated-user-email' }; },
+  get allowLocalRoleHeaders() { return false; },
+  get production() { return false; },
+  get renderConcurrencyLimit() { return 2; },
+  get monthlyRenderBudgetMicros() { return 0; },
+  get automationActorId() { return undefined; },
+  get diagnosticsEnvironment() { return {}; },
 } as never;
 
 /** 直接返回注入的 actor：身份解析本身由 workflow.test.ts 覆盖，这里要测的是路由体。 */

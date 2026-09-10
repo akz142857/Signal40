@@ -42,6 +42,26 @@ const requiredWorkerToken = workerToken;
 
 const workerHeaders = { 'content-type': 'application/json', 'x-worker-token': requiredWorkerToken };
 
+function leasedProjectUrl(job: WorkerJob) {
+  if (!job.project_id) throw new Error('作业缺少 project_id。');
+  const query = new URLSearchParams({
+    jobId: job.id,
+    workerId,
+    leaseEpoch: String(job.lease_epoch),
+  });
+  return `${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}?${query}`;
+}
+
+function leasedAssetHeaders(job: WorkerJob, headers: Record<string, string>) {
+  return {
+    ...headers,
+    'x-worker-token': requiredWorkerToken,
+    'x-job-id': job.id,
+    'x-worker-id': workerId,
+    'x-lease-epoch': String(job.lease_epoch),
+  };
+}
+
 async function json<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
   return response.json() as Promise<T>;
@@ -959,7 +979,7 @@ async function workTopicRecompute(job: WorkerJob) {
 async function workVoice(job: WorkerJob) {
   if (!job.project_id) throw new Error('配音作业缺少 project_id。');
   if (!openAiApiKey) throw new Error('OPENAI_API_KEY 未配置，不能执行云端配音。');
-  const projectPayload = await json<{ project: ProjectRecord }>(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}`));
+  const projectPayload = await json<{ project: ProjectRecord }>(await fetch(leasedProjectUrl(job), { headers: { 'x-worker-token': requiredWorkerToken } }));
   const project = projectPayload.project.project;
   if (typeof job.payload.scriptHash !== 'string') throw new Error('配音作业缺少 scriptHash。');
   const textInput = project.script.lines.map((line) => line.text).join('\n');
@@ -991,13 +1011,13 @@ async function workVoice(job: WorkerJob) {
   if (durationMs < 500) throw new Error('字幕对齐未返回有效音频时长。');
   const upload = await json<{ asset: { id: string } }>(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}/assets`, {
     method: 'POST',
-    headers: { 'content-type': 'audio/mpeg', 'x-filename': encodeURIComponent(`${assertSafeJobId(job.id)}.mp3`), 'x-asset-role': 'voice-output', 'x-rights-status': 'cleared', 'x-rights-note': encodeURIComponent(`OpenAI ${model} built-in voice ${voice}`), 'x-worker-token': requiredWorkerToken },
+    headers: leasedAssetHeaders(job, { 'content-type': 'audio/mpeg', 'x-filename': encodeURIComponent(`${assertSafeJobId(job.id)}.mp3`), 'x-asset-role': 'voice-output', 'x-rights-status': 'cleared', 'x-rights-note': encodeURIComponent(`OpenAI ${model} built-in voice ${voice}`) }),
     body: audio,
   }));
   return json(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}/voice-tracks`, {
     method: 'POST',
     headers: workerHeaders,
-    body: JSON.stringify({ jobId: job.id, assetId: upload.asset.id, provider: `openai:${model}`, fallbackProvider: project.audio.fallbackProvider, voice, speed: project.audio.speed, pronunciationDictionary: Object.fromEntries(pronunciationHints), estimatedCostMicros: 0, durationMs, alignment, captions: buildCaptions(project.script.lines, durationMs, alignment), scriptVersion: project.script.version, scriptHash: job.payload.scriptHash }),
+    body: JSON.stringify({ jobId: job.id, workerId, leaseEpoch: job.lease_epoch, assetId: upload.asset.id, provider: `openai:${model}`, fallbackProvider: project.audio.fallbackProvider, voice, speed: project.audio.speed, pronunciationDictionary: Object.fromEntries(pronunciationHints), estimatedCostMicros: 0, durationMs, alignment, captions: buildCaptions(project.script.lines, durationMs, alignment), scriptVersion: project.script.version, scriptHash: job.payload.scriptHash }),
   }));
 }
 
@@ -1111,6 +1131,7 @@ async function workPublish(job: WorkerJob) {
   if (channel === 'package') {
     completion = { manifest: { schemaVersion: '1.0', projectId: job.project_id, snapshotHash: job.payload.snapshotHash, accountId: job.payload.accountId, title, description, tags: job.payload.tags, cover: job.payload.coverAsset, video: asset, sources: job.payload.sources, createdAt: new Date().toISOString(), mediaEndpoint: `/api/v1/media?objectKey=${encodeURIComponent(asset.objectKey)}` } };
   } else if (channel === 'youtube') {
+    await renewLeaseNow(job);
     const media = await downloadMedia(asset.objectKey);
     const coverAsset = job.payload.coverAsset && typeof job.payload.coverAsset === 'object' ? job.payload.coverAsset as { objectKey?: unknown } : null;
     const cover = coverAsset && typeof coverAsset.objectKey === 'string' ? await downloadMedia(coverAsset.objectKey) : null;
@@ -1123,7 +1144,7 @@ async function workPublish(job: WorkerJob) {
   } else {
     throw new Error(`不支持发布渠道 ${channel}。`);
   }
-  return json(await fetch(`${controlUrl}/api/v1/publish-jobs/${encodeURIComponent(job.payload.publishJobId)}/complete`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ jobId: job.id, channel, ...completion }) }));
+  return json(await fetch(`${controlUrl}/api/v1/publish-jobs/${encodeURIComponent(job.payload.publishJobId)}/complete`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ jobId: job.id, workerId, leaseEpoch: job.lease_epoch, channel, ...completion }) }));
 }
 
 async function workRender(job: WorkerJob) {
@@ -1131,7 +1152,7 @@ async function workRender(job: WorkerJob) {
   const { renderProject } = await import('./render.ts');
   if (!job.project_id) throw new Error('渲染作业缺少 project_id。');
   const profile = job.kind === 'preview' ? 'preview' : 'final';
-  const projectPayload = await json<{ project: ProjectRecord }>(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}`));
+  const projectPayload = await json<{ project: ProjectRecord }>(await fetch(leasedProjectUrl(job), { headers: { 'x-worker-token': requiredWorkerToken } }));
   const renderProjectInput = structuredClone(projectPayload.project.project);
   if (renderProjectInput.audio.objectKey?.startsWith('projects/')) {
     const media = await downloadMedia(renderProjectInput.audio.objectKey);
@@ -1157,14 +1178,14 @@ async function workRender(job: WorkerJob) {
     const bytes = await fs.readFile(videoPath);
     const upload = await json<{ asset: { id: string; objectKey: string; sha256: string } }>(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}/assets`, {
       method: 'POST',
-      headers: { 'content-type': 'video/mp4', 'x-filename': encodeURIComponent(`${jobId}.mp4`), 'x-asset-role': profile === 'preview' ? 'preview-output' : 'render-output', 'x-rights-status': 'cleared', 'x-rights-note': encodeURIComponent(profile === 'preview' ? 'Signal 40 Render Worker 低码率预览资产' : 'Signal 40 Render Worker 正式成片资产'), 'x-worker-token': requiredWorkerToken },
+      headers: leasedAssetHeaders(job, { 'content-type': 'video/mp4', 'x-filename': encodeURIComponent(`${jobId}.mp4`), 'x-asset-role': profile === 'preview' ? 'preview-output' : 'render-output', 'x-rights-status': 'cleared', 'x-rights-note': encodeURIComponent(profile === 'preview' ? 'Signal 40 Render Worker 低码率预览资产' : 'Signal 40 Render Worker 正式成片资产') }),
       body: bytes,
     }));
     if (profile === 'preview') return { asset: upload.asset, profile, snapshotHash: renderProjectInput.render.snapshotHash };
     if (qc!.status !== 'passed') {
       // 自动 QC 未通过：先落 QC 报告（G6 依赖它），再让作业以终态失败结束。
       // 不抽封面、不把作业标成功——否则运维和工作台会以为成片可用。
-      await json(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}/qc-reports`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ renderJobId: job.id, status: qc!.status, checks: qc!.checks }) }));
+      await json(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}/qc-reports`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ renderJobId: job.id, workerId, leaseEpoch: job.lease_epoch, status: qc!.status, checks: qc!.checks }) }));
       const failed = (qc!.checks as Array<{ code?: unknown; passed?: unknown }>).filter((check) => check.passed === false).map((check) => String(check.code)).slice(0, 12);
       throw new TerminalJobError(`自动 QC 未通过：${failed.join('、') || qc!.status}`);
     }
@@ -1172,10 +1193,10 @@ async function workRender(job: WorkerJob) {
     const coverBytes = await fs.readFile(coverPath);
     const cover = await json<{ asset: { id: string; objectKey: string; sha256: string } }>(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}/assets`, {
       method: 'POST',
-      headers: { 'content-type': 'image/jpeg', 'x-filename': encodeURIComponent(`${jobId}-cover.jpg`), 'x-asset-role': 'render-output', 'x-rights-status': 'cleared', 'x-rights-note': encodeURIComponent('Signal 40 Render Worker 从成片抽取的封面'), 'x-worker-token': requiredWorkerToken },
+      headers: leasedAssetHeaders(job, { 'content-type': 'image/jpeg', 'x-filename': encodeURIComponent(`${jobId}-cover.jpg`), 'x-asset-role': 'render-output', 'x-rights-status': 'cleared', 'x-rights-note': encodeURIComponent('Signal 40 Render Worker 从成片抽取的封面') }),
       body: coverBytes,
     }));
-    await json(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}/qc-reports`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ renderJobId: job.id, status: qc!.status, checks: qc!.checks }) }));
+    await json(await fetch(`${controlUrl}/api/v1/projects/${encodeURIComponent(job.project_id)}/qc-reports`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ renderJobId: job.id, workerId, leaseEpoch: job.lease_epoch, status: qc!.status, checks: qc!.checks }) }));
     return { asset: upload.asset, cover: cover.asset, qc };
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
@@ -1200,6 +1221,14 @@ async function finish(jobId: string, leaseEpoch: number, payload: Record<string,
 
 const LEASE_SECONDS = 900;
 const HEARTBEAT_INTERVAL_MS = 120_000;
+
+async function renewLeaseNow(job: WorkerJob) {
+  await json(await fetch(`${controlUrl}/api/v1/jobs/${encodeURIComponent(job.id)}/heartbeat`, {
+    method: 'POST',
+    headers: workerHeaders,
+    body: JSON.stringify({ workerId, leaseEpoch: job.lease_epoch, leaseSeconds: LEASE_SECONDS }),
+  }));
+}
 /** 这个 Worker 能处理的作业类型；同时用于租约请求和心跳上报。 */
 const WORKER_KINDS = workerProfile === 'source'
   ? ['ingestion']
