@@ -747,8 +747,13 @@ export function RadarDashboard({
         open={Boolean(selected)}
         onOpenChange={(open) => !open && setSelected(null)}
       >
+        {/*
+          证据抽屉要能和列表并排读，宽度取半屏，窄屏仍是整屏。
+          变体链必须和 ui/sheet 的默认值一模一样，否则 twMerge 去不掉默认的
+          sm:max-w-sm，那个带属性选择器的类权重更高，会把这里的宽度压回去。
+        */}
         <SheetContent
-          className="w-full overflow-y-auto sm:max-w-xl"
+          className="w-full overflow-y-auto data-[side=right]:sm:max-w-[50vw]"
           side="right"
         >
           {selected && (
@@ -766,7 +771,7 @@ export function RadarDashboard({
                 <section>
                   <h3 className="mb-3 font-semibold">自动化质量指标</h3>
                   {selected.quality ? <>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
                       {[
                         ['簇内一致性', selected.quality.coherence],
                         ['一致性下限', selected.quality.coherenceFloor],
@@ -780,7 +785,7 @@ export function RadarDashboard({
                 </section>
                 <section>
                   <h3 className="mb-3 font-semibold">评分拆解</h3>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
                     {Object.entries(selected.scoreBreakdown).map(
                       ([key, score]) => (
                         <div
