@@ -45,6 +45,15 @@ function parseJson<T>(value: string, fallback: T): T {
   }
 }
 
+/**
+ * `topics.quality_json` 的库内默认值是 `'{}'`，orchestrator 也用它表示“尚未评估”
+ * （见 `lib/orchestrator.ts` 的选题质量评估查询）。投影必须还原成 null，
+ * 否则界面拿到的是一个字段全为 undefined 的空壳对象，会当成“已评估”渲染。
+ */
+function normalizeTopicQuality(value: TopicCandidate['quality']) {
+  return value && Object.keys(value).length > 0 ? value : null;
+}
+
 export function createPipelineRunId(now = new Date()) {
   return `run_${now.valueOf().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
 }
@@ -391,7 +400,7 @@ async function hydrateTopics(
       }),
       verificationStatus: verification.status,
       verificationNote: verification.note,
-      quality: parseJson<TopicCandidate['quality']>(row.quality_json, null),
+      quality: normalizeTopicQuality(parseJson<TopicCandidate['quality']>(row.quality_json, null)),
       articles: articlesByTopic.get(row.id) ?? [],
       updatedAt: row.updated_at,
     };

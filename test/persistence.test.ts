@@ -40,6 +40,11 @@ void test('选题流水线在 PostgreSQL 上完整落库并读回', async () => 
 
   const single = await loadTopic(db, topics[0].id);
   assert.equal(single?.id, topics[0].id);
+
+  // quality_json 的默认值 '{}' 表示尚未评估：投影必须还原成 null，
+  // 否则界面会把空壳对象当成已评估结果，读 reasons.length 时直接崩。
+  assert.ok(loaded.topics.every((topic) => topic.quality === null), '未评估的选题不应带回空 quality 对象');
+  assert.equal(single?.quality, null);
 });
 
 void test('重复跑同一批话题不会因为 topic_articles 主键冲突而失败', async () => {
