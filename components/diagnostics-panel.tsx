@@ -41,7 +41,7 @@ export function DiagnosticsPanel() {
   return <main className="min-h-screen bg-background text-foreground">
     <PageHeader icon={<Stethoscope className="size-5" />} title="系统自检" subtitle="数据库、对象存储、凭据、Worker 与调度器" actions={<Button variant="outline" disabled={loading} onClick={() => void refresh()}>{loading ? <LoaderCircle className="animate-spin" /> : null}重新检查</Button>} />
 
-    <PageContainer className="py-7">
+    <PageContainer className="py-6">
       {error && <p className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>}
       {!data && !error && <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />正在自检…</p>}
       {data && <>
@@ -61,7 +61,7 @@ export function DiagnosticsPanel() {
         </div>
 
         <section className="mt-7">
-          <h2 className="text-xl font-semibold tracking-tight">Worker</h2>
+          <h2 className="text-lg font-semibold tracking-tight">Worker</h2>
           <div className="mt-3 overflow-hidden rounded-2xl border"><table className="w-full text-left text-sm"><thead className="bg-muted/60 text-muted-foreground"><tr>{['ID', '主机', '可处理类型', '版本', '最近心跳', '状态'].map((value) => <th className="px-4 py-3 font-medium" key={value}>{value}</th>)}</tr></thead><tbody>
             {data.workers.map((worker) => <tr className="border-t" key={worker.id}><td className="px-4 py-3 font-mono">{worker.id}</td><td className="px-4 py-3">{worker.hostname || '—'}</td><td className="px-4 py-3 font-mono text-xs">{worker.kinds.join('、')}</td><td className="px-4 py-3 font-mono text-xs">{worker.version || '—'}</td><td className="px-4 py-3">{new Date(worker.lastHeartbeatAt).toLocaleString('zh-CN')}</td><td className={`px-4 py-3 ${worker.online ? 'text-chart-1' : 'text-destructive'}`}>{worker.online ? '在线' : '离线'}</td></tr>)}
             {!data.workers.length && <tr><td className="px-4 py-8 text-center text-muted-foreground" colSpan={6}>还没有 Worker 上报过心跳。</td></tr>}
@@ -69,7 +69,7 @@ export function DiagnosticsPanel() {
         </section>
 
         <section className="mt-7">
-          <h2 className="text-xl font-semibold tracking-tight">队列积压</h2>
+          <h2 className="text-lg font-semibold tracking-tight">队列积压</h2>
           <div className="mt-3 overflow-hidden rounded-2xl border"><table className="w-full text-left text-sm"><thead className="bg-muted/60 text-muted-foreground"><tr>{['类型', '等待', '执行中', '死信'].map((value) => <th className="px-4 py-3 font-medium" key={value}>{value}</th>)}</tr></thead><tbody>
             {data.backlog.map((row) => <tr className="border-t" key={row.kind}><td className="px-4 py-3 font-mono">{row.kind}</td><td className="px-4 py-3">{row.waiting}</td><td className="px-4 py-3">{row.leased}</td><td className="px-4 py-3">{row.deadLetter}</td></tr>)}
             {!data.backlog.length && <tr><td className="px-4 py-8 text-center text-muted-foreground" colSpan={4}>队列为空。</td></tr>}

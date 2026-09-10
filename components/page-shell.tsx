@@ -120,7 +120,7 @@ export function PageHeader({
 }) {
   return (
     <div className="border-b border-border/80 bg-background">
-      <PageContainer className="flex flex-wrap items-center justify-between gap-3 py-5">
+      <PageContainer className="flex flex-wrap items-center justify-between gap-3 py-6">
         <div className="flex min-w-0 items-center gap-3">
           <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-secondary-foreground">
             {icon}

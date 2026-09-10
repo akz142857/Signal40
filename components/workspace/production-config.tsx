@@ -130,7 +130,7 @@ export function ProductionConfig({ project, onSaved, onMessage }: { project: Pro
   };
 
   return <section className="rounded-2xl border border-border bg-card p-5">
-    <div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-xl bg-secondary"><Palette className="size-5" /></span><div><p className="font-mono text-xs uppercase tracking-[0.15em] text-muted-foreground">Production configuration</p><h2 className="text-xl font-semibold">模板、资产与渠道</h2></div></div>
+    <div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-xl bg-secondary"><Palette className="size-5" /></span><div><p className="font-mono text-xs uppercase tracking-[0.15em] text-muted-foreground">Production configuration</p><h2 className="text-lg font-semibold tracking-tight">模板、资产与渠道</h2></div></div>
 
     <div className="mt-5 grid gap-5 xl:grid-cols-2">
       <div className="rounded-xl border border-border p-4">

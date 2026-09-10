@@ -177,7 +177,7 @@ export function GovernanceDashboard() {
 
   return <main className="min-h-screen bg-background text-foreground">
     <PageHeader icon={<Shield className="size-5" />} title="治理与增长实验" subtitle="成员权限、受控实验与离线校准" />
-    <PageContainer className="space-y-7 py-7">{message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">{message}</output>}
+    <PageContainer className="space-y-7 py-6">{message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">{message}</output>}
       <Section icon={UsersRound} title="团队与最小权限" description="权利审批和法律操作都是独立 capability；active legal hold 期间必须保留两名法律操作人。">
         <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[1fr_1fr_160px_190px_190px_auto]">
           <Field label="用户 ID"><Input value={memberForm.userId} onChange={(event) => setMemberForm({ ...memberForm, userId: event.target.value })} /></Field>
@@ -212,7 +212,7 @@ export function GovernanceDashboard() {
 }
 
 function Section({ icon: Icon, title, description, children }: { icon: typeof Beaker; title: string; description: string; children: React.ReactNode }) {
-  return <section className="rounded-2xl border bg-card p-5"><div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary"><Icon className="size-5" /></span><div><h2 className="text-xl font-semibold">{title}</h2><p className="mt-1 text-sm text-muted-foreground">{description}</p></div></div><div className="mt-5">{children}</div></section>;
+  return <section className="rounded-2xl border bg-card p-5"><div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary"><Icon className="size-5" /></span><div><h2 className="text-lg font-semibold tracking-tight">{title}</h2><p className="mt-1 text-sm text-muted-foreground">{description}</p></div></div><div className="mt-5">{children}</div></section>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <div className="grid gap-2"><Label>{label}</Label>{children}</div>; }

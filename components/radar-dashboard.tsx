@@ -498,7 +498,7 @@ export function RadarDashboard({
         </>}
       />
 
-      <PageContainer className="grid gap-5 py-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <PageContainer className="grid gap-5 py-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="min-w-0">
           <div className="mb-5 flex flex-col justify-between gap-4 border-b border-border pb-5 sm:flex-row sm:items-end">
             <div>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { GLOBAL_NAVIGATION, navigationPathIsActive, PAGE_WIDTH_CLASS } from '../lib/page-shell.ts';
 
 void test('全站导航只有一份稳定的桌面/移动信息架构', () => {
@@ -71,5 +71,45 @@ void test('页面不再各自声明内容宽度，避免逐页漂移', () => {
   ]) {
     const source = readFileSync(new URL(`../components/${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /width="/, `${file} 不应自己声明内容宽度`);
+  }
+});
+
+/** 页面组件（不含 components/ui 的通用原语）。 */
+function pageComponentSources() {
+  const root = new URL('../components/', import.meta.url);
+  const files: Array<[string, string]> = [];
+  const walk = (dir: URL, prefix: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name !== 'ui') walk(new URL(`${entry.name}/`, dir), `${prefix}${entry.name}/`);
+      } else if (entry.name.endsWith('.tsx')) {
+        files.push([`${prefix}${entry.name}`, readFileSync(new URL(entry.name, dir), 'utf8')]);
+      }
+    }
+  };
+  walk(root, '');
+  return files;
+}
+
+/**
+ * 标题层级只有一条硬规则：页面里任何标题都不能比页面标题（PageHeader 的 h1，text-xl）更大。
+ * 之前运营页的“作业健康度”是 text-3xl、来源页的分区标题是 text-2xl，
+ * 比页面自己的名字还醒目，一眼看过去分不清哪层是哪层。
+ */
+void test('页面内标题不得大于页面标题', () => {
+  for (const [name, source] of pageComponentSources()) {
+    for (const heading of source.match(/<h[1-6] className="[^"]*"/g) ?? []) {
+      assert.doesNotMatch(heading, /text-(?:2xl|3xl|4xl|5xl)/, `${name} 的标题字号越过了页面标题：${heading}`);
+    }
+  }
+});
+
+void test('页面容器使用同一档纵向间距', () => {
+  for (const [name, source] of pageComponentSources()) {
+    for (const container of source.match(/<PageContainer className="[^"]*"/g) ?? []) {
+      for (const padding of container.match(/\bpy-\d+/g) ?? []) {
+        assert.equal(padding, 'py-6', `${name} 的页面容器间距应为 py-6：${container}`);
+      }
+    }
   }
 });
