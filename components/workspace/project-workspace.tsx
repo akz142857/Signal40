@@ -326,7 +326,6 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   return (
     <main className="min-h-screen bg-background text-foreground">
       <PageHeader
-        width="workspace"
         icon={<Layers3 className="size-5" />}
         title={project.title}
         subtitle={<><Link href="/" className="hover:text-foreground hover:underline">雷达</Link><span> / 项目工作台 · v{project.version}</span></>}
@@ -338,7 +337,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
         }
       />
 
-      <PageContainer width="workspace" className="grid gap-5 py-5 xl:grid-cols-[210px_minmax(0,1fr)_330px]">
+      <PageContainer className="grid gap-5 py-5 xl:grid-cols-[210px_minmax(0,1fr)_330px]">
         <nav className="space-y-2" aria-label="生产阶段">
           {phases.map((phase, index) => { const Icon = phase.icon; const complete = index < activePhase; const active = index === activePhase; return <div key={phase.label} className={`flex items-center gap-3 rounded-xl border p-3 ${active ? 'border-chart-1 bg-chart-1/10' : 'border-transparent'}`}><span className={`grid size-9 place-items-center rounded-lg ${complete ? 'bg-chart-1 text-primary' : 'bg-secondary'}`}>{complete ? <CheckCircle2 className="size-4" /> : <Icon className="size-4" />}</span><div><p className="text-sm font-semibold">{phase.label}</p><p className="text-xs text-muted-foreground">{complete ? '已通过' : active ? '当前阶段' : '待开始'}</p></div></div>; })}
         </nav>

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { APP_BAR_WIDTH_CLASS, GLOBAL_NAVIGATION, navigationPathIsActive, PAGE_WIDTH_CLASSES } from '../lib/page-shell.ts';
+import { GLOBAL_NAVIGATION, navigationPathIsActive, PAGE_WIDTH_CLASS } from '../lib/page-shell.ts';
 
 void test('全站导航只有一份稳定的桌面/移动信息架构', () => {
   assert.deepEqual(GLOBAL_NAVIGATION.map(({ href, label }) => [href, label]), [
@@ -18,11 +18,14 @@ void test('全站导航只有一份稳定的桌面/移动信息架构', () => {
   assert.equal(navigationPathIsActive('/governance', '/operations'), false);
 });
 
-void test('页面主容器只暴露普通页面和工作台两个宽度 token', () => {
-  assert.deepEqual(PAGE_WIDTH_CLASSES, {
-    page: 'max-w-7xl',
-    workspace: 'max-w-[1500px]',
-  });
+void test('全站只有一条内容宽度线', () => {
+  assert.equal(PAGE_WIDTH_CLASS, 'max-w-7xl');
+
+  // 应用条、页面标题区、页面内容必须共用同一个常量，
+  // 否则导航和内容的左右边界又会各走各的。
+  const shell = readFileSync(new URL('../components/page-shell.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(shell, /PAGE_WIDTH_CLASSES|APP_BAR_WIDTH_CLASS|PageWidth/, '外壳不应再有多个宽度 token');
+  assert.equal(shell.match(/PAGE_WIDTH_CLASS/g)?.length, 3, '应用条与页面容器都要引用同一个宽度常量');
 });
 
 /**
@@ -37,7 +40,6 @@ void test('全局应用条挂在根布局上，页面标题区不再自带导航
   const shell = readFileSync(new URL('../components/page-shell.tsx', import.meta.url), 'utf8');
   const pageHeader = shell.slice(shell.indexOf('export function PageHeader'));
   assert.doesNotMatch(pageHeader, /NavigationLinks|GLOBAL_NAVIGATION/, '页面标题区不能再渲染全站导航');
-  assert.equal(APP_BAR_WIDTH_CLASS.startsWith('max-w-'), true, '应用条宽度必须是独立于页面的固定 token');
 });
 
 void test('页面组件不各自渲染全站导航', () => {
@@ -65,8 +67,9 @@ void test('页面不再各自声明内容宽度，避免逐页漂移', () => {
     'automation-console.tsx',
     'attention-inbox.tsx',
     'diagnostics-panel.tsx',
+    'workspace/project-workspace.tsx',
   ]) {
     const source = readFileSync(new URL(`../components/${file}`, import.meta.url), 'utf8');
-    assert.doesNotMatch(source, /width="/, `${file} 应使用默认页面宽度，只有项目工作台是例外`);
+    assert.doesNotMatch(source, /width="/, `${file} 不应自己声明内容宽度`);
   }
 });

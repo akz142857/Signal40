@@ -7,7 +7,7 @@ import { Activity, Bot, DatabaseZap, Inbox, Menu, Radar, Settings, UsersRound } 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { useSession } from '@/hooks/use-session';
-import { APP_BAR_WIDTH_CLASS, GLOBAL_NAVIGATION, navigationPathIsActive, PAGE_WIDTH_CLASSES, type PageWidth } from '@/lib/page-shell';
+import { GLOBAL_NAVIGATION, navigationPathIsActive, PAGE_WIDTH_CLASS } from '@/lib/page-shell';
 import { cn } from '@/lib/utils';
 
 const navigationIcons = { '/': Radar, '/sources': DatabaseZap, '/automation': Bot, '/inbox': Inbox, '/operations': Activity, '/governance': UsersRound, '/settings/diagnostics': Settings } as const;
@@ -67,7 +67,7 @@ function IdentityBadge() {
 export function AppBar() {
   return (
     <header className="sticky top-0 z-40 border-b border-border/80 bg-background/90 backdrop-blur">
-      <div className={cn('mx-auto flex w-full items-center gap-4 px-4 py-3 sm:px-7', APP_BAR_WIDTH_CLASS)}>
+      <div className={cn('mx-auto flex w-full items-center gap-4 px-4 py-3 sm:px-7', PAGE_WIDTH_CLASS)}>
         <Link href="/" className="flex min-w-0 items-center gap-2.5" aria-label="Signal 40 首页">
           <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
             <Radar className="size-5" />
@@ -99,16 +99,8 @@ export function AppBar() {
   );
 }
 
-export function PageContainer({
-  width = 'page',
-  className,
-  children,
-}: {
-  width?: PageWidth;
-  className?: string;
-  children: ReactNode;
-}) {
-  return <div className={cn('mx-auto w-full px-4 sm:px-7', PAGE_WIDTH_CLASSES[width], className)}>{children}</div>;
+export function PageContainer({ className, children }: { className?: string; children: ReactNode }) {
+  return <div className={cn('mx-auto w-full px-4 sm:px-7', PAGE_WIDTH_CLASS, className)}>{children}</div>;
 }
 
 /**
@@ -116,13 +108,11 @@ export function PageContainer({
  * 品牌和导航归 `AppBar`，这里不再重复，否则每页的左上角都在换身份。
  */
 export function PageHeader({
-  width = 'page',
   icon,
   title,
   subtitle,
   actions,
 }: {
-  width?: PageWidth;
   icon: ReactNode;
   title: ReactNode;
   subtitle: ReactNode;
@@ -130,7 +120,7 @@ export function PageHeader({
 }) {
   return (
     <div className="border-b border-border/80 bg-background">
-      <PageContainer width={width} className="flex flex-wrap items-center justify-between gap-3 py-5">
+      <PageContainer className="flex flex-wrap items-center justify-between gap-3 py-5">
         <div className="flex min-w-0 items-center gap-3">
           <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary text-secondary-foreground">
             {icon}
