@@ -119,7 +119,7 @@ export function AutomationConsole() {
   return <main className="min-h-screen bg-background text-foreground">
     <PageHeader icon={<Bot className="size-5" />} title="自动化控制台" subtitle="策略、预先授权、近期自动动作与熔断状态" />
 
-    <PageContainer className="py-7">
+    <PageContainer className="py-6">
       {message && <p className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{message}</p>}
       {loading && <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />读取中…</p>}
 
@@ -140,7 +140,7 @@ export function AutomationConsole() {
         {policies.map((policy) => <section className="rounded-2xl border bg-card p-5" key={policy.id}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold">{policy.name}</h2>
+              <h2 className="text-lg font-semibold tracking-tight">{policy.name}</h2>
               <p className="mt-1 font-mono text-[11px] text-muted-foreground">{policy.id} · v{policy.version}</p>
               <p className="mt-1 text-xs text-muted-foreground">近 30 天：{costs[policy.id]?.projectCount ?? 0} 个项目、成本 {((costs[policy.id]?.costMicros ?? 0) / 1_000_000).toFixed(2)} 单位</p>
             </div>
@@ -206,7 +206,7 @@ export function AutomationConsole() {
       </div>
 
       <section className="mt-7">
-        <h2 className="text-xl font-semibold tracking-tight">近期自动动作</h2>
+        <h2 className="text-lg font-semibold tracking-tight">近期自动动作</h2>
         <p className="mt-1 text-sm text-muted-foreground">最近 {runs.length} 轮 tick 共 {automatedActions} 个自动动作。每个动作在审计流里都带 trigger=automation 与策略 ID。</p>
         <div className="mt-3 grid gap-2">
           {runs.map((run) => <article className="rounded-xl border bg-card p-4 text-sm" key={run.id}>

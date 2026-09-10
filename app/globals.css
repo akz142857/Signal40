@@ -148,4 +148,28 @@ body {
   html {
     @apply font-sans;
   }
+  /*
+   * Tailwind v4 的 preflight 把按钮光标设成 default，于是全站所有按钮、标签页、
+   * 折叠面板点上去都还是箭头。在这里统一恢复“可点=手型、不可点=禁止”，
+   * 而不是让每个组件各自补一个 cursor-pointer——那种补法一定会漏。
+   */
+  button:not(:disabled),
+  select:not(:disabled),
+  summary,
+  label[for],
+  [role='button']:not([aria-disabled='true']),
+  [role='tab']:not([aria-disabled='true']),
+  [role='option']:not([aria-disabled='true']),
+  [role='menuitem']:not([aria-disabled='true']),
+  [role='checkbox']:not([aria-disabled='true']),
+  [role='switch']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled,
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
 }

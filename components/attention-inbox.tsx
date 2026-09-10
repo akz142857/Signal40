@@ -80,7 +80,7 @@ export function AttentionInbox() {
   return <main className="min-h-screen bg-background text-foreground">
     <PageHeader icon={<Inbox className="size-5" />} title="待办箱" subtitle="自动化处理不了、需要人判断的每一件事" actions={<><Button variant={status === 'open' ? 'default' : 'outline'} onClick={() => setStatus('open')}>未处理</Button><Button variant={status === 'resolved' ? 'default' : 'outline'} onClick={() => setStatus('resolved')}>已处理</Button></>} />
 
-    <PageContainer className="py-7">
+    <PageContainer className="py-6">
       {error && <p className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>}
       {loading && <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />读取待办…</p>}
       <div className="grid gap-3">

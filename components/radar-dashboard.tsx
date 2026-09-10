@@ -486,10 +486,9 @@ export function RadarDashboard({
   return (
     <main className="min-h-screen bg-background text-foreground">
       <PageHeader
-        width="wide"
         icon={<Radar className="size-5" />}
-        title="Signal 40"
-        subtitle="财经选题雷达"
+        title="选题雷达"
+        subtitle="今天值得拍的财经题：高分表示值得研究，只有通过自动证据门禁并经人工批准才能导出视频协议。"
         actions={<>
           <span className="hidden items-center gap-2 text-sm text-muted-foreground xl:flex">
             <span className="size-2 rounded-full bg-chart-1 shadow-[0_0_0_4px_var(--color-signal-glow)]" />
@@ -499,21 +498,15 @@ export function RadarDashboard({
         </>}
       />
 
-      <PageContainer width="wide" className="grid gap-5 py-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <PageContainer className="grid gap-5 py-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="min-w-0">
           <div className="mb-5 flex flex-col justify-between gap-4 border-b border-border pb-5 sm:flex-row sm:items-end">
             <div>
-              <p className="mb-2 font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
                 Daily radar / {sourceLabel}
               </p>
-              <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">
-                今天值得拍的财经题
-              </h1>
-              <p className="mt-2 max-w-2xl text-base text-muted-foreground">
-                高分表示值得研究；只有通过自动证据门禁并经人工批准，才能导出视频协议。
-              </p>
               {message && (
-                <output className="mt-3 block text-sm font-medium">
+                <output className="mt-2 block text-sm font-medium">
                   {message}
                 </output>
               )}
@@ -754,8 +747,13 @@ export function RadarDashboard({
         open={Boolean(selected)}
         onOpenChange={(open) => !open && setSelected(null)}
       >
+        {/*
+          证据抽屉要能和列表并排读，宽度取半屏，窄屏仍是整屏。
+          变体链必须和 ui/sheet 的默认值一模一样，否则 twMerge 去不掉默认的
+          sm:max-w-sm，那个带属性选择器的类权重更高，会把这里的宽度压回去。
+        */}
         <SheetContent
-          className="w-full overflow-y-auto sm:max-w-xl"
+          className="w-full overflow-y-auto data-[side=right]:sm:max-w-[50vw]"
           side="right"
         >
           {selected && (
@@ -773,7 +771,7 @@ export function RadarDashboard({
                 <section>
                   <h3 className="mb-3 font-semibold">自动化质量指标</h3>
                   {selected.quality ? <>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
                       {[
                         ['簇内一致性', selected.quality.coherence],
                         ['一致性下限', selected.quality.coherenceFloor],
@@ -787,7 +785,7 @@ export function RadarDashboard({
                 </section>
                 <section>
                   <h3 className="mb-3 font-semibold">评分拆解</h3>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
                     {Object.entries(selected.scoreBreakdown).map(
                       ([key, score]) => (
                         <div

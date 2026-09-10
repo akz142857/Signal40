@@ -26,8 +26,13 @@ type PublisherEntity = { id: string; legal_name: string; ownership_group: string
 type EvidenceOrigin = { id: string; source_name: string; platform: string; title: string; detected_relationship: string; detected_evidence_family_id: string | null; detected_publisher_entity_id: string | null; detected_confidence: number; correction_id: string | null; relationship: string | null; evidence_family_id: string | null; publisher_entity_id: string | null; confidence: number | null };
 
 async function readJson<T>(response: Response) {
-  const payload = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error || `请求失败（${response.status}）`);
+  // 服务端 5xx 可能没有响应体，直接 .json() 会把真实错误盖成 “Unexpected end of JSON input”。
+  const text = await response.text();
+  let payload: (T & { error?: string }) | null = null;
+  try { payload = text ? JSON.parse(text) as T & { error?: string } : null; }
+  catch { payload = null; }
+  if (!response.ok) throw new Error(payload?.error || `请求失败（${response.status}）`);
+  if (!payload) throw new Error(`请求成功但响应不是 JSON（${response.status}）`);
   return payload;
 }
 
@@ -171,8 +176,8 @@ export function GovernanceDashboard() {
   };
 
   return <main className="min-h-screen bg-background text-foreground">
-    <PageHeader width="wide" icon={<Shield className="size-5" />} title="治理与增长实验" subtitle="成员权限、受控实验与离线校准" />
-    <PageContainer width="wide" className="space-y-7 py-7">{message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">{message}</output>}
+    <PageHeader icon={<Shield className="size-5" />} title="治理与增长实验" subtitle="成员权限、受控实验与离线校准" />
+    <PageContainer className="space-y-7 py-6">{message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">{message}</output>}
       <Section icon={UsersRound} title="团队与最小权限" description="权利审批和法律操作都是独立 capability；active legal hold 期间必须保留两名法律操作人。">
         <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[1fr_1fr_160px_190px_190px_auto]">
           <Field label="用户 ID"><Input value={memberForm.userId} onChange={(event) => setMemberForm({ ...memberForm, userId: event.target.value })} /></Field>
@@ -207,7 +212,7 @@ export function GovernanceDashboard() {
 }
 
 function Section({ icon: Icon, title, description, children }: { icon: typeof Beaker; title: string; description: string; children: React.ReactNode }) {
-  return <section className="rounded-2xl border bg-card p-5"><div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary"><Icon className="size-5" /></span><div><h2 className="text-xl font-semibold">{title}</h2><p className="mt-1 text-sm text-muted-foreground">{description}</p></div></div><div className="mt-5">{children}</div></section>;
+  return <section className="rounded-2xl border bg-card p-5"><div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-secondary"><Icon className="size-5" /></span><div><h2 className="text-lg font-semibold tracking-tight">{title}</h2><p className="mt-1 text-sm text-muted-foreground">{description}</p></div></div><div className="mt-5">{children}</div></section>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <div className="grid gap-2"><Label>{label}</Label>{children}</div>; }

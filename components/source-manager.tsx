@@ -300,7 +300,7 @@ const proposalLabels: Record<SourceProposal['status'], string> = {
 };
 
 function SourcesHeader({ subtitle }: { subtitle: string }) {
-  return <PageHeader width="wide" icon={<DatabaseZap className="size-5" />} title="来源控制台" subtitle={subtitle} />;
+  return <PageHeader icon={<DatabaseZap className="size-5" />} title="来源控制台" subtitle={subtitle} />;
 }
 
 function ProposalList({
@@ -431,9 +431,9 @@ function SourceProposalWorkspace() {
   return (
     <main className="min-h-screen bg-background text-foreground">
       <SourcesHeader subtitle="提案来源，由管理员独立审批" />
-      <PageContainer width="wide" className="grid gap-6 py-6 lg:grid-cols-[360px_1fr]">
+      <PageContainer className="grid gap-6 py-6 lg:grid-cols-[360px_1fr]">
         <section className="h-fit rounded-2xl border bg-card p-5">
-          <h1 className="text-xl font-semibold">提案新来源</h1>
+          <h2 className="text-lg font-semibold tracking-tight">提案新来源</h2>
           <p className="mt-2 text-sm text-muted-foreground">这里只提交建议，不会自动授权或启用采集。</p>
           <div className="mt-5 grid gap-4">
             <div className="grid gap-2"><Label htmlFor="proposal-name">来源名称</Label><Input id="proposal-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
@@ -448,8 +448,8 @@ function SourceProposalWorkspace() {
           </div>
         </section>
         <div className="grid gap-6">
-          <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-xl font-semibold">我的提案</h2><ProposalList proposals={proposals} /></section>
-          <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-xl font-semibold">已登记来源（只读）</h2><ReadOnlySourceList sources={sources} /></section>
+          <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-lg font-semibold tracking-tight">我的提案</h2><ProposalList proposals={proposals} /></section>
+          <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-lg font-semibold tracking-tight">已登记来源（只读）</h2><ReadOnlySourceList sources={sources} /></section>
         </div>
       </PageContainer>
     </main>
@@ -479,10 +479,10 @@ function SourceReadOnlyWorkspace({ includeProposals }: { includeProposals: boole
   return (
     <main className="min-h-screen bg-background text-foreground">
       <SourcesHeader subtitle="只读来源与治理记录" />
-      <PageContainer width="wide" className="grid gap-6 py-6">
+      <PageContainer className="grid gap-6 py-6">
         {message && <p className="rounded-xl border border-destructive/30 p-4 text-sm">{message}</p>}
-        <section className="rounded-2xl border bg-card p-5"><h1 className="mb-4 text-xl font-semibold">已登记来源</h1><ReadOnlySourceList sources={sources} /></section>
-        {includeProposals && <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-xl font-semibold">来源提案审计</h2><ProposalList proposals={proposals} /></section>}
+        <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-lg font-semibold tracking-tight">已登记来源</h2><ReadOnlySourceList sources={sources} /></section>
+        {includeProposals && <section className="rounded-2xl border bg-card p-5"><h2 className="mb-4 text-lg font-semibold tracking-tight">来源提案审计</h2><ProposalList proposals={proposals} /></section>}
       </PageContainer>
     </main>
   );
@@ -513,9 +513,9 @@ function SourceProposalInbox() {
   };
   const pending = proposals.filter((proposal) => proposal.status === 'proposal_pending');
   return (
-    <PageContainer width="wide" className="pt-6">
+    <PageContainer className="pt-6">
       <section className="rounded-2xl border bg-card p-5">
-        <div className="mb-4"><h2 className="text-lg font-semibold">待审来源提案</h2><p className="text-xs text-muted-foreground">批准只创建待配置 draft，不代表权利已批准。</p></div>
+        <div className="mb-4"><h2 className="text-lg font-semibold tracking-tight">待审来源提案</h2><p className="text-xs text-muted-foreground">批准只创建待配置 draft，不代表权利已批准。</p></div>
         <ProposalList proposals={pending} onDecision={(proposal, decision) => void decide(proposal, decision)} />
         {message && <p className="mt-3 text-sm text-muted-foreground">{message}</p>}
       </section>
@@ -1694,16 +1694,16 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <PageHeader width="wide" icon={<DatabaseZap className="size-5" />} title="来源控制台" subtitle="一次接入，持续采集" />
+      <PageHeader icon={<DatabaseZap className="size-5" />} title="来源控制台" subtitle="一次接入，持续采集" />
       <SourceProposalInbox />
-      <PageContainer width="wide" className="grid gap-6 py-6 lg:grid-cols-[380px_1fr]">
+      <PageContainer className="grid gap-6 py-6 lg:grid-cols-[380px_1fr]">
         <section className="h-fit rounded-2xl border bg-card p-5">
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
             Step {step} / 3
           </p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-[-0.04em]">
+          <h2 className="mt-2 text-lg font-semibold tracking-tight">
             {step === 1 ? '粘贴来源' : step === 2 ? '识别与测试' : '确认并启用'}
-          </h1>
+          </h2>
           {step === 1 && (
             <div className="mt-5 grid gap-4">
               <Button
@@ -2425,7 +2425,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
                 Ingestion operations
               </p>
-              <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">
+              <h2 className="mt-2 text-lg font-semibold tracking-tight">
                 来源与运行
               </h2>
               <output className="mt-2 block text-sm text-muted-foreground">

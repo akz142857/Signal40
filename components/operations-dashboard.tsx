@@ -283,7 +283,7 @@ export function OperationsDashboard() {
   return (
     <main className="min-h-screen bg-background text-foreground">
       <PageHeader icon={<Activity className="size-5" />} title="运行与 SLO" subtitle="近 30 天作业、质量与事件" />
-      <PageContainer className="py-7">
+      <PageContainer className="py-6">
         {!data && !error && (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderCircle className="size-4 animate-spin" />
@@ -364,7 +364,7 @@ export function OperationsDashboard() {
             )}
             {workerView && (
               <section className="mt-7">
-                <h2 className="text-2xl font-semibold tracking-tight">
+                <h2 className="text-lg font-semibold tracking-tight">
                   按类型积压
                 </h2>
                 <div className="mt-3 overflow-hidden rounded-2xl border">
@@ -404,7 +404,7 @@ export function OperationsDashboard() {
             )}
             {workerView && (
               <section className="mt-7">
-                <h2 className="text-2xl font-semibold tracking-tight">
+                <h2 className="text-lg font-semibold tracking-tight">
                   Worker 与积压
                 </h2>
                 <div className="mt-3 overflow-hidden rounded-2xl border">
@@ -464,7 +464,7 @@ export function OperationsDashboard() {
             <section className="mt-7">
               <div className="flex flex-wrap items-end justify-between gap-2">
                 <div>
-                  <h2 className="text-2xl font-semibold tracking-tight">
+                  <h2 className="text-lg font-semibold tracking-tight">
                     来源 SLO 与采集用量
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
@@ -666,7 +666,7 @@ export function OperationsDashboard() {
                   </tbody>
                 </table>
               </div>
-              <h3 className="mt-6 text-lg font-semibold">聚合切片</h3>
+              <h3 className="mt-6 font-semibold">聚合切片</h3>
               <p className="mt-1 text-sm text-muted-foreground">
                 按当前连接器、版本、平台和 Worker
                 能力汇总；成功率按运行总数加权，不对百分比取平均。
@@ -772,9 +772,9 @@ export function OperationsDashboard() {
               </div>
             </section>
             <section className="mt-7">
-              <h1 className="text-3xl font-semibold tracking-[-0.04em]">
+              <h2 className="text-lg font-semibold tracking-tight">
                 作业健康度
-              </h1>
+              </h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 生成于 {new Date(data.generatedAt).toLocaleString('zh-CN')}
               </p>
@@ -826,7 +826,7 @@ export function OperationsDashboard() {
               </div>
             </section>
             <section className="mt-7">
-              <h2 className="text-2xl font-semibold tracking-tight">
+              <h2 className="text-lg font-semibold tracking-tight">
                 需要处置
               </h2>
               <div className="mt-3 grid gap-3">

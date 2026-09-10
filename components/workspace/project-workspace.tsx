@@ -64,7 +64,8 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [incidentKind, setIncidentKind] = useState('correction');
   const [incidentSeverity, setIncidentSeverity] = useState('medium');
-  const session = useSession();
+  // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关；身份本身由 AppBar 展示。
+  useSession();
   // 生产环境返回空对象，服务端用反向代理注入的真实身份；
   // 只有本机开发且服务端明确允许时，才带上伪造角色头。
   const actorHeaders = useCallback(
@@ -325,7 +326,6 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   return (
     <main className="min-h-screen bg-background text-foreground">
       <PageHeader
-        width="workspace"
         icon={<Layers3 className="size-5" />}
         title={project.title}
         subtitle={<><Link href="/" className="hover:text-foreground hover:underline">雷达</Link><span> / 项目工作台 · v{project.version}</span></>}
@@ -333,12 +333,11 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
           <>
             <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-semibold">{stateLabels[project.state]}</span>
             <span className="font-mono text-xs text-muted-foreground">Gates {gateSummary.passed}/{gateSummary.total}</span>
-            <span className="text-xs text-muted-foreground">{session.actor ? `${session.actor.email} · ${session.actor.role}` : session.loading ? '读取身份…' : '未识别身份'}{session.localRoleHeadersAllowed && '（本机开发身份）'}</span>
           </>
         }
       />
 
-      <PageContainer width="workspace" className="grid gap-5 py-5 xl:grid-cols-[210px_minmax(0,1fr)_330px]">
+      <PageContainer className="grid gap-5 py-6 xl:grid-cols-[210px_minmax(0,1fr)_330px]">
         <nav className="space-y-2" aria-label="生产阶段">
           {phases.map((phase, index) => { const Icon = phase.icon; const complete = index < activePhase; const active = index === activePhase; return <div key={phase.label} className={`flex items-center gap-3 rounded-xl border p-3 ${active ? 'border-chart-1 bg-chart-1/10' : 'border-transparent'}`}><span className={`grid size-9 place-items-center rounded-lg ${complete ? 'bg-chart-1 text-primary' : 'bg-secondary'}`}>{complete ? <CheckCircle2 className="size-4" /> : <Icon className="size-4" />}</span><div><p className="text-sm font-semibold">{phase.label}</p><p className="text-xs text-muted-foreground">{complete ? '已通过' : active ? '当前阶段' : '待开始'}</p></div></div>; })}
         </nav>
@@ -357,7 +356,7 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void setAutomation(project.automationMode === 'auto' ? 'pause' : 'resume')}>{project.automationMode === 'auto' ? '暂停自动化' : '恢复自动'}</Button>
           </div>
           <section className="grid items-center gap-5 rounded-2xl border border-border bg-card p-5 md:grid-cols-[minmax(0,1fr)_300px]">
-            <div><p className="font-mono text-xs uppercase tracking-[0.15em] text-chart-1">Remotion player</p><h2 className="mt-2 text-2xl font-semibold tracking-tight">实时成片预览</h2><p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">预览和正式渲染使用同一个 React Composition 与同一份不可变快照。当前模板为竖屏 1080 × 1920、30fps、45 秒。</p><div className="mt-5 grid grid-cols-2 gap-3 text-sm"><div className="rounded-xl bg-secondary/60 p-3"><p className="text-xs text-muted-foreground">Composition</p><p className="mt-1 font-mono">{project.project.render.compositionId}</p></div><div className="rounded-xl bg-secondary/60 p-3"><p className="text-xs text-muted-foreground">Snapshot</p><p className="mt-1 font-mono">{project.project.render.snapshotHash}</p></div></div></div>
+            <div><p className="font-mono text-xs uppercase tracking-[0.15em] text-chart-1">Remotion player</p><h2 className="mt-2 text-lg font-semibold tracking-tight">实时成片预览</h2><p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">预览和正式渲染使用同一个 React Composition 与同一份不可变快照。当前模板为竖屏 1080 × 1920、30fps、45 秒。</p><div className="mt-5 grid grid-cols-2 gap-3 text-sm"><div className="rounded-xl bg-secondary/60 p-3"><p className="text-xs text-muted-foreground">Composition</p><p className="mt-1 font-mono">{project.project.render.compositionId}</p></div><div className="rounded-xl bg-secondary/60 p-3"><p className="text-xs text-muted-foreground">Snapshot</p><p className="mt-1 font-mono">{project.project.render.snapshotHash}</p></div></div></div>
             <Suspense fallback={<div className="mx-auto grid aspect-[9/16] w-full max-w-[300px] place-items-center rounded-2xl bg-black text-xs text-white/60">加载成片预览…</div>}><VideoPreview project={project.project} /></Suspense>
           </section>
           <ResearchEditor key={`research-${project.version}`} project={project} onSaved={refresh} onMessage={setMessage} />
