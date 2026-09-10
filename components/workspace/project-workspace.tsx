@@ -64,7 +64,8 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [incidentKind, setIncidentKind] = useState('correction');
   const [incidentSeverity, setIncidentSeverity] = useState('medium');
-  const session = useSession();
+  // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关；身份本身由 AppBar 展示。
+  useSession();
   // 生产环境返回空对象，服务端用反向代理注入的真实身份；
   // 只有本机开发且服务端明确允许时，才带上伪造角色头。
   const actorHeaders = useCallback(
@@ -333,7 +334,6 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
           <>
             <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-semibold">{stateLabels[project.state]}</span>
             <span className="font-mono text-xs text-muted-foreground">Gates {gateSummary.passed}/{gateSummary.total}</span>
-            <span className="text-xs text-muted-foreground">{session.actor ? `${session.actor.email} · ${session.actor.role}` : session.loading ? '读取身份…' : '未识别身份'}{session.localRoleHeadersAllowed && '（本机开发身份）'}</span>
           </>
         }
       />

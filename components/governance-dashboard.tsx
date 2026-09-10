@@ -176,8 +176,8 @@ export function GovernanceDashboard() {
   };
 
   return <main className="min-h-screen bg-background text-foreground">
-    <PageHeader width="wide" icon={<Shield className="size-5" />} title="治理与增长实验" subtitle="成员权限、受控实验与离线校准" />
-    <PageContainer width="wide" className="space-y-7 py-7">{message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">{message}</output>}
+    <PageHeader icon={<Shield className="size-5" />} title="治理与增长实验" subtitle="成员权限、受控实验与离线校准" />
+    <PageContainer className="space-y-7 py-7">{message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">{message}</output>}
       <Section icon={UsersRound} title="团队与最小权限" description="权利审批和法律操作都是独立 capability；active legal hold 期间必须保留两名法律操作人。">
         <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[1fr_1fr_160px_190px_190px_auto]">
           <Field label="用户 ID"><Input value={memberForm.userId} onChange={(event) => setMemberForm({ ...memberForm, userId: event.target.value })} /></Field>

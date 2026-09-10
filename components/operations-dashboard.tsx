@@ -772,9 +772,9 @@ export function OperationsDashboard() {
               </div>
             </section>
             <section className="mt-7">
-              <h1 className="text-3xl font-semibold tracking-[-0.04em]">
+              <h2 className="text-2xl font-semibold tracking-tight">
                 作业健康度
-              </h1>
+              </h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 生成于 {new Date(data.generatedAt).toLocaleString('zh-CN')}
               </p>

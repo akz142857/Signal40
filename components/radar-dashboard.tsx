@@ -486,10 +486,9 @@ export function RadarDashboard({
   return (
     <main className="min-h-screen bg-background text-foreground">
       <PageHeader
-        width="wide"
         icon={<Radar className="size-5" />}
-        title="Signal 40"
-        subtitle="财经选题雷达"
+        title="选题雷达"
+        subtitle="今天值得拍的财经题：高分表示值得研究，只有通过自动证据门禁并经人工批准才能导出视频协议。"
         actions={<>
           <span className="hidden items-center gap-2 text-sm text-muted-foreground xl:flex">
             <span className="size-2 rounded-full bg-chart-1 shadow-[0_0_0_4px_var(--color-signal-glow)]" />
@@ -499,21 +498,15 @@ export function RadarDashboard({
         </>}
       />
 
-      <PageContainer width="wide" className="grid gap-5 py-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <PageContainer className="grid gap-5 py-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="min-w-0">
           <div className="mb-5 flex flex-col justify-between gap-4 border-b border-border pb-5 sm:flex-row sm:items-end">
             <div>
-              <p className="mb-2 font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
                 Daily radar / {sourceLabel}
               </p>
-              <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">
-                今天值得拍的财经题
-              </h1>
-              <p className="mt-2 max-w-2xl text-base text-muted-foreground">
-                高分表示值得研究；只有通过自动证据门禁并经人工批准，才能导出视频协议。
-              </p>
               {message && (
-                <output className="mt-3 block text-sm font-medium">
+                <output className="mt-2 block text-sm font-medium">
                   {message}
                 </output>
               )}

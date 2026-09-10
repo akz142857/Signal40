@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { AppBar } from '@/components/page-shell';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 
@@ -11,5 +12,6 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="zh-CN"><body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>{children}</body></html>;
+  // AppBar 挂在这里而不是各页面：全站导航、品牌和当前身份必须逐页一致。
+  return <html lang="zh-CN"><body className={`${geistSans.variable} ${geistMono.variable} antialiased`}><AppBar />{children}</body></html>;
 }

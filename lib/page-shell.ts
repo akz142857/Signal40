@@ -1,8 +1,17 @@
-export type PageWidth = 'standard' | 'wide' | 'workspace';
+/**
+ * 只有两个宽度：普通页面和项目工作台。
+ *
+ * 过去还有一个 `standard`，写了 `width="wide"` 的页面（雷达、来源、治理）比没写的
+ * （自动化、待办、运营、系统）宽一档，同一套导航下内容边界逐页跳动。
+ * 少一个 token 就少一类漂移——要加新宽度前先问清楚它凭什么是独立层级。
+ */
+export type PageWidth = 'page' | 'workspace';
+
+/** 全局应用条独立于页面宽度：导航固定在窗口右上角，不跟着内容 width 左右跳。 */
+export const APP_BAR_WIDTH_CLASS = 'max-w-[1600px]';
 
 export const PAGE_WIDTH_CLASSES: Record<PageWidth, string> = {
-  standard: 'max-w-6xl',
-  wide: 'max-w-7xl',
+  page: 'max-w-7xl',
   workspace: 'max-w-[1500px]',
 };
 
