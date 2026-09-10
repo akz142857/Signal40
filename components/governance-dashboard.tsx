@@ -26,8 +26,13 @@ type PublisherEntity = { id: string; legal_name: string; ownership_group: string
 type EvidenceOrigin = { id: string; source_name: string; platform: string; title: string; detected_relationship: string; detected_evidence_family_id: string | null; detected_publisher_entity_id: string | null; detected_confidence: number; correction_id: string | null; relationship: string | null; evidence_family_id: string | null; publisher_entity_id: string | null; confidence: number | null };
 
 async function readJson<T>(response: Response) {
-  const payload = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error || `请求失败（${response.status}）`);
+  // 服务端 5xx 可能没有响应体，直接 .json() 会把真实错误盖成 “Unexpected end of JSON input”。
+  const text = await response.text();
+  let payload: (T & { error?: string }) | null = null;
+  try { payload = text ? JSON.parse(text) as T & { error?: string } : null; }
+  catch { payload = null; }
+  if (!response.ok) throw new Error(payload?.error || `请求失败（${response.status}）`);
+  if (!payload) throw new Error(`请求成功但响应不是 JSON（${response.status}）`);
   return payload;
 }
 
