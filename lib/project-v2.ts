@@ -330,7 +330,7 @@ export function createProjectV2(topic: TopicCandidate, now = new Date()): VideoP
     audio: { provider: null, voice: null, objectKey: null, durationMs: null, speed: 1, pronunciationDictionary: {}, sha256: null, fallbackProvider: 'macos-say-local', estimatedCostMicros: 0, music: null, mix: { voiceVolume: 1, targetLufs: -16, duckMusicUnderVoice: true } },
     captions: [],
     render: { compositionId: 'Signal40Vertical', templateId: 'signal40-editorial', templateVersion: getVideoTemplate('signal40-editorial').version, fps: 30 as const, width: 1080 as const, height: 1920 as const, durationSeconds: targetDurationSeconds, snapshotHash: '' },
-    distribution: { channelPreset: null, accountId: null, title: topic.title, description: '财经事实解读。\n\n本内容不构成投资建议。', tags: [], coverAssetId: null, scheduledAt: null, finalUrl: null },
+    distribution: { channelPreset: null, accountId: null, title: topic.title, description: '事实解读。\n\n本内容不构成投资建议。', tags: [], coverAssetId: null, scheduledAt: null, finalUrl: null },
     provenance: { generatedBy: 'signal40-control-plane', sourceProjectVersion: '2.0', immutableInputsHash: '' },
   };
   const immutableInputsHash = computeRenderSnapshotHash(base);
@@ -364,7 +364,7 @@ export function migrateProjectV1(input: VideoProjectV1, now = new Date()): Video
     audio: { provider: null, voice: null, objectKey: null, durationMs: null, speed: 1, pronunciationDictionary: {}, sha256: null, fallbackProvider: 'macos-say-local', estimatedCostMicros: 0, music: null, mix: { voiceVolume: 1, targetLufs: -16, duckMusicUnderVoice: true } },
     captions: [],
     render: { compositionId: 'Signal40Vertical', templateId: 'signal40-editorial', templateVersion: getVideoTemplate('signal40-editorial').version, fps: input.render.fps, width: input.render.width, height: input.render.height, durationSeconds: input.render.durationSeconds, snapshotHash: '' },
-    distribution: { channelPreset: null, accountId: null, title: input.topic.title, description: '财经事实解读。\n\n本内容不构成投资建议。', tags: [], coverAssetId: null, scheduledAt: null, finalUrl: null },
+    distribution: { channelPreset: null, accountId: null, title: input.topic.title, description: '事实解读。\n\n本内容不构成投资建议。', tags: [], coverAssetId: null, scheduledAt: null, finalUrl: null },
     provenance: { generatedBy: 'signal40-v1-migrator', sourceProjectVersion: '1.0', immutableInputsHash: '' },
   };
   const hash = computeRenderSnapshotHash(migrated);

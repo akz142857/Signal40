@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Signal 40 is an evidence-first finance short-video production system: authorized source subscription → ingestion → topic radar → claim-level research → editorial approval → script/storyboard → assets/TTS/subtitles → Remotion render → QC → publish → corrections/takedown → metrics. Docs (`docs/`), the README, and user-facing strings (including error messages thrown from `lib/`) are in Chinese — keep that convention.
+Signal 40 is an evidence-first short-video production system (topic-agnostic; the shipped lexicon happens to be finance terms): authorized source subscription → ingestion → topic radar → claim-level research → editorial approval → script/storyboard → assets/TTS/subtitles → Remotion render → QC → publish → corrections/takedown → metrics. Docs (`docs/`), the README, and user-facing strings (including error messages thrown from `lib/`) are in Chinese — keep that convention.
 
 `docs/IMPLEMENTATION_STATUS.md` is the acceptance ledger and uses a fixed vocabulary: `Implemented locally → Delivered → Deployed → Integrated → Accepted` (`Blocked`/`Experimental` are orthogonal tags). "Implemented locally" means code plus local evidence exists; "Accepted" additionally requires the target environment, real upstream, and a named owner. Never upgrade a status in the docs without that evidence, and never invent "Integrated locally".
 

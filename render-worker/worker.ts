@@ -997,7 +997,7 @@ async function workVoice(job: WorkerJob) {
   const speech = await fetch('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: { authorization: `Bearer ${openAiApiKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model, voice, input: textInput, response_format: 'mp3', instructions: `使用清晰、克制、可信的普通话财经新闻语气，数字读法准确，避免营销腔。${pronunciationInstruction}` }),
+    body: JSON.stringify({ model, voice, input: textInput, response_format: 'mp3', instructions: `使用清晰、克制、可信的普通话新闻播报语气，数字读法准确，避免营销腔。${pronunciationInstruction}` }),
     signal: AbortSignal.timeout(120_000),
   });
   if (!speech.ok) throw new Error(await describeUpstream('OpenAI 配音失败', speech));

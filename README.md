@@ -1,6 +1,6 @@
 # Signal 40
 
-Signal 40 是证据优先的财经短视频生产系统。它覆盖授权采集、跨来源选题、声明级研究、编辑审批、脚本与分镜、资产版权、TTS/字幕、Remotion 渲染、自动与人工 QC、发布、更正/下架以及指标回流，不是只导出一份 `project.json` 的 MVP。
+Signal 40 是证据优先的短视频生产系统。它覆盖授权采集、跨来源选题、声明级研究、编辑审批、脚本与分镜、资产版权、TTS/字幕、Remotion 渲染、自动与人工 QC、发布、更正/下架以及指标回流，不是只导出一份 `project.json` 的 MVP。
 
 完整方案见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)，实现映射见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)，值班与恢复见 [docs/OPERATIONS_RUNBOOK.md](docs/OPERATIONS_RUNBOOK.md)。
 

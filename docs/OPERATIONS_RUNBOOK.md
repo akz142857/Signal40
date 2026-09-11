@@ -197,7 +197,7 @@ G7 通过后进入发布环节。两个渠道的对外行为完全不同，选�
 curl -X POST "$API/api/v1/projects/$PROJECT/publish-jobs" \
   -H 'content-type: application/json' -H "x-signal-role: publisher" \
   -H 'idempotency-key: <唯一键>' \
-  -d '{"channel":"package","title":"...","description":"...","tags":["财经"]}'
+  -d '{"channel":"package","title":"...","description":"...","tags":["示例标签"]}'
 
 # 2) Worker 执行后，发布任务变为 published，清单写入 R2
 npm run worker
@@ -252,4 +252,4 @@ curl -X POST "$API/api/v1/projects/$PROJECT/transitions" \
 
 ## 10. 不可替代的人工责任
 
-真实财经标注集、声音/素材权利、最终事实终审、渠道账号和 Remotion 商业许可必须由责任人确认。自动门禁只能阻止已知错误，不能代替财经编辑、法务或平台所有者。
+真实标注集、声音/素材权利、最终事实终审、渠道账号和 Remotion 商业许可必须由责任人确认。自动门禁只能阻止已知错误，不能代替领域编辑、法务或平台所有者。

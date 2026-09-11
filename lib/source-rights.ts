@@ -38,7 +38,7 @@ export function ingestionRightsBlockReason(
   if (snapshot.grantRevokedAt || (snapshot.grantExpiresAt && snapshot.grantExpiresAt <= input.now.toISOString())) {
     return '采集运行绑定的权利授权已撤销或过期。';
   }
-  if (snapshot.grantPurpose !== INGESTION_RIGHTS_PURPOSE) return '权利授权不允许财经编辑采集。';
+  if (snapshot.grantPurpose !== INGESTION_RIGHTS_PURPOSE) return '权利授权不允许编辑采集。';
   if (![NORMALIZED_METADATA_SCOPE, AUTHORIZED_RAW_SCOPE].includes(snapshot.grantUsageScope ?? '')) {
     return '权利授权不允许写入规范化结果。';
   }

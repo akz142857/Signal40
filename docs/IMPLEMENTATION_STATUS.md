@@ -10,7 +10,7 @@
 | P0 | project.json 2.0 / 1.0 兼容 | Implemented | Schema、迁移脚本、协议测试 | 历史项目批量演练 |
 | P0 | 数据库/对象存储/作业/审计 | Implemented locally | PostgreSQL 55 表、直接/分片上传、对象级短时读取、`FOR UPDATE SKIP LOCKED` 租约、lease epoch、legal-hold epoch、整数 capability protocol、心跳续约/DLQ、项目级声明 ID | 托管 PostgreSQL/S3 与保留策略、混合 Worker 部署演练；`0023`–`0032` 尚未在开发/生产 PostgreSQL 升级 |
 | P1 | 来源、调度、滚动聚类、修订 | Foundation 整体 In progress；五种来源入口均为 `Implemented locally`，未 Delivered/Deployed/Integrated/Accepted | draft/test/enable、权利异人审批、RSS/Atom、Public JSON 分页与 staged visibility、公开网页 JSON-LD/可见链接解析、微信/小红书 OpenCLI 候选搜索与第三方 RSS 双策略、内容指纹 checkpoint、统一 SSRF/限额、退避、SLO、预算、canary/shadow、运行隔离及业务负责人治理 | 真实 RSS/Public JSON/网页、OpenCLI/Browser Bridge、选定第三方 Feed、跨角色浏览器、开发/生产迁移恢复、目标环境 chaos、安全扫描和 28 天观察 |
-| P1 | Claim/Evidence/ResearchSnapshot | Implemented | 支持/反驳、冲突、快照、独立批准 | 财经编辑真实题材验收 |
+| P1 | Claim/Evidence/ResearchSnapshot | Implemented | 支持/反驳、冲突、快照、独立批准 | 领域编辑真实题材验收 |
 | P2 | 脚本与分镜 | Implemented | 逐句声明、版本比较、评论/锁定、读音、连续帧、动态图表 | 品牌规范和模板冻结 |
 | P3 | 资产、TTS、字幕 | Implemented | 版权元数据、OpenAI TTS、逐词对齐、字幕安全区、可选版权音乐与音量混合 | API key、授权声音与素材政策 |
 | P3 | Remotion 渲染 | Implemented | 三个版本化视觉模板、Player、真实转场/屏幕文字/来源脚注、低码率预览、正式片 Worker、Docker、并发/预算、封面 | 部署池、许可证和金丝雀 |
@@ -32,7 +32,7 @@ OpenAI TTS 配音与逐词字幕、Remotion 渲染、24 项自动 QC 全通过�
 发布包清单）全部落在 Cloudflare R2。**该批次通过历史脚本/手工 ingest 路径准备语料，不是新的 source draft/test/enable/scheduler/checkpoint 订阅链路验收**；没有绑定新链路的可追溯 run IDs 时，只能作为历史本地流水线演示。
 
 这次验证覆盖的是**流水线**，不是选题质量。当次选题聚类把 97 篇英文文章合并成了一个话题，
-三条声明的证据没有区分度——`lib/domain.ts` 的分词与财经词表是按中文语料调的，
+三条声明的证据没有区分度——`lib/domain.ts` 的分词与主题词表是按中文语料调的，
 英文源上基本失效。要评估选题质量需要接入有授权的中文来源。
 
 这个问题现在是**可度量**的：`lib/topic-quality.ts` 把簇内一致性、声明与证据的对应唯一性、
@@ -52,7 +52,7 @@ OpenAI TTS 配音与逐词字幕、Remotion 渲染、24 项自动 QC 全通过�
 - 生产认证反向代理、远端迁移、访问控制和浏览器回归未执行。
 - 公众号/小红书已实现 OpenCLI 候选搜索和第三方 RSS 双策略，但 OpenCLI 搜索不等于官方账号订阅，且当前主机尚未完成真实 OpenCLI/Browser Bridge 验收；第三方 RSSHub CareerEngine/Newrank/EFB 路由也须逐路由提供参数、授权与稳定性证据。Social Evidence 的关系分类、人工修正和门禁代码已完成，仍需真实授权评测集、生产抽样与 Product/Editorial 签字；自动放行保持关闭。
 - 没有生产 OpenAI Secret、声音权利证明、YouTube OAuth 测试账号和实际渠道返回 ID。
-- 没有组织指定的财经终审、品牌/素材权利、Remotion 商业许可、月预算与保留期限决策。
+- 没有组织指定的内容终审、品牌/素材权利、Remotion 商业许可、月预算与保留期限决策。
 - 备份/恢复脚本（`pg_dump`/`pg_restore` + 隔离库演练）已交付，但生产库的时间点恢复、对象存储生命周期、供应商切换和季度演练需要目标环境。
 
 作业队列的租约、续约、lease epoch、整数 capability protocol、重复领取、终态失败与损坏 payload 隔离由 `test/control-plane.test.ts` 覆盖；逐页 key/ordinal 唯一、checkpoint/final/累计数和跨重试完成由 `test/source-page-protocol.test.ts` 覆盖；来源运行稳定游标与所有 Worker 写路径租约身份分别由 `test/source-run-pagination.test.ts`、`test/job-lease.test.ts` 覆盖。测试直接在进程内的真 PostgreSQL（PGlite）上重放 `drizzle/` 迁移，schema 与迁移漂移、以及 SQL 方言问题都会在测试里暴露。

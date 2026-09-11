@@ -305,7 +305,7 @@ export function RadarDashboard({
         {
           name: 'list_topic_candidates',
           title: '读取选题候选',
-          description: '读取当前工作台中达到指定最低分数的财经选题候选。',
+          description: '读取当前工作台中达到指定最低分数的选题候选。',
           inputSchema: {
             type: 'object',
             properties: {
@@ -344,7 +344,7 @@ export function RadarDashboard({
           name: 'import_topic_articles',
           title: '导入文章并分析',
           description:
-            '导入已经获得授权的财经文章元数据，运行聚类评分并保存结果。',
+            '导入已经获得授权的文章元数据，运行聚类评分并保存结果。',
           inputSchema: {
             type: 'object',
             additionalProperties: false,
@@ -485,7 +485,7 @@ export function RadarDashboard({
       <PageHeader
         icon={<Radar className="size-5" />}
         title="选题雷达"
-        subtitle="今天值得拍的财经题：高分表示值得研究，只有通过自动证据门禁并经人工批准才能导出视频协议。"
+        subtitle="今天值得拍的选题：高分表示值得研究，只有通过自动证据门禁并经人工批准才能导出视频协议。"
         actions={<>
           <span className="hidden items-center gap-2 text-sm text-muted-foreground xl:flex">
             <span className="size-2 rounded-full bg-chart-1 shadow-[0_0_0_4px_var(--color-signal-glow)]" />
@@ -668,7 +668,7 @@ export function RadarDashboard({
             value={importText}
             onChange={(event) => setImportText(event.target.value)}
             placeholder={
-              'source,sourceType,title,url,publishedAt,summary\n财经来源,media,标题,https://example.com/a,2026-09-08T02:00:00Z,摘要'
+              'source,sourceType,title,url,publishedAt,summary\n示例来源,media,标题,https://example.com/a,2026-09-08T02:00:00Z,摘要'
             }
           />
           <p className="text-xs text-muted-foreground">
@@ -736,7 +736,7 @@ export function RadarDashboard({
                         ['簇内一致性', selected.quality.coherence],
                         ['一致性下限', selected.quality.coherenceFloor],
                         ['证据区分度', selected.quality.evidenceDistinctness],
-                        ['财经词表覆盖', selected.quality.lexiconCoverage],
+                        ['主题词表覆盖', selected.quality.lexiconCoverage],
                       ].map(([label, value]) => <div className="rounded-xl bg-secondary/70 p-3" key={String(label)}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-mono text-xl font-semibold">{Math.round(Number(value) * 100)}%</p></div>)}
                     </div>
                     <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 语言：{selected.quality.language} · {selected.quality.automatable ? '允许自动建项目' : '禁止自动建项目'}</p>
