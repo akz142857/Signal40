@@ -479,9 +479,6 @@ export function RadarDashboard({
     (topic) => topic.gate.passed && topic.verificationStatus === 'verified',
   ).length;
   const lead = topics[0];
-  const heat = lead
-    ? [34, 42, 38, 51, 58, 66, Math.max(72, lead.score - 8), lead.score]
-    : [];
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -613,43 +610,6 @@ export function RadarDashboard({
         </section>
 
         <aside className="space-y-4">
-          <section className="overflow-hidden rounded-2xl border border-border bg-card">
-            <div className="flex items-center justify-between border-b border-border p-4">
-              <div>
-                <p className="font-mono text-xs uppercase tracking-[0.15em] text-muted-foreground">
-                  Topic heat
-                </p>
-                <h2 className="mt-1 font-semibold">
-                  {lead?.keywords[0]?.toUpperCase() || '主题'} 升温
-                </h2>
-              </div>
-              <span className="font-mono text-2xl font-semibold text-chart-1">
-                {lead?.score ?? '—'}
-              </span>
-            </div>
-            <div className="p-4">
-              <div
-                className="flex h-28 items-end gap-2"
-                aria-label="头部选题热度走势"
-              >
-                {heat.map((value, index) => (
-                  <span
-                    key={`${value}-${index}`}
-                    className="flex-1 rounded-t bg-chart-1/20"
-                    style={{ height: `${value}%` }}
-                  >
-                    <span
-                      className={`block w-full rounded-t bg-chart-1 ${index === heat.length - 1 ? 'h-full' : 'h-[7px]'}`}
-                    />
-                  </span>
-                ))}
-              </div>
-              <div className="mt-2 flex justify-between font-mono text-[11px] text-muted-foreground">
-                <span>8 小时前</span>
-                <span>现在</span>
-              </div>
-            </div>
-          </section>
           {lead && (
             <section className="rounded-2xl border border-border bg-card p-4">
               <div className="mb-4 flex items-center gap-2">
