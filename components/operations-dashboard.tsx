@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { ConnectorReleaseControl } from '@/components/connector-release-control';
 import { PageContainer, PageHeader } from '@/components/page-shell';
 
 type Metric = {
@@ -863,6 +864,20 @@ export function OperationsDashboard() {
             </section>
           </>
         )}
+        {/*
+          连接器发布控制管的是连接器版本的 rollout，和 SLO、熔断、worker 心跳
+          同属平台运维；放在来源页时它常驻在日常内容正上方，却几乎不动。
+          它不依赖 /api/v1/operations，所以放在 data 判断之外，运行数据读失败时
+          仍然能停用一个正在出问题的连接器版本。
+        */}
+        <section className="mt-7">
+          <h2 className="text-lg font-semibold tracking-tight">
+            连接器发布控制
+          </h2>
+          <div className="mt-3">
+            <ConnectorReleaseControl />
+          </div>
+        </section>
       </PageContainer>
     </main>
   );

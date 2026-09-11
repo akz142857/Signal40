@@ -93,7 +93,12 @@ void test('source manager renders frozen states through Chinese product labels',
   );
   assert.match(source, /waiting_capacity: '等待执行能力'/);
   assert.match(source, /rights_blocked: '权利阻断'/);
-  assert.match(source, /shadow: '影子运行'/);
+  // 连接器发布模式的词表跟着发布控制搬去了运维页，冻结的仍是同一批中文。
+  const connectorRelease = await readFile(
+    new URL('../components/connector-release-control.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(connectorRelease, /shadow: '影子运行'/);
   assert.doesNotMatch(source, /\{source\.lifecycleStatus\}/);
   assert.doesNotMatch(source, /\{source\.healthStatus\}/);
   assert.doesNotMatch(source, /\{item\.quarantineStatus\}/);

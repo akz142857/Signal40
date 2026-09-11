@@ -6,6 +6,7 @@ import {
   Archive,
   CalendarClock,
   CheckCircle2,
+  ChevronRight,
   DatabaseZap,
   History,
   ListPlus,
@@ -21,17 +22,41 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  ConnectorReleaseSummary,
+  type ConnectorRelease,
+} from '@/components/connector-release-control';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
+import { responseErrorText as errorText } from '@/lib/response-error';
 import { PageContainer, PageHeader } from '@/components/page-shell';
 import type {
-  ConnectorReleaseMode,
   IngestionQuarantineStatus,
   IngestionRunStatus,
   SourceHealthStatus,
@@ -151,24 +176,6 @@ type SourceBackfillEstimate = {
   requiresConfirmation: boolean;
   confirmationHash: string;
 };
-type ConnectorRelease = {
-  id: string;
-  version: string;
-  platform: string;
-  adapter: 'rss' | 'http' | 'web' | 'social';
-  label: string;
-  availability: 'available' | 'blocked';
-  rolloutMode: ConnectorReleaseMode;
-  rolloutReason: string;
-  rolloutVersion: number;
-  canaryEnabled: boolean;
-  canaryPercent: number;
-  canaryFailureRateBps: number;
-  canaryMinRuns: number;
-  canaryStartedAt: string | null;
-  canaryStoppedAt: string | null;
-  effectiveAvailability: 'available' | 'blocked';
-};
 type TeamMember = {
   user_id: string;
   email: string;
@@ -229,20 +236,27 @@ type SourceProposal = {
   decidedAt: string | null;
 };
 
-async function errorText(response: Response) {
-  try {
-    return (
-      ((await response.json()) as { error?: string }).error ??
-      `请求失败（${response.status}）`
-    );
-  } catch {
-    return `请求失败（${response.status}）`;
-  }
-}
-
 async function sha256Hex(value: string) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/*
+  手动采集的幂等键要跨页面刷新保持唯一：序号只活在内存里，重新加载后会从头数，
+  所以再拼一个时间戳。放在组件外，读时钟就不会落进 react-compiler 的渲染纯度分析。
+*/
+function manualRunIdempotencyKey(sourceId: string, sequence: number) {
+  return `manual:${sourceId}:${Date.now()}:${sequence}`;
+}
+
+type SourceDetailTab = 'runs' | 'rights' | 'ownership' | 'slo' | 'legal';
+
+/** 租约按 capability 授权，列表和详情都要用同一套映射判断 worker 在不在线。 */
+function capabilityForAdapter(adapter: SourceRow['adapter']) {
+  if (adapter === 'rss') return 'source:rss';
+  if (adapter === 'web') return 'source:web';
+  if (adapter === 'social') return 'source:social';
+  return 'source:http-json';
 }
 
 const lifecycleLabels: Record<SourceLifecycleStatus, string> = {
@@ -285,12 +299,6 @@ const quarantineLabels: Record<IngestionQuarantineStatus, string> = {
   held: '已挂起',
   released: '已释放',
   discarded: '已丢弃',
-};
-
-const rolloutLabels: Record<ConnectorReleaseMode, string> = {
-  disabled: '停用',
-  shadow: '影子运行',
-  enabled: '启用',
 };
 
 const proposalLabels: Record<SourceProposal['status'], string> = {
@@ -622,6 +630,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
   const [preview, setPreview] = useState<PreviewItem[]>([]);
   const [message, setMessage] = useState('读取来源配置…');
   const [busy, setBusy] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [detailSourceId, setDetailSourceId] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<SourceDetailTab>('runs');
   const runSequence = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -721,6 +732,10 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
   const pendingSource = useMemo(
     () => sources.find((source) => source.id === pendingSourceId) ?? null,
     [pendingSourceId, sources],
+  );
+  const detailSource = useMemo(
+    () => sources.find((source) => source.id === detailSourceId) ?? null,
+    [detailSourceId, sources],
   );
   const memberLabel = useCallback(
     (id: string | null) =>
@@ -1074,6 +1089,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       setPreview([]);
       setPendingSourceId(null);
       setStep(1);
+      setWizardOpen(false);
       await refresh();
       setMessage(
         `${source.name} 已启用；调度器会在有匹配 Worker 时持续增量采集。`,
@@ -1192,7 +1208,10 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
         {
           method: 'POST',
           headers: {
-            'idempotency-key': `manual:${source.id}:${Date.now()}:${runSequence.current}`,
+            'idempotency-key': manualRunIdempotencyKey(
+              source.id,
+              runSequence.current,
+            ),
             ...adminHeaders(),
           },
         },
@@ -1207,8 +1226,8 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
     }
   };
 
-  const loadRuns = async (sourceId: string) => {
-    if (runsBySource[sourceId]) {
+  const loadRuns = async (sourceId: string, force = false) => {
+    if (runsBySource[sourceId] && !force) {
       setRunsBySource((current) => {
         const next = { ...current };
         delete next[sourceId];
@@ -1626,84 +1645,850 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
     }
   };
 
-  const setConnectorMode = async (
-    connector: ConnectorRelease,
-    rolloutMode: ConnectorRelease['rolloutMode'],
-    canary?: { enabled: boolean; percent: number; failureRateBps: number; minRuns: number },
-  ) => {
-    const reason = window
-      .prompt(
-        `${connector.label} ${connector.id}@${connector.version} 将切换为 ${rolloutMode}。\n请输入变更原因：`,
-        rolloutMode === 'disabled'
-          ? '紧急停用连接器版本'
-          : rolloutMode === 'shadow'
-            ? '进入 shadow 观察'
-            : '完成检查后恢复正式运行',
-      )
-      ?.trim();
-    if (!reason) return;
-    if (
-      rolloutMode === 'disabled' &&
-      !window.confirm(
-        '停用会取消未领取作业并暂停使用该连接器的来源；恢复后需重新测试并启用。确认继续？',
-      )
-    )
-      return;
-    setBusy(true);
-    try {
-      const response = await fetch(
-        `/api/v1/source-connectors/${encodeURIComponent(connector.id)}/versions/${encodeURIComponent(connector.version)}/control`,
-        {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json', ...adminHeaders() },
-          body: JSON.stringify({
-            rolloutMode,
-            expectedVersion: connector.rolloutVersion,
-            reason,
-            ...(canary ? { canary } : {}),
-          }),
-        },
+  const reportFailure = (fallback: string) => (error: unknown) =>
+    setMessage(error instanceof Error ? error.message : fallback);
+
+  /*
+    运行、SLO 排除、法律保全都是点开才拉的。loadRuns / loadLegalHolds 是开关
+    语义（已有数据时再调一次会收起），所以抽屉里只在还没有数据时调用，
+    否则来回切标签页会把刚拉到的记录清掉。要重新拉取走 force 参数。
+  */
+  const ensureDetailData = (sourceId: string, tab: SourceDetailTab) => {
+    if (tab === 'runs' && !runsBySource[sourceId]) {
+      void loadRuns(sourceId).catch(reportFailure('运行读取失败。'));
+    }
+    if (tab === 'slo' && !sloExclusionsBySource[sourceId]) {
+      void loadSloExclusions(sourceId).catch(
+        reportFailure('读取 SLO 排除窗口失败。'),
       );
-      if (!response.ok) throw new Error(await errorText(response));
-      await refresh();
-      setMessage(
-        canary?.enabled
-          ? `${connector.label} 已开始 ${canary.percent}% 稳定分桶灰度；失败率达到 ${(canary.failureRateBps / 100).toFixed(2)}% 且至少 ${canary.minRuns} 次运行时自动停用。`
-          : `${connector.label} 已切换为 ${rolloutMode}。`,
+    }
+    if (tab === 'legal' && !legalHoldsBySource[sourceId]) {
+      void loadLegalHolds(sourceId).catch(
+        reportFailure('法律保全记录读取失败。'),
       );
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : '连接器发布控制更新失败。',
-      );
-    } finally {
-      setBusy(false);
     }
   };
 
-  const startConnectorCanary = (connector: ConnectorRelease) => {
-    const percent = Number(window.prompt('灰度来源比例（1–100）：', String(connector.canaryPercent || 10)));
-    const failurePercent = Number(window.prompt('自动停止失败率（0.01–100%）：', String((connector.canaryFailureRateBps || 2000) / 100)));
-    const minRuns = Number(window.prompt('达到阈值前的最小运行数（1–10000）：', String(connector.canaryMinRuns || 20)));
-    const failureRateBps = Math.round(failurePercent * 100);
-    if (!Number.isInteger(percent) || percent < 1 || percent > 100 || !Number.isInteger(failureRateBps) || failureRateBps < 1 || failureRateBps > 10_000 || !Number.isInteger(minRuns) || minRuns < 1 || minRuns > 10_000) {
-      setMessage('灰度参数无效：比例 1–100，失败率 0.01–100%，最小运行数 1–10000。');
-      return;
-    }
-    void setConnectorMode(connector, 'enabled', { enabled: true, percent, failureRateBps, minRuns });
+  const openSourceDetail = (sourceId: string) => {
+    setDetailSourceId(sourceId);
+    setDetailTab('runs');
+    ensureDetailData(sourceId, 'runs');
+  };
+
+  const selectDetailTab = (sourceId: string, tab: SourceDetailTab) => {
+    setDetailTab(tab);
+    ensureDetailData(sourceId, tab);
+  };
+
+  const renderSourceDetail = (source: SourceRow) => {
+    const capability = capabilityForAdapter(source.adapter);
+    const workerOnline = onlineCapabilities.has(capability);
+    const recentRuns = runsBySource[source.id];
+    const ownershipDraft = ownershipDrafts[source.id] ?? {
+      businessOwnerId: source.businessOwnerId ?? '',
+    };
+    const maintenanceDraft = maintenanceDrafts[source.id] ?? {
+      startsAt: '',
+      endsAt: '',
+      reason: '',
+    };
+    const sloExclusions = sloExclusionsBySource[source.id] ?? [];
+    const legalHolds = legalHoldsBySource[source.id];
+    const activeLegalHold = legalHolds?.find((hold) => hold.status === 'active');
+    const rightsDraft = rightsDrafts[source.id] ?? {
+      principal: source.businessOwnerId ?? '',
+      sourceType: (source.publicConfig.sourceType ?? 'media') as 'social' | 'media' | 'market' | 'filing' | 'company',
+      territory: 'global',
+      evidenceRef: '',
+      evidenceSnapshot: '',
+      termsVersion: 'public-source-v1',
+      termsSnapshot: '',
+      expiresAt: '',
+    };
+    const canDecideRights = canApproveRights && source.pendingRightsRequestedBy !== actor.id;
+    return (
+      <>
+        <SheetHeader className="border-b border-border p-6 pr-14">
+          <p className="font-mono text-xs uppercase tracking-[0.15em] text-chart-1">
+            Source detail
+          </p>
+          <SheetTitle className="mt-2 text-2xl leading-tight">
+            {source.name}
+          </SheetTitle>
+          <SheetDescription className="break-all">
+            {source.publicConfig.discoveryMode === 'opencli'
+              ? `OpenCLI 搜索：${source.publicConfig.accountName}`
+              : source.publicConfig.url}
+          </SheetDescription>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">{source.platform}</Badge>
+            <Badge variant={source.enabled ? 'default' : 'outline'}>
+              {lifecycleLabels[source.lifecycleStatus]}
+            </Badge>
+            <Badge variant={workerOnline ? 'outline' : 'destructive'}>
+              {workerOnline ? 'Worker 在线' : `缺少 ${capability}`}
+            </Badge>
+            {source.deletionStatus && (
+              <Badge variant="destructive">
+                删除请求 {source.deletionStatus}
+              </Badge>
+            )}
+          </div>
+        </SheetHeader>
+        <div className="p-6">
+          <output className="mb-4 block text-sm text-muted-foreground">
+            {message}
+          </output>
+          <Tabs
+            value={detailTab}
+            onValueChange={(value) =>
+              selectDetailTab(source.id, value as SourceDetailTab)
+            }
+          >
+            <TabsList variant="line" className="w-full">
+              <TabsTrigger value="runs">运行</TabsTrigger>
+              <TabsTrigger value="rights">
+                权利
+                {source.pendingRightsRequestId && (
+                  <Badge variant="secondary">待审</Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="ownership">归属</TabsTrigger>
+              <TabsTrigger value="slo">SLO 与预算</TabsTrigger>
+              <TabsTrigger value="legal">
+                法务
+                {activeLegalHold && <Badge variant="secondary">保全中</Badge>}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="runs" className="mt-5 grid gap-5">
+              <div className="grid gap-x-5 gap-y-1 text-xs text-muted-foreground sm:grid-cols-2">
+                <span>健康 {healthLabels[source.healthStatus]}</span>
+                <span>权利 {rightsLabels[source.rightsStatus]}</span>
+                <span>调度 {source.scheduleCron || '手动'}</span>
+                <span>
+                  下次{' '}
+                  {source.nextRunAt
+                    ? new Date(source.nextRunAt).toLocaleString('zh-CN')
+                    : '未计划'}
+                </span>
+                <span>
+                  最近成功{' '}
+                  {source.lastSuccessAt
+                    ? new Date(source.lastSuccessAt).toLocaleString('zh-CN')
+                    : '尚无'}
+                </span>
+                <span>checkpoint v{source.checkpointVersion}</span>
+                <span>业务负责人 {memberLabel(source.businessOwnerId)}</span>
+                <span>
+                  调度优先级 {source.schedulePriority}
+                  {source.autoThrottleEnabled
+                    ? ' · 自动降频开启'
+                    : ' · 自动降频关闭'}
+                </span>
+                {source.effectiveScheduleMultiplier > 1 && (
+                  <span className="text-amber-700 dark:text-amber-300">
+                    当前降频 ×{source.effectiveScheduleMultiplier}
+                    {source.scheduleThrottleRecoveryAt
+                      ? ` · 最迟 ${new Date(source.scheduleThrottleRecoveryAt).toLocaleDateString('zh-CN')} 恢复评估`
+                      : ''}
+                  </span>
+                )}
+                {source.hasActiveRun && <span>运行中</span>}
+              </div>
+              {source.publicErrorMessage && (
+                <p className="text-sm text-destructive">
+                  {source.publicErrorCode
+                    ? `${source.publicErrorCode} · `
+                    : ''}
+                  {source.publicErrorMessage}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2 border-t pt-4">
+                {!source.enabled && source.rightsStatus === 'approved' && (
+                  <Button
+                    onClick={() => void testSource(source.id)}
+                    disabled={busy}
+                    variant="outline"
+                  >
+                    <TestTube2 />
+                    测试/重连
+                  </Button>
+                )}
+                {source.rightsStatus === 'approved' &&
+                (source.lifecycleStatus === 'tested' ||
+                  source.lifecycleStatus === 'paused') ? (
+                  <Button
+                    onClick={() => void enableSource(source.id)}
+                    disabled={busy}
+                    variant="outline"
+                  >
+                    启用
+                  </Button>
+                ) : null}
+                {source.enabled && (
+                  <Button
+                    onClick={() => void pauseSource(source)}
+                    disabled={busy}
+                    variant="outline"
+                  >
+                    停用
+                  </Button>
+                )}
+                <Button
+                  onClick={() => void run(source)}
+                  disabled={
+                    busy ||
+                    !source.enabled ||
+                    !workerOnline ||
+                    source.hasActiveRun
+                  }
+                  variant="outline"
+                >
+                  <Play />
+                  立即采集
+                </Button>
+                {source.enabled && (
+                  <Button
+                    onClick={() => void backfill(source)}
+                    disabled={busy || !workerOnline || source.hasActiveRun}
+                    variant="outline"
+                  >
+                    <History />
+                    补采 7 天
+                  </Button>
+                )}
+                <Button
+                  onClick={() =>
+                    void loadRuns(source.id, true).catch(
+                      reportFailure('运行读取失败。'),
+                    )
+                  }
+                  variant="ghost"
+                >
+                  <Activity />
+                  刷新运行
+                </Button>
+              </div>
+              <div className="grid gap-2">
+                {recentRuns ? (
+                  recentRuns.length ? (
+                    recentRuns.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div>
+                          <span>
+                            {item.trigger} · {runStatusLabels[item.status]} ·{' '}
+                            {new Date(item.createdAt).toLocaleString('zh-CN')}
+                          </span>
+                          <span className="ml-2">
+                            隔离 {quarantineLabels[item.quarantineStatus]}
+                          </span>
+                          <span className="ml-2">
+                            接受 {item.acceptedCount} / 拒绝{' '}
+                            {item.rejectedCount} / 重复 {item.duplicateCount}
+                            {item.errorCode ? ` · ${item.errorCode}` : ''}
+                          </span>
+                        </div>
+                        {[
+                          'succeeded',
+                          'partial',
+                          'failed',
+                          'rights_blocked',
+                        ].includes(item.status) && (
+                          <div className="flex gap-1">
+                            {item.quarantineStatus !== 'held' &&
+                              item.quarantineStatus !== 'discarded' && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void changeRunQuarantine(
+                                      source.id,
+                                      item,
+                                      'hold',
+                                    )
+                                  }
+                                >
+                                  挂起
+                                </Button>
+                              )}
+                            {item.quarantineStatus === 'held' && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() =>
+                                  void changeRunQuarantine(
+                                    source.id,
+                                    item,
+                                    'release',
+                                  )
+                                }
+                              >
+                                释放
+                              </Button>
+                            )}
+                            {item.quarantineStatus !== 'discarded' && (
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={busy}
+                                onClick={() =>
+                                  void changeRunQuarantine(
+                                    source.id,
+                                    item,
+                                    'discard',
+                                  )
+                                }
+                              >
+                                丢弃
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      尚无采集运行。
+                    </p>
+                  )
+                ) : (
+                  <p className="text-sm text-muted-foreground">读取运行记录…</p>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="rights" className="mt-5 grid gap-5">
+              {source.pendingRightsRequestId ? (
+                <div className="rounded-xl border border-chart-3/30 bg-chart-3/5 p-4 text-xs">
+                  <p className="font-medium">待独立权利审批</p>
+                  <p className="mt-2 text-muted-foreground">
+                    声明人 {memberLabel(source.pendingRightsRequestedBy)}。来源配置者不能自批；审批者还必须确认治理后的来源类型。证据和条款正文不会进入浏览器响应，只保存引用与 SHA-256 防篡改摘要。
+                  </p>
+                  {canDecideRights ? (
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="grid gap-2"><Label>权利主体</Label><Input value={rightsDraft.principal} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, principal: event.target.value } }))} /></div>
+                      <div className="grid gap-2"><Label>治理后的来源类型</Label><NativeSelect value={rightsDraft.sourceType} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, sourceType: event.target.value as typeof rightsDraft.sourceType } }))}>{['social', 'media', 'market', 'filing', 'company'].map((value) => <NativeSelectOption key={value} value={value}>{value}</NativeSelectOption>)}</NativeSelect></div>
+                      <div className="grid gap-2"><Label>地域</Label><Input value={rightsDraft.territory} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, territory: event.target.value } }))} /></div>
+                      <div className="grid gap-2"><Label>证据引用（文档/工单 URI）</Label><Input value={rightsDraft.evidenceRef} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, evidenceRef: event.target.value } }))} /></div>
+                      <div className="grid gap-2"><Label>条款版本</Label><Input value={rightsDraft.termsVersion} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, termsVersion: event.target.value } }))} /></div>
+                      <div className="grid gap-2"><Label>证据快照（仅本机计算摘要）</Label><Textarea value={rightsDraft.evidenceSnapshot} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, evidenceSnapshot: event.target.value } }))} /></div>
+                      <div className="grid gap-2"><Label>条款快照（仅本机计算摘要）</Label><Textarea value={rightsDraft.termsSnapshot} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, termsSnapshot: event.target.value } }))} /></div>
+                      <div className="grid gap-2"><Label>到期日（可选）</Label><Input type="date" value={rightsDraft.expiresAt} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, expiresAt: event.target.value } }))} /></div>
+                      <div className="flex items-end gap-2"><Button size="sm" disabled={busy} onClick={() => void decideRights(source, 'approve')}>批准权利</Button><Button size="sm" variant="destructive" disabled={busy} onClick={() => void decideRights(source, 'reject')}>拒绝</Button></div>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-muted-foreground">
+                      {source.pendingRightsRequestedBy === actor.id
+                        ? '这是你提交的声明，必须由另一名权利审批者处理。'
+                        : '当前账号未被显式授予“来源权利审批”能力；请在治理页配置。'}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  当前权利状态：{rightsLabels[source.rightsStatus]}。没有待审批的权利声明。
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2 border-t pt-4">
+                {source.rightsStatus === 'approved' &&
+                  !source.deletionStatus && (
+                    <Button
+                      onClick={() => void withdrawContent(source)}
+                      disabled={busy}
+                      variant="destructive"
+                    >
+                      <TriangleAlert />
+                      撤回权利与内容
+                    </Button>
+                  )}
+                {!source.pendingRightsRequestId &&
+                  ['revoked', 'expired'].includes(source.rightsStatus) &&
+                  !source.deletionStatus && (
+                    <Button
+                      onClick={() => void resubmitRights(source)}
+                      disabled={busy}
+                      variant="outline"
+                    >
+                      重新提交权利声明
+                    </Button>
+                  )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="ownership" className="mt-5 grid gap-4">
+              <p className="inline-flex items-center gap-2 text-sm font-medium">
+                <UsersRound className="size-4" />
+                负责人和备用管理员
+              </p>
+              <div className="grid gap-2 sm:max-w-md">
+                <Label>业务负责人</Label>
+                <NativeSelect
+                  value={ownershipDraft.businessOwnerId}
+                  onChange={(event) =>
+                    setOwnershipDrafts((current) => ({
+                      ...current,
+                      [source.id]: {
+                        ...ownershipDraft,
+                        businessOwnerId: event.target.value,
+                      },
+                    }))
+                  }
+                >
+                  <NativeSelectOption value="">未分配</NativeSelectOption>
+                  {activeOwnerMembers.map((member) => (
+                    <NativeSelectOption
+                      key={member.user_id}
+                      value={member.user_id}
+                    >
+                      {member.email} · {member.role}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </div>
+              <div className="flex items-center gap-3">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || !ownershipDraft.businessOwnerId}
+                  onClick={() => void transferOwnership(source)}
+                >
+                  保存负责人
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  保存需要填写原因，并使用来源版本锁防止覆盖他人修改。
+                </span>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="slo" className="mt-5 grid gap-5">
+              <div className="grid gap-x-5 gap-y-1 text-xs text-muted-foreground sm:grid-cols-2">
+                <span>
+                  成本{' '}
+                  {source.costMicrosPerRequest > 0
+                    ? `$${(source.costMicrosPerRequest / 1_000_000).toFixed(6)}/请求`
+                    : '未建模'}
+                </span>
+                {source.monthlyBudgetMicros > 0 ? (
+                  <span>
+                    月预算 $
+                    {(source.monthlyBudgetMicros / 1_000_000).toFixed(2)} ·{' '}
+                    {source.budgetSoftLimitPercent}% 提醒
+                  </span>
+                ) : (
+                  <span>月预算 未设</span>
+                )}
+              </div>
+              <div className="border-t pt-4">
+                <p className="inline-flex items-center gap-2 text-sm font-medium">
+                  <CalendarClock className="size-4" />
+                  计划维护与 SLO 排除
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  只能提前登记未来 90 天内、最长 7 天的维护。不能事后补窗；普通故障不得冒充维护。
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor={`maintenance-start-${source.id}`}>
+                      开始时间
+                    </Label>
+                    <Input
+                      id={`maintenance-start-${source.id}`}
+                      type="datetime-local"
+                      value={maintenanceDraft.startsAt}
+                      onChange={(event) =>
+                        setMaintenanceDrafts((current) => ({
+                          ...current,
+                          [source.id]: {
+                            ...maintenanceDraft,
+                            startsAt: event.target.value,
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor={`maintenance-end-${source.id}`}>
+                      结束时间
+                    </Label>
+                    <Input
+                      id={`maintenance-end-${source.id}`}
+                      type="datetime-local"
+                      value={maintenanceDraft.endsAt}
+                      onChange={(event) =>
+                        setMaintenanceDrafts((current) => ({
+                          ...current,
+                          [source.id]: {
+                            ...maintenanceDraft,
+                            endsAt: event.target.value,
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-2 sm:col-span-2">
+                    <Label htmlFor={`maintenance-reason-${source.id}`}>
+                      维护原因
+                    </Label>
+                    <Textarea
+                      id={`maintenance-reason-${source.id}`}
+                      value={maintenanceDraft.reason}
+                      onChange={(event) =>
+                        setMaintenanceDrafts((current) => ({
+                          ...current,
+                          [source.id]: {
+                            ...maintenanceDraft,
+                            reason: event.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="例如：上游公告的 API 升级维护"
+                    />
+                  </div>
+                </div>
+                <Button
+                  className="mt-3"
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    busy ||
+                    !maintenanceDraft.startsAt ||
+                    !maintenanceDraft.endsAt ||
+                    maintenanceDraft.reason.trim().length < 3
+                  }
+                  onClick={() => void scheduleMaintenance(source)}
+                >
+                  <CalendarClock />
+                  登记计划维护
+                </Button>
+              </div>
+              <div className="grid gap-2 text-xs">
+                {sloExclusions.length ? (
+                  sloExclusions.map((exclusion) => (
+                    <div
+                      key={exclusion.id}
+                      className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <p className="font-medium">
+                          {exclusion.kind === 'manual_pause'
+                            ? '主动暂停'
+                            : '计划维护'}
+                          {exclusion.cancelledAt ? ' · 已撤销' : ''}
+                        </p>
+                        <p className="mt-1 text-muted-foreground">
+                          {new Date(exclusion.startsAt).toLocaleString('zh-CN')}
+                          {' → '}
+                          {exclusion.endsAt
+                            ? new Date(exclusion.endsAt).toLocaleString('zh-CN')
+                            : '进行中'}
+                        </p>
+                        <p className="mt-1">{exclusion.reason}</p>
+                      </div>
+                      {exclusion.kind === 'planned_maintenance' &&
+                        !exclusion.cancelledAt &&
+                        new Date(exclusion.startsAt).valueOf() > Date.now() && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() =>
+                              void cancelMaintenance(source, exclusion)
+                            }
+                          >
+                            撤销
+                          </Button>
+                        )}
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-muted-foreground">
+                    尚无暂停或计划维护记录。
+                  </p>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="legal" className="mt-5 grid gap-5">
+              <div className="grid gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium">法律保全记录</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      建立者不能解除自己的保全；至少保留两名有效法律操作人。
+                    </p>
+                  </div>
+                  {actor.canManageSourceLegal && !activeLegalHold && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => void createLegalHold(source)}
+                    >
+                      <ShieldAlert />
+                      建立保全
+                    </Button>
+                  )}
+                </div>
+                {legalHolds ? (
+                  legalHolds.length ? (
+                    legalHolds.map((hold) => (
+                      <div
+                        key={hold.id}
+                        className="flex flex-col gap-3 rounded-lg border bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0 text-xs">
+                          <p className="font-medium">
+                            {hold.status === 'active' ? '保全中' : '已解除'} ·
+                            epoch {hold.hold_epoch}
+                          </p>
+                          <p className="mt-1 break-words text-muted-foreground">
+                            {hold.reason} · 依据 {hold.authority_ref}
+                          </p>
+                          <p className="mt-1 text-muted-foreground">
+                            建立者 {memberLabel(hold.created_by)} ·{' '}
+                            {new Date(hold.created_at).toLocaleString('zh-CN')}
+                            {hold.released_by
+                              ? ` · 解除者 ${memberLabel(hold.released_by)}`
+                              : ''}
+                          </p>
+                        </div>
+                        {hold.status === 'active' &&
+                          actor.canManageSourceLegal &&
+                          (hold.created_by === actor.id ? (
+                            <span className="text-xs text-muted-foreground">
+                              须由另一名法律操作人解除
+                            </span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              disabled={busy}
+                              onClick={() => void releaseLegalHold(source, hold)}
+                            >
+                              解除保全
+                            </Button>
+                          ))}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      尚无法律保全记录。
+                    </p>
+                  )
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    读取法律保全记录…
+                  </p>
+                )}
+                {!actor.canManageSourceLegal && (
+                  <p className="text-xs text-muted-foreground">
+                    当前账号只有查看权限；建立、解除保全需要独立法律操作权限。
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 border-t pt-4">
+                <Button
+                  onClick={() => void archive(source)}
+                  disabled={busy || Boolean(source.deletionStatus)}
+                  variant="ghost"
+                >
+                  <Archive />
+                  归档
+                </Button>
+                {source.deletionStatus ? (
+                  <span className="text-xs text-muted-foreground">
+                    请求 {source.deletionRequestId} 尚未完成；请查回执接口或运行页。
+                  </span>
+                ) : actor.canManageSourceLegal ? (
+                  <Button
+                    onClick={() => void legallyDeleteSource(source)}
+                    disabled={busy}
+                    variant="destructive"
+                  >
+                    <Trash2 />
+                    依法删除
+                  </Button>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    依法删除需要独立法律操作权限。
+                  </span>
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </>
+    );
   };
 
   return (
     <main className="min-h-screen bg-background text-foreground">
       <PageHeader icon={<DatabaseZap className="size-5" />} title="来源控制台" subtitle="一次接入，持续采集" />
       <SourceProposalInbox />
-      <PageContainer className="grid gap-6 py-6 lg:grid-cols-[380px_1fr]">
-        <section className="h-fit rounded-2xl border bg-card p-5">
-          <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
-            Step {step} / 3
-          </p>
-          <h2 className="mt-2 text-lg font-semibold tracking-tight">
-            {step === 1 ? '粘贴来源' : step === 2 ? '识别与测试' : '确认并启用'}
-          </h2>
+      <PageContainer className="grid gap-6 py-6">
+        <section>
+          <div className="mb-4 flex items-start justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
+                Ingestion operations
+              </p>
+              <h2 className="mt-2 text-lg font-semibold tracking-tight">
+                来源与运行
+              </h2>
+              <output className="mt-2 block text-sm text-muted-foreground">
+                {message}
+              </output>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button size="sm" onClick={() => setWizardOpen(true)}>
+                <ListPlus />
+                接入来源
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => void refresh()}>
+                <RefreshCw />
+                刷新
+              </Button>
+            </div>
+          </div>
+          <ConnectorReleaseSummary connectors={connectors} className="mb-5" />
+          <div className="grid gap-2">
+            {sources.map((source) => {
+              const capability = capabilityForAdapter(source.adapter);
+              const workerOnline = onlineCapabilities.has(capability);
+              return (
+                <article
+                  key={source.id}
+                  className="flex flex-col gap-3 rounded-2xl border bg-card px-4 py-3 sm:flex-row sm:items-center"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {source.publicErrorMessage ? (
+                        <TriangleAlert className="size-4 shrink-0 text-destructive" />
+                      ) : (
+                        <CheckCircle2 className="size-4 shrink-0 text-chart-1" />
+                      )}
+                      <h3 className="truncate font-semibold">{source.name}</h3>
+                      <Badge variant="secondary">{source.platform}</Badge>
+                      <Badge variant={source.enabled ? 'default' : 'outline'}>
+                        {lifecycleLabels[source.lifecycleStatus]}
+                      </Badge>
+                      {source.pendingRightsRequestId && (
+                        <Badge variant="outline">待权利审批</Badge>
+                      )}
+                      {source.deletionStatus && (
+                        <Badge variant="destructive">
+                          删除请求 {source.deletionStatus}
+                        </Badge>
+                      )}
+                      {!workerOnline && (
+                        <Badge variant="destructive">缺少 {capability}</Badge>
+                      )}
+                    </div>
+                    <p className="mt-1.5 truncate text-xs text-muted-foreground">
+                      {source.publicConfig.discoveryMode === 'opencli'
+                        ? `OpenCLI 搜索：${source.publicConfig.accountName}`
+                        : source.publicConfig.url}
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>权利 {rightsLabels[source.rightsStatus]}</span>
+                      <span>
+                        下次{' '}
+                        {source.nextRunAt
+                          ? new Date(source.nextRunAt).toLocaleString('zh-CN')
+                          : '未计划'}
+                      </span>
+                      <span>
+                        最近成功{' '}
+                        {source.lastSuccessAt
+                          ? new Date(source.lastSuccessAt).toLocaleString(
+                              'zh-CN',
+                            )
+                          : '尚无'}
+                      </span>
+                      {source.hasActiveRun && (
+                        <span className="text-chart-1">运行中</span>
+                      )}
+                      {source.effectiveScheduleMultiplier > 1 && (
+                        <span className="text-amber-700 dark:text-amber-300">
+                          降频 ×{source.effectiveScheduleMultiplier}
+                        </span>
+                      )}
+                    </div>
+                    {source.publicErrorMessage && (
+                      <p className="mt-1 truncate text-xs text-destructive">
+                        {source.publicErrorCode
+                          ? `${source.publicErrorCode} · `
+                          : ''}
+                        {source.publicErrorMessage}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        busy ||
+                        !source.enabled ||
+                        !workerOnline ||
+                        source.hasActiveRun
+                      }
+                      onClick={() => void run(source)}
+                    >
+                      <Play />
+                      立即采集
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => openSourceDetail(source.id)}
+                    >
+                      详情
+                      <ChevronRight />
+                    </Button>
+                  </div>
+                </article>
+              );
+            })}
+            {!sources.length && (
+              <div className="grid justify-items-center gap-3 rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
+                <p>
+                  选择 RSS、JSON、公开网页或社交发现方式；保存后系统会先测试，再允许启用。
+                </p>
+                <Button size="sm" onClick={() => setWizardOpen(true)}>
+                  <ListPlus />
+                  接入来源
+                </Button>
+              </div>
+            )}
+          </div>
+        </section>
+      </PageContainer>
+
+      {/*
+        接入是一次性动作，日常看的是运行，所以向导从常驻的 380px 边栏挪进对话框，
+        列表拿回整幅宽度。对话框始终挂载，关掉再打开仍停在原来那一步——
+        测试和权利审批要等人，中途关掉窗口不该把填好的东西丢了。
+      */}
+      <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
+              Step {step} / 3
+            </p>
+            <DialogTitle className="text-xl">
+              {step === 1 ? '粘贴来源' : step === 2 ? '识别与测试' : '确认并启用'}
+            </DialogTitle>
+            <DialogDescription>
+              保存后先测试连接，再由另一名管理员核验权利，最后才能启用采集。
+            </DialogDescription>
+          </DialogHeader>
           {step === 1 && (
             <div className="mt-5 grid gap-4">
               <Button
@@ -2404,7 +3189,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                 </Button>
               ) : (
                 <p className="rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">
-                  连接验证已完成，正在等待另一名具备“来源权利审批”能力的管理员核对证据。你可以先离开此页，审批后再启用。
+                  连接验证已完成，正在等待另一名具备“来源权利审批”能力的管理员核对证据。你可以先关掉这个窗口，审批后回到列表启用。
                 </p>
               )}
               <Button
@@ -2418,799 +3203,25 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
               </Button>
             </div>
           )}
-        </section>
-        <section>
-          <div className="mb-4 flex items-start justify-between">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
-                Ingestion operations
-              </p>
-              <h2 className="mt-2 text-lg font-semibold tracking-tight">
-                来源与运行
-              </h2>
-              <output className="mt-2 block text-sm text-muted-foreground">
-                {message}
-              </output>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => void refresh()}>
-              <RefreshCw />
-              刷新
-            </Button>
-          </div>
-          <div className="mb-5 rounded-2xl border bg-card p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="font-semibold">连接器发布控制</h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  disabled 会停止并暂停来源；shadow
-                  只记录脱敏统计，不写正式文章或 checkpoint；灰度按来源 ID
-                  稳定分桶，未命中的来源自动走 shadow，越过失败阈值会停用整个版本。
-                </p>
-              </div>
-              <Badge variant="outline">管理员</Badge>
-            </div>
-            <div className="mt-3 grid gap-2">
-              {connectors.map((connector) => (
-                <div
-                  key={`${connector.id}@${connector.version}`}
-                  className="flex flex-col justify-between gap-3 rounded-xl border p-3 sm:flex-row sm:items-center"
-                >
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">
-                        {connector.label}
-                      </span>
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {connector.id}@{connector.version}
-                      </span>
-                      <Badge
-                        variant={
-                          connector.rolloutMode === 'enabled'
-                            ? 'default'
-                            : connector.rolloutMode === 'shadow'
-                              ? 'secondary'
-                              : 'destructive'
-                        }
-                      >
-                        {rolloutLabels[connector.rolloutMode]}
-                      </Badge>
-                      {connector.canaryEnabled && (
-                        <Badge variant="secondary">
-                          灰度 {connector.canaryPercent}% · 自动停用 ≥
-                          {(connector.canaryFailureRateBps / 100).toFixed(2)}% /
-                          {connector.canaryMinRuns} 次
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {connector.rolloutReason}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy || connector.availability !== 'available' || connector.canaryEnabled}
-                      onClick={() => startConnectorCanary(connector)}
-                    >
-                      灰度
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={
-                        busy ||
-                        connector.availability !== 'available' ||
-                        connector.rolloutMode === 'shadow'
-                      }
-                      onClick={() => void setConnectorMode(connector, 'shadow')}
-                    >
-                      Shadow
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={
-                        busy ||
-                        connector.availability !== 'available' ||
-                        connector.rolloutMode === 'enabled' && !connector.canaryEnabled
-                      }
-                      onClick={() =>
-                        void setConnectorMode(connector, 'enabled', {
-                          enabled: false,
-                          percent: connector.canaryPercent,
-                          failureRateBps: connector.canaryFailureRateBps,
-                          minRuns: connector.canaryMinRuns,
-                        })
-                      }
-                    >
-                      启用
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      disabled={busy || connector.rolloutMode === 'disabled'}
-                      onClick={() =>
-                        void setConnectorMode(connector, 'disabled')
-                      }
-                    >
-                      停用
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="grid gap-3">
-            {sources.map((source) => {
-              const capability = source.adapter === 'rss'
-                ? 'source:rss'
-                : source.adapter === 'web'
-                  ? 'source:web'
-                  : source.adapter === 'social'
-                    ? 'source:social'
-                    : 'source:http-json';
-              const workerOnline = onlineCapabilities.has(capability);
-              const recentRuns = runsBySource[source.id];
-              const ownershipDraft = ownershipDrafts[source.id] ?? {
-                businessOwnerId: source.businessOwnerId ?? '',
-              };
-              const maintenanceDraft = maintenanceDrafts[source.id] ?? {
-                startsAt: '',
-                endsAt: '',
-                reason: '',
-              };
-              const sloExclusions = sloExclusionsBySource[source.id] ?? [];
-              const legalHolds = legalHoldsBySource[source.id];
-              const activeLegalHold = legalHolds?.find(
-                (hold) => hold.status === 'active',
-              );
-              const rightsDraft = rightsDrafts[source.id] ?? {
-                principal: source.businessOwnerId ?? '',
-                sourceType: (source.publicConfig.sourceType ?? 'media') as 'social' | 'media' | 'market' | 'filing' | 'company',
-                territory: 'global',
-                evidenceRef: '',
-                evidenceSnapshot: '',
-                termsVersion: 'public-source-v1',
-                termsSnapshot: '',
-                expiresAt: '',
-              };
-              const canDecideRights = canApproveRights && source.pendingRightsRequestedBy !== actor.id;
-              return (
-                <article
-                  key={source.id}
-                  className="rounded-2xl border bg-card p-5"
-                >
-                  <div className="grid gap-4">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {source.publicErrorMessage ? (
-                          <TriangleAlert className="size-4 text-destructive" />
-                        ) : (
-                          <CheckCircle2 className="size-4 text-chart-1" />
-                        )}
-                        <h3 className="font-semibold">{source.name}</h3>
-                        <Badge variant="secondary">{source.platform}</Badge>
-                        <Badge variant={source.enabled ? 'default' : 'outline'}>
-                          {lifecycleLabels[source.lifecycleStatus]}
-                        </Badge>
-                        {source.deletionStatus && (
-                          <Badge variant="destructive">
-                            删除请求 {source.deletionStatus}
-                          </Badge>
-                        )}
-                        <Badge
-                          variant={workerOnline ? 'outline' : 'destructive'}
-                        >
-                          {workerOnline ? 'Worker 在线' : `缺少 ${capability}`}
-                        </Badge>
-                      </div>
-                      <p className="mt-2 break-all text-sm text-muted-foreground">
-                        {source.publicConfig.discoveryMode === 'opencli'
-                          ? `OpenCLI 搜索：${source.publicConfig.accountName}`
-                          : source.publicConfig.url}
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-                        <span>健康 {healthLabels[source.healthStatus]}</span>
-                        <span>权利 {rightsLabels[source.rightsStatus]}</span>
-                        <span>调度 {source.scheduleCron || '手动'}</span>
-                        <span>
-                          下次{' '}
-                          {source.nextRunAt
-                            ? new Date(source.nextRunAt).toLocaleString(
-                                'zh-CN',
-                              )
-                            : '未计划'}
-                        </span>
-                        <span>
-                          最近成功{' '}
-                          {source.lastSuccessAt
-                            ? new Date(source.lastSuccessAt).toLocaleString(
-                                'zh-CN',
-                              )
-                            : '尚无'}
-                        </span>
-                        <span>checkpoint v{source.checkpointVersion}</span>
-                        <span>
-                          业务负责人 {memberLabel(source.businessOwnerId)}
-                        </span>
-                        <span>
-                          成本{' '}
-                          {source.costMicrosPerRequest > 0
-                            ? `$${(source.costMicrosPerRequest / 1_000_000).toFixed(6)}/请求`
-                            : '未建模'}
-                        </span>
-                        {source.monthlyBudgetMicros > 0 && (
-                          <span>
-                            月预算 $
-                            {(
-                              source.monthlyBudgetMicros / 1_000_000
-                            ).toFixed(2)}{' '}
-                            · {source.budgetSoftLimitPercent}% 提醒
-                          </span>
-                        )}
-                        <span>
-                          调度优先级 {source.schedulePriority}
-                          {source.autoThrottleEnabled ? ' · 自动降频开启' : ' · 自动降频关闭'}
-                        </span>
-                        {source.effectiveScheduleMultiplier > 1 && (
-                          <span className="text-amber-700 dark:text-amber-300">
-                            当前降频 ×{source.effectiveScheduleMultiplier}
-                            {source.scheduleThrottleRecoveryAt
-                              ? ` · 最迟 ${new Date(source.scheduleThrottleRecoveryAt).toLocaleDateString('zh-CN')} 恢复评估`
-                              : ''}
-                          </span>
-                        )}
-                        {source.hasActiveRun && <span>运行中</span>}
-                      </div>
-                      {source.publicErrorMessage && (
-                        <p className="mt-2 text-sm text-destructive">
-                          {source.publicErrorCode
-                            ? `${source.publicErrorCode} · `
-                            : ''}
-                          {source.publicErrorMessage}
-                        </p>
-                      )}
-                      {source.pendingRightsRequestId && (
-                        <details className="mt-3 rounded-lg border border-chart-3/30 bg-chart-3/5 p-3 text-xs">
-                          <summary className="cursor-pointer font-medium">待独立权利审批</summary>
-                          <p className="mt-2 text-muted-foreground">
-                            声明人 {memberLabel(source.pendingRightsRequestedBy)}。来源配置者不能自批；审批者还必须确认治理后的来源类型。证据和条款正文不会进入浏览器响应，只保存引用与 SHA-256 防篡改摘要。
-                          </p>
-                          {canDecideRights ? (
-                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                              <div className="grid gap-2"><Label>权利主体</Label><Input value={rightsDraft.principal} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, principal: event.target.value } }))} /></div>
-                              <div className="grid gap-2"><Label>治理后的来源类型</Label><NativeSelect value={rightsDraft.sourceType} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, sourceType: event.target.value as typeof rightsDraft.sourceType } }))}>{['social', 'media', 'market', 'filing', 'company'].map((value) => <NativeSelectOption key={value} value={value}>{value}</NativeSelectOption>)}</NativeSelect></div>
-                              <div className="grid gap-2"><Label>地域</Label><Input value={rightsDraft.territory} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, territory: event.target.value } }))} /></div>
-                              <div className="grid gap-2"><Label>证据引用（文档/工单 URI）</Label><Input value={rightsDraft.evidenceRef} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, evidenceRef: event.target.value } }))} /></div>
-                              <div className="grid gap-2"><Label>条款版本</Label><Input value={rightsDraft.termsVersion} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, termsVersion: event.target.value } }))} /></div>
-                              <div className="grid gap-2"><Label>证据快照（仅本机计算摘要）</Label><Textarea value={rightsDraft.evidenceSnapshot} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, evidenceSnapshot: event.target.value } }))} /></div>
-                              <div className="grid gap-2"><Label>条款快照（仅本机计算摘要）</Label><Textarea value={rightsDraft.termsSnapshot} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, termsSnapshot: event.target.value } }))} /></div>
-                              <div className="grid gap-2"><Label>到期日（可选）</Label><Input type="date" value={rightsDraft.expiresAt} onChange={(event) => setRightsDrafts((current) => ({ ...current, [source.id]: { ...rightsDraft, expiresAt: event.target.value } }))} /></div>
-                              <div className="flex items-end gap-2"><Button size="sm" disabled={busy} onClick={() => void decideRights(source, 'approve')}>批准权利</Button><Button size="sm" variant="destructive" disabled={busy} onClick={() => void decideRights(source, 'reject')}>拒绝</Button></div>
-                            </div>
-                          ) : (
-                            <p className="mt-2 text-muted-foreground">
-                              {source.pendingRightsRequestedBy === actor.id
-                                ? '这是你提交的声明，必须由另一名权利审批者处理。'
-                                : '当前账号未被显式授予“来源权利审批”能力；请在治理页配置。'}
-                            </p>
-                          )}
-                        </details>
-                      )}
-                      <details className="mt-3 rounded-lg border p-3 text-xs">
-                        <summary className="cursor-pointer font-medium">
-                          <span className="inline-flex items-center gap-2">
-                            <UsersRound className="size-4" />
-                            负责人和备用管理员
-                          </span>
-                        </summary>
-                        <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                          <div className="grid gap-2">
-                            <Label>业务负责人</Label>
-                            <NativeSelect
-                              value={ownershipDraft.businessOwnerId}
-                              onChange={(event) =>
-                                setOwnershipDrafts((current) => ({
-                                  ...current,
-                                  [source.id]: {
-                                    ...ownershipDraft,
-                                    businessOwnerId: event.target.value,
-                                  },
-                                }))
-                              }
-                            >
-                              <NativeSelectOption value="">未分配</NativeSelectOption>
-                              {activeOwnerMembers.map((member) => (
-                                <NativeSelectOption
-                                  key={member.user_id}
-                                  value={member.user_id}
-                                >
-                                  {member.email} · {member.role}
-                                </NativeSelectOption>
-                              ))}
-                            </NativeSelect>
-                          </div>
-                        </div>
-                        <div className="mt-3 flex items-center gap-3">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={
-                              busy ||
-                              !ownershipDraft.businessOwnerId
-                            }
-                            onClick={() => void transferOwnership(source)}
-                          >
-                            保存负责人
-                          </Button>
-                          <span className="text-muted-foreground">
-                            保存需要填写原因，并使用来源版本锁防止覆盖他人修改。
-                          </span>
-                        </div>
-                      </details>
-                      <details
-                        className="mt-3 rounded-lg border p-3 text-xs"
-                        onToggle={(event) => {
-                          if (event.currentTarget.open) {
-                            void loadSloExclusions(source.id).catch(
-                              (error: unknown) =>
-                                setMessage(
-                                  error instanceof Error
-                                    ? error.message
-                                    : '读取 SLO 排除窗口失败。',
-                                ),
-                            );
-                          }
-                        }}
-                      >
-                        <summary className="cursor-pointer font-medium">
-                          <span className="inline-flex items-center gap-2">
-                            <CalendarClock className="size-4" />
-                            计划维护与 SLO 排除
-                          </span>
-                        </summary>
-                        <p className="mt-2 text-muted-foreground">
-                          只能提前登记未来 90 天内、最长 7 天的维护。不能事后补窗；普通故障不得冒充维护。
-                        </p>
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                          <div className="grid gap-2">
-                            <Label htmlFor={`maintenance-start-${source.id}`}>
-                              开始时间
-                            </Label>
-                            <Input
-                              id={`maintenance-start-${source.id}`}
-                              type="datetime-local"
-                              value={maintenanceDraft.startsAt}
-                              onChange={(event) =>
-                                setMaintenanceDrafts((current) => ({
-                                  ...current,
-                                  [source.id]: {
-                                    ...maintenanceDraft,
-                                    startsAt: event.target.value,
-                                  },
-                                }))
-                              }
-                            />
-                          </div>
-                          <div className="grid gap-2">
-                            <Label htmlFor={`maintenance-end-${source.id}`}>
-                              结束时间
-                            </Label>
-                            <Input
-                              id={`maintenance-end-${source.id}`}
-                              type="datetime-local"
-                              value={maintenanceDraft.endsAt}
-                              onChange={(event) =>
-                                setMaintenanceDrafts((current) => ({
-                                  ...current,
-                                  [source.id]: {
-                                    ...maintenanceDraft,
-                                    endsAt: event.target.value,
-                                  },
-                                }))
-                              }
-                            />
-                          </div>
-                          <div className="grid gap-2 sm:col-span-2">
-                            <Label htmlFor={`maintenance-reason-${source.id}`}>
-                              维护原因
-                            </Label>
-                            <Textarea
-                              id={`maintenance-reason-${source.id}`}
-                              value={maintenanceDraft.reason}
-                              onChange={(event) =>
-                                setMaintenanceDrafts((current) => ({
-                                  ...current,
-                                  [source.id]: {
-                                    ...maintenanceDraft,
-                                    reason: event.target.value,
-                                  },
-                                }))
-                              }
-                              placeholder="例如：上游公告的 API 升级维护"
-                            />
-                          </div>
-                        </div>
-                        <Button
-                          className="mt-3"
-                          size="sm"
-                          variant="outline"
-                          disabled={
-                            busy ||
-                            !maintenanceDraft.startsAt ||
-                            !maintenanceDraft.endsAt ||
-                            maintenanceDraft.reason.trim().length < 3
-                          }
-                          onClick={() => void scheduleMaintenance(source)}
-                        >
-                          <CalendarClock />
-                          登记计划维护
-                        </Button>
-                        <div className="mt-3 grid gap-2">
-                          {sloExclusions.length ? (
-                            sloExclusions.map((exclusion) => (
-                              <div
-                                key={exclusion.id}
-                                className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-                              >
-                                <div>
-                                  <p className="font-medium">
-                                    {exclusion.kind === 'manual_pause'
-                                      ? '主动暂停'
-                                      : '计划维护'}
-                                    {exclusion.cancelledAt ? ' · 已撤销' : ''}
-                                  </p>
-                                  <p className="mt-1 text-muted-foreground">
-                                    {new Date(exclusion.startsAt).toLocaleString('zh-CN')}
-                                    {' → '}
-                                    {exclusion.endsAt
-                                      ? new Date(exclusion.endsAt).toLocaleString('zh-CN')
-                                      : '进行中'}
-                                  </p>
-                                  <p className="mt-1">{exclusion.reason}</p>
-                                </div>
-                                {exclusion.kind === 'planned_maintenance' &&
-                                  !exclusion.cancelledAt &&
-                                  new Date(exclusion.startsAt).valueOf() > Date.now() && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      disabled={busy}
-                                      onClick={() =>
-                                        void cancelMaintenance(source, exclusion)
-                                      }
-                                    >
-                                      撤销
-                                    </Button>
-                                  )}
-                              </div>
-                            ))
-                          ) : (
-                            <p className="text-muted-foreground">
-                              尚无暂停或计划维护记录。
-                            </p>
-                          )}
-                        </div>
-                      </details>
-                    </div>
-                    <div className="flex flex-wrap gap-2 border-t pt-3">
-                      {!source.enabled &&
-                        source.rightsStatus === 'approved' && (
-                          <Button
-                            onClick={() => void testSource(source.id)}
-                            disabled={busy}
-                            variant="outline"
-                          >
-                            <TestTube2 />
-                            测试/重连
-                          </Button>
-                        )}
-                      {source.rightsStatus === 'approved' &&
-                      (source.lifecycleStatus === 'tested' ||
-                        source.lifecycleStatus === 'paused') ? (
-                        <Button
-                          onClick={() => void enableSource(source.id)}
-                          disabled={busy}
-                          variant="outline"
-                        >
-                          启用
-                        </Button>
-                      ) : null}
-                      {source.enabled && (
-                        <Button
-                          onClick={() => void pauseSource(source)}
-                          disabled={busy}
-                          variant="outline"
-                        >
-                          停用
-                        </Button>
-                      )}
-                      <Button
-                        onClick={() => void run(source)}
-                        disabled={
-                          busy ||
-                          !source.enabled ||
-                          !workerOnline ||
-                          source.hasActiveRun
-                        }
-                        variant="outline"
-                      >
-                        <Play />
-                        立即采集
-                      </Button>
-                      {source.enabled && (
-                        <Button
-                          onClick={() => void backfill(source)}
-                          disabled={
-                            busy ||
-                            !workerOnline ||
-                            source.hasActiveRun
-                          }
-                          variant="outline"
-                        >
-                          <History />
-                          补采 7 天
-                        </Button>
-                      )}
-                      <Button
-                        onClick={() =>
-                          void loadRuns(source.id).catch((error: unknown) =>
-                            setMessage(
-                              error instanceof Error
-                                ? error.message
-                                : '运行读取失败。',
-                            ),
-                          )
-                        }
-                        variant="ghost"
-                      >
-                        <Activity />
-                        运行详情
-                      </Button>
-                      <Button
-                        onClick={() => void archive(source)}
-                        disabled={busy || Boolean(source.deletionStatus)}
-                        variant="ghost"
-                      >
-                        <Archive />
-                        归档
-                      </Button>
-                      <Button
-                        onClick={() =>
-                          void loadLegalHolds(source.id).catch(
-                            (error: unknown) =>
-                              setMessage(
-                                error instanceof Error
-                                  ? error.message
-                                  : '法律保全记录读取失败。',
-                              ),
-                          )
-                        }
-                        variant="ghost"
-                      >
-                        <ShieldAlert />
-                        {legalHolds ? '收起法律保全' : '法律保全'}
-                      </Button>
-                      {source.rightsStatus === 'approved' &&
-                        !source.deletionStatus && (
-                          <Button
-                            onClick={() => void withdrawContent(source)}
-                            disabled={busy}
-                            variant="destructive"
-                          >
-                            <TriangleAlert />
-                            撤回权利与内容
-                          </Button>
-                        )}
-                      {!source.pendingRightsRequestId &&
-                        ['revoked', 'expired'].includes(source.rightsStatus) &&
-                        !source.deletionStatus && (
-                          <Button
-                            onClick={() => void resubmitRights(source)}
-                            disabled={busy}
-                            variant="outline"
-                          >
-                            重新提交权利声明
-                          </Button>
-                        )}
-                      {source.deletionStatus ? (
-                        <span className="self-center text-xs text-muted-foreground">
-                          请求 {source.deletionRequestId}{' '}
-                          尚未完成；请查回执接口或运行页。
-                        </span>
-                      ) : actor.canManageSourceLegal ? (
-                        <Button
-                          onClick={() => void legallyDeleteSource(source)}
-                          disabled={busy}
-                          variant="destructive"
-                        >
-                          <Trash2 />
-                          依法删除
-                        </Button>
-                      ) : (
-                        <span className="self-center text-xs text-muted-foreground">
-                          依法删除需要独立法律操作权限。
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  {legalHolds && (
-                    <div className="mt-4 grid gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="font-medium">法律保全记录</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            建立者不能解除自己的保全；至少保留两名有效法律操作人。
-                          </p>
-                        </div>
-                        {actor.canManageSourceLegal && !activeLegalHold && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() => void createLegalHold(source)}
-                          >
-                            <ShieldAlert />
-                            建立保全
-                          </Button>
-                        )}
-                      </div>
-                      {legalHolds.length ? (
-                        legalHolds.map((hold) => (
-                          <div
-                            key={hold.id}
-                            className="flex flex-col gap-3 rounded-lg border bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between"
-                          >
-                            <div className="min-w-0 text-xs">
-                              <p className="font-medium">
-                                {hold.status === 'active' ? '保全中' : '已解除'} · epoch {hold.hold_epoch}
-                              </p>
-                              <p className="mt-1 break-words text-muted-foreground">
-                                {hold.reason} · 依据 {hold.authority_ref}
-                              </p>
-                              <p className="mt-1 text-muted-foreground">
-                                建立者 {memberLabel(hold.created_by)} · {new Date(hold.created_at).toLocaleString('zh-CN')}
-                                {hold.released_by
-                                  ? ` · 解除者 ${memberLabel(hold.released_by)}`
-                                  : ''}
-                              </p>
-                            </div>
-                            {hold.status === 'active' &&
-                              actor.canManageSourceLegal &&
-                              (hold.created_by === actor.id ? (
-                                <span className="text-xs text-muted-foreground">
-                                  须由另一名法律操作人解除
-                                </span>
-                              ) : (
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    void releaseLegalHold(source, hold)
-                                  }
-                                >
-                                  解除保全
-                                </Button>
-                              ))}
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-xs text-muted-foreground">
-                          尚无法律保全记录。
-                        </p>
-                      )}
-                      {!actor.canManageSourceLegal && (
-                        <p className="text-xs text-muted-foreground">
-                          当前账号只有查看权限；建立、解除保全需要独立法律操作权限。
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  {recentRuns && (
-                    <div className="mt-4 grid gap-2 border-t pt-4">
-                      {recentRuns.length ? (
-                        recentRuns.map((item) => (
-                          <div
-                            key={item.id}
-                            className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between"
-                          >
-                            <div>
-                              <span>
-                                {item.trigger} · {runStatusLabels[item.status]} ·{' '}
-                                {new Date(item.createdAt).toLocaleString(
-                                  'zh-CN',
-                                )}
-                              </span>
-                              <span className="ml-2">
-                                隔离 {quarantineLabels[item.quarantineStatus]}
-                              </span>
-                              <span className="ml-2">
-                                接受 {item.acceptedCount} / 拒绝{' '}
-                                {item.rejectedCount} / 重复{' '}
-                                {item.duplicateCount}
-                                {item.errorCode ? ` · ${item.errorCode}` : ''}
-                              </span>
-                            </div>
-                            {[
-                              'succeeded',
-                              'partial',
-                              'failed',
-                              'rights_blocked',
-                            ].includes(item.status) && (
-                              <div className="flex gap-1">
-                                {item.quarantineStatus !== 'held' &&
-                                  item.quarantineStatus !== 'discarded' && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      disabled={busy}
-                                      onClick={() =>
-                                        void changeRunQuarantine(
-                                          source.id,
-                                          item,
-                                          'hold',
-                                        )
-                                      }
-                                    >
-                                      挂起
-                                    </Button>
-                                  )}
-                                {item.quarantineStatus === 'held' && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    disabled={busy}
-                                    onClick={() =>
-                                      void changeRunQuarantine(
-                                        source.id,
-                                        item,
-                                        'release',
-                                      )
-                                    }
-                                  >
-                                    释放
-                                  </Button>
-                                )}
-                                {item.quarantineStatus !== 'discarded' && (
-                                  <Button
-                                    size="sm"
-                                    variant="destructive"
-                                    disabled={busy}
-                                    onClick={() =>
-                                      void changeRunQuarantine(
-                                        source.id,
-                                        item,
-                                        'discard',
-                                      )
-                                    }
-                                  >
-                                    丢弃
-                                  </Button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-sm text-muted-foreground">
-                          尚无采集运行。
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-            {!sources.length && (
-              <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-                选择 RSS、JSON、公开网页或社交发现方式；保存后系统会先测试，再允许启用。
-              </div>
-            )}
-          </div>
-        </section>
-      </PageContainer>
+        </DialogContent>
+      </Dialog>
+
+      <Sheet
+        open={Boolean(detailSource)}
+        onOpenChange={(open) => !open && setDetailSourceId(null)}
+      >
+        {/*
+          来源详情沿用证据抽屉的半屏宽，窄屏仍是整屏。变体链必须和 ui/sheet
+          的默认值逐字一致，否则默认的 data-[side=right]:sm:max-w-sm 留在类名里，
+          它带属性选择器、权重更高，会把宽度压回 384px。
+        */}
+        <SheetContent
+          className="w-full overflow-y-auto data-[side=right]:sm:max-w-[50vw]"
+          side="right"
+        >
+          {detailSource && renderSourceDetail(detailSource)}
+        </SheetContent>
+      </Sheet>
     </main>
   );
 }
