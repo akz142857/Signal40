@@ -12,7 +12,14 @@ import { PageContainer, PageHeader } from '@/components/page-shell';
 type Member = { user_id: string; email: string; role: string; status: string };
 type PolicyCost = { projectCount: number; costMicros: number };
 type GlobalControl = { paused: boolean; reason: string; updatedBy: string | null; updatedAt: string | null };
-type ActivityRatio = { automated: number; human: number; since: string };
+type ActivityRatio = { automated: number; other: number; since: string };
+type EngineStatus = {
+  actorConfigured: boolean;
+  actorId: string | null;
+  lastRunAt: string | null;
+  lastRunStatus: string | null;
+  lastRunNote: string | null;
+};
 type Run = {
   id: string;
   trigger: string;
@@ -41,9 +48,73 @@ function splitList(value: string) {
   return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
+/*
+  body 只能读一次，而 clone() 必须在读之前调用。原来的写法先 response.json()
+  再 response.clone()，后者必然抛「Body has already been consumed」被 catch 吞掉，
+  于是所有只带 error、不带 issues 的响应（403/404/400/409）都退化成
+  「请求失败（4xx）」，服务端写好的中文提示一句也到不了界面。
+*/
 async function readError(response: Response) {
-  try { return ((await response.json()) as { error?: string; issues?: string[] }).issues?.join('；') || ((await response.clone().json()) as { error?: string }).error || `请求失败（${response.status}）`; }
-  catch { return `请求失败（${response.status}）`; }
+  const fallback = `请求失败（${response.status}）`;
+  let payload: { error?: string; issues?: string[] };
+  try { payload = (await response.json()) as typeof payload; }
+  catch { return fallback; }
+  return payload.issues?.join('；') || payload.error || fallback;
+}
+
+/**
+ * `expiresAt` 存的是 UTC ISO，而 datetime-local 读写的都是本地时间。
+ * 以前显示时直接 slice(0,16) 把 UTC 当本地显示、写回时又按本地解析成 UTC，
+ * 同一个值每被选一次就平移一个时区偏移——它是预先授权的失效时刻，不能漂。
+ */
+function toLocalInputValue(iso: string) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.valueOf())) return '';
+  return new Date(at.valueOf() - at.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+/** 超过这么久没有新一轮，就提示去确认 scheduler 进程还在。默认间隔 30s，这里留 20 倍余量。 */
+const STALE_TICK_MS = 10 * 60_000;
+
+/**
+ * 「全局自动化：运行中」以前只反映 automation_control.paused 这一个配置位，
+ * 于是页面可以一边写着「运行中」，一边在下面写着「调度器还没有跑过」。
+ *
+ * 总开关没关只是必要条件。引擎真要干活还需要：解析得到服务账号
+ * （见 orchestrator 的 resolveAutomationActor，缺了就整轮不写任何东西），
+ * 以及确实有进程在按轮调用它。三件事任何一件不成立，这里都要说出来。
+ */
+function automationHealth(
+  control: GlobalControl,
+  engine: EngineStatus | null,
+  loadedAt: number,
+): { title: string; detail: string; tone: 'ok' | 'warn' | 'bad' } {
+  if (control.paused) {
+    return { title: '已暂停', detail: control.reason || '未填写原因', tone: 'bad' };
+  }
+  if (engine && !engine.actorConfigured) {
+    return {
+      title: '开关已开，但引擎不会写入任何东西',
+      detail: '未配置有效的自动化服务账号：SIGNAL40_AUTOMATION_ACTOR_ID 必须指向 team_members 里一个 active 的 admin 成员。在此之前每一轮都会空转。',
+      tone: 'bad',
+    };
+  }
+  if (engine && !engine.lastRunAt) {
+    return {
+      title: '开关已开，但调度器从未跑过',
+      detail: '没有任何一轮 tick 的记录。常规运行由独立的 scheduler 进程负责（npm run scheduler 或 compose 里的 scheduler 服务）；手动触发接口用的是调度器令牌，不对浏览器开放。',
+      tone: 'warn',
+    };
+  }
+  if (engine?.lastRunAt) {
+    const ageMs = loadedAt ? loadedAt - new Date(engine.lastRunAt).valueOf() : 0;
+    const ageText = `最近一轮 ${new Date(engine.lastRunAt).toLocaleString('zh-CN')}（${Math.max(0, Math.round(ageMs / 60_000))} 分钟前）· ${engine.lastRunStatus}${engine.lastRunNote ? ` · ${engine.lastRunNote}` : ''}`;
+    if (ageMs > STALE_TICK_MS) {
+      return { title: '开关已开，但已经很久没有新一轮', detail: `${ageText}。确认 scheduler 进程还活着。`, tone: 'warn' };
+    }
+    return { title: '运行中', detail: ageText, tone: 'ok' };
+  }
+  return { title: '运行中', detail: '调度器可按启用策略执行各阶段。', tone: 'ok' };
 }
 
 export function AutomationConsole() {
@@ -54,7 +125,11 @@ export function AutomationConsole() {
   const [name, setName] = useState('');
   const [control, setControl] = useState<GlobalControl>({ paused: false, reason: '', updatedBy: null, updatedAt: null });
   const [globalReason, setGlobalReason] = useState('运营人工暂停全部自动化');
-  const [activity, setActivity] = useState<ActivityRatio>({ automated: 0, human: 0, since: '' });
+  const [activity, setActivity] = useState<ActivityRatio>({ automated: 0, other: 0, since: '' });
+  const [engine, setEngine] = useState<EngineStatus | null>(null);
+  // 「最近一轮多久以前」要有一个参照时刻。渲染期读时钟既不纯、也会让同一份
+  // 数据每次重渲染都不一样，所以在刷新时记一次，界面显示的就是「截至上次刷新」。
+  const [loadedAt, setLoadedAt] = useState(0);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -71,10 +146,15 @@ export function AutomationConsole() {
       const policyPayload = (await policyResponse.json()) as { policies: AutomationPolicy[]; costs?: Record<string, PolicyCost>; activity?: ActivityRatio };
       setPolicies(policyPayload.policies);
       setCosts(policyPayload.costs ?? {});
-      setActivity(policyPayload.activity ?? { automated: 0, human: 0, since: '' });
+      setActivity(policyPayload.activity ?? { automated: 0, other: 0, since: '' });
       if (runResponse.ok) setRuns(((await runResponse.json()) as { runs: Run[] }).runs);
       if (memberResponse.ok) setMembers(((await memberResponse.json()) as { members: Member[] }).members.filter((member) => member.status === 'active'));
-      if (controlResponse.ok) setControl(((await controlResponse.json()) as { control: GlobalControl }).control);
+      if (controlResponse.ok) {
+        const controlPayload = (await controlResponse.json()) as { control: GlobalControl; engine?: EngineStatus };
+        setControl(controlPayload.control);
+        setEngine(controlPayload.engine ?? null);
+      }
+      setLoadedAt(Date.now());
       setMessage('');
     } catch (error) { setMessage(error instanceof Error ? error.message : '读取自动化配置失败。'); }
     finally { setLoading(false); }
@@ -111,6 +191,7 @@ export function AutomationConsole() {
     await refresh();
   };
 
+  const health = automationHealth(control, engine, loadedAt);
   const automatedActions = runs.flatMap((run) => run.actions).length;
   const openBreakers = Object.entries(runs[0]?.breakers ?? {}).filter(([, state]) => state.failures >= 3);
   const researchCandidates = members.filter((member) => ['editor', 'admin'].includes(member.role));
@@ -125,9 +206,10 @@ export function AutomationConsole() {
 
       {openBreakers.length > 0 && <div className="mb-5 rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive"><p className="flex items-center gap-2 font-semibold"><ShieldAlert className="size-4" />已熔断的阶段</p><ul className="mt-2 space-y-1">{openBreakers.map(([stage, state]) => <li key={stage}>{stageLabels[stage as AutomationStage] ?? stage}：连续失败 {state.failures} 次，最近错误「{state.lastError}」</li>)}</ul></div>}
 
-      <section className={`mb-5 rounded-2xl border p-5 ${control.paused ? 'border-destructive/50 bg-destructive/5' : 'bg-card'}`}>
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">全局自动化：{control.paused ? '已暂停' : '运行中'}</h2><p className="mt-1 text-xs text-muted-foreground">{control.paused ? control.reason : '调度器可按启用策略执行各阶段。'}{control.updatedAt ? ` · ${new Date(control.updatedAt).toLocaleString('zh-CN')} · ${control.updatedBy ?? '未知操作者'}` : ''}</p></div><div className="flex flex-wrap gap-2"><Input className="w-72" aria-label="全局暂停原因" value={globalReason} onChange={(event) => setGlobalReason(event.target.value)} /><Button variant={control.paused ? 'default' : 'destructive'} disabled={!control.paused && !globalReason.trim()} onClick={() => void setGlobalPause(!control.paused)}>{control.paused ? '恢复全部自动化' : '暂停全部自动化'}</Button></div></div>
-        <p className="mt-3 text-sm">近 30 天审计动作：自动化 {activity.automated} / 人工 {activity.human}，自动化占比 {activity.automated + activity.human ? Math.round(activity.automated / (activity.automated + activity.human) * 100) : 0}%</p>
+      <section className={`mb-5 rounded-2xl border p-5 ${health.tone === 'bad' ? 'border-destructive/50 bg-destructive/5' : health.tone === 'warn' ? 'border-amber-500/50 bg-amber-500/5' : 'bg-card'}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">全局自动化：{health.title}</h2><p className="mt-1 text-xs text-muted-foreground">{health.detail}{control.updatedAt ? ` · ${new Date(control.updatedAt).toLocaleString('zh-CN')} · ${control.updatedBy ?? '未知操作者'}` : ' · 总开关从未被改动过'}</p></div><div className="flex flex-wrap gap-2"><Input className="w-72" aria-label="全局暂停原因" value={globalReason} onChange={(event) => setGlobalReason(event.target.value)} /><Button variant={control.paused ? 'default' : 'destructive'} disabled={!control.paused && !globalReason.trim()} onClick={() => void setGlobalPause(!control.paused)}>{control.paused ? '恢复全部自动化' : '暂停全部自动化'}</Button></div></div>
+        <p className="mt-3 text-sm">近 30 天审计写入：自动化 {activity.automated} / 其余 {activity.other}，自动化占比 {activity.automated + activity.other ? Math.round(activity.automated / (activity.automated + activity.other) * 100) : 0}%</p>
+        <p className="mt-1 text-xs text-muted-foreground">「其余」是人工操作加上 Worker 写入的机器事件；只有显式标注 trigger 的记录才分得清，所以这里不把未标注的一律算成人工。</p>
       </section>
 
       <section className="rounded-2xl border bg-card p-5">
@@ -182,7 +264,7 @@ export function AutomationConsole() {
                 </NativeSelect>
               </div>
               <div><Label className="text-xs text-muted-foreground">预先授权有效期</Label>
-                <Input className="mt-1" type="datetime-local" value={policy.expiresAt ? policy.expiresAt.slice(0, 16) : ''} onChange={(event) => void update(policy, { expiresAt: event.target.value ? new Date(event.target.value).toISOString() : null })} />
+                <Input className="mt-1" type="datetime-local" value={policy.expiresAt ? toLocalInputValue(policy.expiresAt) : ''} onChange={(event) => void update(policy, { expiresAt: event.target.value ? new Date(event.target.value).toISOString() : null })} />
               </div>
             </div>
           </div>

@@ -194,3 +194,93 @@ void test('POST /api/v1/source-configs 拒绝直接以 approved 创建', async (
   }, { 'idempotency-key': 'source-approved' }));
   assert.equal(response.status, 422);
 });
+
+/*
+  自动化控制台「这一页说的话要是真的」这一组的回归覆盖。
+
+  三条断言对应三个真实缺陷：策略 PATCH 的版本检查写了却不看结果（丢更新还写假
+  审计）；总开关只反映一个配置位，说「运行中」时引擎其实可能一个字都写不了；
+  建表迁移播种的 1970 哨兵被当成真实操作时间渲染。
+*/
+
+void test('PATCH /api/v1/automation/policies/:id 版本不匹配时报 409，且不写审计', async () => {
+  const { POST } = await import('../app/api/v1/automation/policies/route.ts');
+  const { PATCH } = await import('../app/api/v1/automation/policies/[id]/route.ts');
+  setRouteTestActor(admin);
+
+  const created = await POST(jsonRequest('http://local/api/v1/automation/policies', { name: '并发测试策略' }));
+  assert.equal(created.status, 201, await created.clone().text());
+  const { policy } = (await created.json()) as { policy: { id: string; version: number } };
+
+  const ok = await PATCH(
+    new Request(`http://local/api/v1/automation/policies/${policy.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ guardrails: { dailyProjectLimit: 5 } }),
+    }),
+    { params: Promise.resolve({ id: policy.id }) },
+  );
+  assert.equal(ok.status, 200, await ok.clone().text());
+
+  const auditBefore = await database
+    .prepare("SELECT COUNT(*) AS total FROM audit_events WHERE action = 'automation_policy.updated' AND entity_id = ?")
+    .bind(policy.id)
+    .first<{ total: number }>();
+
+  // 两个管理员同时改同一条策略：两次都读到同一个版本，只有一次能写进去。
+  const patch = (limit: number) =>
+    PATCH(
+      new Request(`http://local/api/v1/automation/policies/${policy.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ guardrails: { dailyProjectLimit: limit } }),
+      }),
+      { params: Promise.resolve({ id: policy.id }) },
+    );
+  const [first, second] = await Promise.all([patch(7), patch(9)]);
+  const statuses = [first.status, second.status].sort((a, b) => a - b);
+  assert.deepEqual(statuses, [200, 409], '并发写入必须一成一冲突，而不是双双返回 200');
+
+  const stored = await database
+    .prepare('SELECT guardrails_json, version FROM automation_policies WHERE id = ?')
+    .bind(policy.id)
+    .first<{ guardrails_json: string; version: number }>();
+  const storedLimit = (JSON.parse(stored!.guardrails_json) as { dailyProjectLimit: number }).dailyProjectLimit;
+  assert.ok([7, 9].includes(storedLimit), '落库的必须是两次写入之一');
+  assert.equal(Number(stored?.version), 3, '只有一次写入推进了版本');
+
+  const auditAfter = await database
+    .prepare("SELECT COUNT(*) AS total FROM audit_events WHERE action = 'automation_policy.updated' AND entity_id = ?")
+    .bind(policy.id)
+    .first<{ total: number }>();
+  assert.equal(
+    Number(auditAfter?.total) - Number(auditBefore?.total),
+    1,
+    '被拒绝的写入不能留下「改过了」的审计记录',
+  );
+});
+
+void test('GET /api/v1/automation/control 说明引擎能不能真的写入', async () => {
+  const { GET } = await import('../app/api/v1/automation/control/route.ts');
+  setRouteTestActor(admin);
+
+  const unconfigured = await GET(new Request('http://local/api/v1/automation/control'));
+  assert.equal(unconfigured.status, 200);
+  const idle = (await unconfigured.json()) as {
+    control: { paused: boolean; updatedAt: string | null; updatedBy: string | null };
+    engine: { actorConfigured: boolean; lastRunAt: string | null };
+  };
+  assert.equal(idle.control.paused, false);
+  assert.equal(idle.engine.actorConfigured, false, '没有服务账号时引擎不会写入任何东西，界面必须知道');
+  assert.equal(idle.engine.lastRunAt, null, '一轮都没跑过');
+  assert.equal(idle.control.updatedAt, null, '迁移播种的 1970 哨兵不是一次真实操作');
+  assert.equal(idle.control.updatedBy, null);
+
+  // 指向一个 active 的 admin 成员后，引擎才具备写入能力。
+  setRouteTestContext({ db: database, actor: admin, config: { automationActorId: admin.id } });
+  const configured = await GET(new Request('http://local/api/v1/automation/control'));
+  const ready = (await configured.json()) as { engine: { actorConfigured: boolean; actorId: string | null } };
+  assert.equal(ready.engine.actorConfigured, true);
+  assert.equal(ready.engine.actorId, admin.id);
+  setRouteTestContext({ db: database, actor: admin });
+});

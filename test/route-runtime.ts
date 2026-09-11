@@ -22,6 +22,7 @@ type RouteTestContext = {
     workerToken?: string;
     sourceWorkerToken?: string;
     renderWorkerToken?: string;
+    automationActorId?: string;
   };
 };
 
@@ -72,7 +73,7 @@ export const config = {
   get production() { return false; },
   get renderConcurrencyLimit() { return 2; },
   get monthlyRenderBudgetMicros() { return 0; },
-  get automationActorId() { return undefined; },
+  get automationActorId() { return required().config?.automationActorId; },
   get diagnosticsEnvironment() { return {}; },
 } as never;
 

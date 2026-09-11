@@ -45,18 +45,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (problems.length) return Response.json({ error: '策略无效。', issues: problems }, { status: 422 });
   const columns = serializeAutomationPolicy(next);
   const timestamp = now.toISOString();
-  await db.batch([
-    db.prepare(`
+  /*
+    `WHERE version = ?` 这一句以前写了但没人看结果：并发改同一条策略时，
+    后到的那次 UPDATE 影响 0 行、悄悄丢掉，却照样回 200 并写一条
+    automation_policy.updated 审计——丢更新之外还在审计流里留下假记录。
+    所以放进事务里，按受影响行数决定是提交还是报 409。
+  */
+  const applied = await db.transaction(async (tx) => {
+    const updated = await tx.prepare(`
       UPDATE automation_policies SET name = ?, scope_json = ?, stages_json = ?, auto_approvals_json = ?,
         research_authorized_by = ?, publish_authorized_by = ?, guardrails_json = ?, authorized_at = ?,
         expires_at = ?, enabled = ?, version = version + 1, updated_at = ?
       WHERE id = ? AND version = ?
-    `).bind(next.name, columns.scopeJson, columns.stagesJson, columns.autoApprovalsJson, next.researchAuthorizedBy, next.publishAuthorizedBy, columns.guardrailsJson, next.enabled ? (current.authorizedAt ?? timestamp) : null, next.expiresAt, next.enabled ? 1 : 0, timestamp, id, current.version),
-    db.prepare(`
+    `).bind(next.name, columns.scopeJson, columns.stagesJson, columns.autoApprovalsJson, next.researchAuthorizedBy, next.publishAuthorizedBy, columns.guardrailsJson, next.enabled ? (current.authorizedAt ?? timestamp) : null, next.expiresAt, next.enabled ? 1 : 0, timestamp, id, current.version).run();
+    if (!updated.meta.changes) return false;
+    await tx.prepare(`
       INSERT INTO audit_events (id, actor_id, actor_role, action, entity_type, entity_id, before_hash, after_hash, metadata_json, request_id, created_at)
       VALUES (?, ?, ?, 'automation_policy.updated', 'automation_policy', ?, ?, ?, ?, ?, ?)
-    `).bind(`audit_${crypto.randomUUID()}`, actor.id, actor.role, id, stableHash(current), stableHash(next), JSON.stringify({ enabled: next.enabled, stages: next.stages, autoApprovals: next.autoApprovals, expiresAt: next.expiresAt }), crypto.randomUUID(), timestamp),
-  ]);
+    `).bind(`audit_${crypto.randomUUID()}`, actor.id, actor.role, id, stableHash(current), stableHash(next), JSON.stringify({ enabled: next.enabled, stages: next.stages, autoApprovals: next.autoApprovals, expiresAt: next.expiresAt }), crypto.randomUUID(), timestamp).run();
+    return true;
+  });
+  if (!applied) return Response.json({ error: '策略已被他人修改，请刷新后重试。' }, { status: 409 });
   return Response.json({ policy: await loadAutomationPolicy(db, id) });
 }
 

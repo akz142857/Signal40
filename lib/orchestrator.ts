@@ -157,7 +157,12 @@ function parseJson<T>(value: unknown, fallback: T): T {
 }
 
 /** 服务账号：机械步骤以它的身份写入，必须真实存在且是 admin（要覆盖所有状态转换）。 */
-async function resolveAutomationActor(
+/**
+ * 编排引擎以哪个身份写入。解析不出来 tick 就整轮不做任何写入，
+ * 所以自动化控制台也用这一个函数判断「引擎到底能不能干活」——
+ * 界面重新实现一遍判据，就会出现界面说正常而引擎空转的情况。
+ */
+export async function resolveAutomationActor(
   db: SqlDatabase,
   userId: string | undefined,
 ): Promise<Actor | null> {
