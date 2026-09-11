@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { findOpenApiBreakingChanges } from '../lib/openapi-compatibility.ts';
+import { findOpenApiBreakingChanges, reconcileBreakingChangeApprovals } from '../lib/openapi-compatibility.ts';
 
 function document(operation: Record<string, unknown>) {
   return {
@@ -96,4 +96,18 @@ void test('operation removal needs an elapsed 90-day deprecation window', () => 
   assert.deepEqual(findOpenApiBreakingChanges(deprecated, removed, {
     asOf: new Date('2026-09-09T00:00:00Z'),
   }), []);
+});
+
+void test('breaking-change approvals must match the detected set exactly', () => {
+  assert.deepEqual(reconcileBreakingChangeApprovals(['approved change'], ['approved change']), {
+    unapproved: [],
+    stale: [],
+  });
+  assert.deepEqual(
+    reconcileBreakingChangeApprovals(
+      ['approved change', 'new change'],
+      ['approved change', 'resolved change'],
+    ),
+    { unapproved: ['new change'], stale: ['resolved change'] },
+  );
 });

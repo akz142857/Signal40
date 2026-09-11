@@ -1,0 +1,20 @@
+# 对已发布 OpenAPI baseline 的有意 breaking change 做精确、可审计的审批。
+# 不得用本文件笼统跳过兼容检查；检测结果必须与 changes 集合完全一致。
+version: 1
+baseline:
+  commit: 47a7596c459d24cec01412fd147f2f9c223ed77e
+  sha256: e112f01d842c62ecb0833e4ebb281c600753a343a939faa0de7eb2614906d861
+approvals:
+  - id: render-worker-lease-identity-v2
+    approvedAt: 2026-09-10
+    scope: Internal Render Worker commit endpoints
+    rationale: Require workerId and leaseEpoch to prevent stale or unauthorized Worker writeback.
+    rollout: Stop old Workers from leasing jobs, deploy control plane and Render Worker together, then resume leasing.
+    removeAfter: Rebuild the immutable baseline from the next real release.
+    changes:
+      - 'POST /projects/{projectId}/qc-reports request: allOf branch count changed from 0 to 2'
+      - 'POST /projects/{projectId}/qc-reports request: type changed from "object" to undefined'
+      - 'POST /projects/{projectId}/voice-tracks request: allOf branch count changed from 0 to 2'
+      - 'POST /projects/{projectId}/voice-tracks request: type changed from "object" to undefined'
+      - 'POST /publish-jobs/{publishJobId}/complete request: allOf branch count changed from 0 to 2'
+      - 'POST /publish-jobs/{publishJobId}/complete request: type changed from "object" to undefined'

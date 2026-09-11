@@ -7,6 +7,23 @@ export type OpenApiCompatibilityOptions = {
   asOf?: Date;
 };
 
+export type BreakingChangeApprovalResult = {
+  unapproved: string[];
+  stale: string[];
+};
+
+export function reconcileBreakingChangeApprovals(
+  detected: string[],
+  approved: string[],
+): BreakingChangeApprovalResult {
+  const detectedSet = new Set(detected);
+  const approvedSet = new Set(approved);
+  return {
+    unapproved: [...detectedSet].filter((change) => !approvedSet.has(change)).sort(),
+    stale: [...approvedSet].filter((change) => !detectedSet.has(change)).sort(),
+  };
+}
+
 function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as JsonObject

@@ -42,6 +42,8 @@ Render Worker 的 `voice-tracks`、`qc-reports`、`publish-jobs/{id}/complete` �
 2. 先停止旧 Worker 领取新作业，再升级控制面和 Worker，最后恢复领取。
 3. 在发布清单记录 Worker 协议升级和 artifact digest；下一次真实版本发布后再按既有流程建立新的不可变 baseline。
 
+CI 通过 `contracts/openapi.breaking-allowlist.yaml` 对上述 6 条结果做精确审批：审批文件绑定当前不可变 baseline 的 SHA-256，新增 breaking change 或已经失效的审批都会继续让门禁失败。这不是刷新 baseline；审批只覆盖本次内部 Worker 协议的协调升级，并应在下一次真实版本发布、重建 baseline 后删除。
+
 ## 4. 残余验收边界
 
 本轮证明的是 `Implemented locally`。下列事项不是代码发现复开，而是进入 `Integrated / Accepted` 所需的外部证据：真实认证代理双账号与 G7 异人审批、OpenAI TTS 授权声音、YouTube 测试频道续传/下架、OpenCLI 真实账号、目标环境 R2 保留/恢复、告警链路、目标环境恢复演练和 28 天 SLO 观察。详情见 [EXTERNAL_ACCEPTANCE.md](./EXTERNAL_ACCEPTANCE.md)。

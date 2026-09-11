@@ -28,7 +28,7 @@ npm run test:render           # render smoke test (needs Chromium/FFmpeg; CI run
 npm exec tsc -- --noEmit      # typecheck (not part of `npm run lint`)
 npm run lint / format         # oxlint / oxfmt
 npm run openapi:lint          # redocly lint contracts/openapi.yaml
-npm run openapi:breaking -- --baseline-git-ref <ref>   # reject breaking API changes vs a baseline
+npm run openapi:breaking -- --baseline contracts/openapi.baseline.yaml --allowlist contracts/openapi.breaking-allowlist.yaml   # reject unapproved breaking API changes
 
 npm run db:generate           # drizzle-kit: emit SQL migration from db/schema.ts changes
 npm run db:migrations:verify  # immutable-checksum check on already-registered migrations
