@@ -203,6 +203,7 @@ export function AutomationConsole() {
   const [detailTab, setDetailTab] = useState<PolicyDetailTab>('stages');
   const [draft, setDraft] = useState<PolicyDraft | null>(null);
   const [message, setMessage] = useState('');
+  const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -258,11 +259,14 @@ export function AutomationConsole() {
   const saveDraft = async (policy: AutomationPolicy) => {
     if (!draft) return;
     setSaving(true);
+    setNotice('');
     try {
       const response = await fetch(`/api/v1/automation/policies/${policy.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) });
       if (!response.ok) { setMessage(await readError(response)); return; }
-      setMessage(`${policy.name} 已保存。`);
+      // refresh() 成功时会把 message 清空，成功提示必须放在它之后，
+      // 而且要走自己的通道——message 只有报错那一种样式。
       await refresh();
+      setNotice(`${policy.name} 已保存，版本已推进。`);
     } finally { setSaving(false); }
   };
 
@@ -284,6 +288,7 @@ export function AutomationConsole() {
   };
 
   const openDetail = (policy: AutomationPolicy) => {
+    setNotice('');
     setDetailId(policy.id);
     setDetailTab('stages');
     setDraft(toDraft(policy));
@@ -420,7 +425,7 @@ export function AutomationConsole() {
               <Button disabled={!canEdit || !dirty || saving} onClick={() => void saveDraft(detailPolicy)}>{saving ? <LoaderCircle className="animate-spin" /> : null}保存修改</Button>
               <Button variant="outline" disabled={!dirty || saving} onClick={() => setDraft(toDraft(detailPolicy))}>放弃修改</Button>
               {canEdit && <Button variant="destructive" disabled={saving} onClick={() => void remove(detailPolicy)}>删除策略</Button>}
-              <span className="text-xs text-muted-foreground">{dirty ? '有未保存的修改' : '与服务端一致'}</span>
+              <span className={`text-xs ${notice && !dirty ? 'text-chart-1' : 'text-muted-foreground'}`}>{dirty ? '有未保存的修改' : notice || '与服务端一致'}</span>
             </div>
 
             <Tabs value={detailTab} onValueChange={(value) => setDetailTab(value as PolicyDetailTab)}>
