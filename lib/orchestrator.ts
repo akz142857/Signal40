@@ -23,14 +23,18 @@ import {
 import {
   activeAutomationPolicies,
   autoApprovalDecision,
+  breakerStatus,
   inQuietHours,
+  isGlobalStage,
   policyMatchesProject,
   policyMatchesTopic,
   resolveAuthorizedMember,
   stageMode,
+  BREAKER_FAILURE_THRESHOLD,
   type ApprovalKind,
   type AutomationPolicy,
   type AutomationStage,
+  type BreakerState,
 } from './automation.ts';
 import { raiseAttentionItem, notifyPendingAttention } from './attention.ts';
 import { expireDueSourceRights } from './source-rights.ts';
@@ -97,17 +101,9 @@ export const DEFAULT_TICK_LIMITS: TickLimits = {
   stepsPerProject: 3,
 };
 
-/** 同一阶段连续失败这么多次就熔断，暂停该阶段并进待办箱。 */
-export const BREAKER_FAILURE_THRESHOLD = 3;
-/** 熔断冷却时长；冷却结束后放行一次，成功即复位。 */
-export const BREAKER_COOLDOWN_MS = 15 * 60_000;
 /** 选取本轮项目集合用的短锁；多个调度器实例并发时只有一个能选到同一批项目。 */
 export const AUTOMATION_ADVISORY_LOCK_KEY = 519_400_001;
 
-export type BreakerState = Record<
-  string,
-  { failures: number; openedAt: string | null; lastError: string }
->;
 
 export type TickAction = {
   stage: AutomationStage | 'cleanup' | 'notify';
@@ -187,12 +183,7 @@ async function previousBreakers(db: SqlDatabase): Promise<BreakerState> {
 }
 
 function breakerOpen(breakers: BreakerState, stage: string, now: Date) {
-  const state = breakers[stage];
-  if (!state || state.failures < BREAKER_FAILURE_THRESHOLD || !state.openedAt)
-    return false;
-  return (
-    now.valueOf() - new Date(state.openedAt).valueOf() < BREAKER_COOLDOWN_MS
-  );
+  return breakerStatus(breakers, stage, now) === 'open';
 }
 
 function recordFailure(
@@ -1626,12 +1617,12 @@ export async function runAutomationTick(
   if (candidateIds === null)
     return finish('skipped', 0, 'another_tick_running');
 
+  // 全局阶段对所有启用中的策略取「或」；没有任何策略时它们仍按默认跑，
+  // 否则一条策略都没配就连采集都停了。哪些是全局阶段见 lib/automation.ts。
   const stageAllowed = (stage: AutomationStage) =>
     policies.length
       ? policies.some((policy) => stageMode(policy, stage) === 'auto')
-      : stage === 'ingestion' ||
-        stage === 'topic_quality' ||
-        stage === 'metrics';
+      : isGlobalStage(stage);
 
   if (!breakerOpen(breakers, 'ingestion', now))
     await runIngestion(runner, stageAllowed('ingestion'));

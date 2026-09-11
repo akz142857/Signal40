@@ -7,6 +7,17 @@ import { listWorkers, orphanedJobs, pruneStaleWorkers, recordWorkerHeartbeat } f
 import { listAttentionItems, notifyPendingAttention, raiseAttentionItem, resolveAttentionItem } from '../lib/attention.ts';
 import { inspectStorageCredentials, runDiagnostics } from '../lib/diagnostics.ts';
 import { checkScriptCompliance } from '../lib/script-compliance.ts';
+import {
+  BREAKER_COOLDOWN_MS,
+  BREAKER_FAILURE_THRESHOLD,
+  GLOBAL_AUTOMATION_STAGES,
+  SELECTABLE_STAGE_MODES,
+  breakerStatus,
+  defaultAutomationPolicy,
+  isGlobalStage,
+  stageMode,
+} from '../lib/automation.ts';
+import { readFile } from 'node:fs/promises';
 import { sampleArticles } from './fixtures/sample-articles.ts';
 import { createMemoryPg } from './pg-memory.ts';
 
@@ -238,4 +249,59 @@ void test('表达合规只挡自动放行：荐股与收益承诺被识别，正
   const noDisclaimer = checkScriptCompliance({ disclaimer: '', lines: [{ id: 'line_1', text: '事实陈述。' }] });
   assert.equal(noDisclaimer.passed, false);
   assert.equal(noDisclaimer.disclaimerOk, false);
+});
+
+/*
+  自动化控制台第二批修复的回归覆盖：界面上摆出来的每个选项，引擎都必须真的
+  分得出差别；界面和引擎对「哪些阶段是全局的」「熔断到底挡没挡住」必须用同一份判据。
+*/
+
+void test('阶段只有自动与不自动：历史落库的 manual 归一成 off', () => {
+  const policy = {
+    ...defaultAutomationPolicy(),
+    id: 'policy_legacy',
+    name: '历史策略',
+    version: 1,
+    stages: { ...defaultAutomationPolicy().stages, advance: 'manual' as const, jobs: 'off' as const, publish: 'auto' as const },
+  };
+  // 引擎里所有判断都是 === 'auto'，manual 和 off 走的是同一个分支；
+  // 界面曾经把它当第三个可选项摆出来，选了什么都不会变。
+  assert.equal(stageMode(policy, 'advance'), 'off');
+  assert.equal(stageMode(policy, 'jobs'), 'off');
+  assert.equal(stageMode(policy, 'publish'), 'auto');
+  assert.deepEqual([...SELECTABLE_STAGE_MODES], ['auto', 'off']);
+});
+
+void test('全局阶段的定义由 lib 给出，界面和引擎共用一份', () => {
+  // 采集、选题质量评估、指标回流不挂在项目上，引擎对所有启用中的策略取「或」。
+  assert.deepEqual([...GLOBAL_AUTOMATION_STAGES], ['ingestion', 'topic_quality', 'metrics']);
+  for (const stage of GLOBAL_AUTOMATION_STAGES) assert.equal(isGlobalStage(stage), true, stage);
+  for (const stage of ['project_creation', 'advance', 'jobs', 'publish'] as const) {
+    assert.equal(isGlobalStage(stage), false, stage);
+  }
+});
+
+void test('熔断冷却结束后是「下一轮会重试」，不是「仍然熔断」', () => {
+  const openedAt = new Date('2026-09-11T00:00:00.000Z');
+  const breakers = {
+    publish: { failures: BREAKER_FAILURE_THRESHOLD, openedAt: openedAt.toISOString(), lastError: '上游 503' },
+    jobs: { failures: BREAKER_FAILURE_THRESHOLD - 1, openedAt: null, lastError: '偶发超时' },
+  };
+  assert.equal(breakerStatus(breakers, 'publish', new Date(openedAt.valueOf() + 60_000)), 'open');
+  // failures 要等一次成功才清零，只看次数会把正在重试的阶段说成「已熔断」。
+  assert.equal(breakerStatus(breakers, 'publish', new Date(openedAt.valueOf() + BREAKER_COOLDOWN_MS + 1)), 'cooling_down');
+  assert.equal(breakerStatus(breakers, 'jobs', new Date(openedAt.valueOf() + 60_000)), 'closed');
+  assert.equal(breakerStatus(breakers, 'metrics', openedAt), 'closed');
+});
+
+void test('自动化控制台不再逐字段写库，且删除策略要二次确认', async () => {
+  const console_ = await readFile(new URL('../components/automation-console.tsx', import.meta.url), 'utf8');
+  // 每个输入框的 onChange 直接 PATCH 会把审计流塞满，还会跟正在打字的人抢输入框。
+  assert.match(console_, /const \[draft, setDraft\] = useState<PolicyDraft \| null>/);
+  assert.match(console_, /saveDraft/);
+  assert.doesNotMatch(console_, /onChange=\{\(event\) => void update\(policy/);
+  // 删除会把名下项目全部退回人工，不能点一下就执行。
+  assert.match(console_, /window\.confirm\(/);
+  // 角色分渲染：只读角色看到的不是一堆注定 403 的控件。
+  assert.match(console_, /const canEdit = session\.actor\?\.role === 'admin'/);
 });
