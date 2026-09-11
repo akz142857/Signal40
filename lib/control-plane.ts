@@ -1530,7 +1530,7 @@ export async function enqueueIngestionRun(
         config_hash: string;
       }>();
     if (!rightsGrant || rightsGrant.purpose !== INGESTION_RIGHTS_PURPOSE) {
-      throw new Error('来源没有当前有效的财经编辑采集授权。');
+      throw new Error('来源没有当前有效的编辑采集授权。');
     }
     if (
       ![NORMALIZED_METADATA_SCOPE, AUTHORIZED_RAW_SCOPE].includes(

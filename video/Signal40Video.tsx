@@ -58,7 +58,7 @@ function SceneFrame({ children, templateId, palette, accent = palette.primary }:
         <span style={{ width: 18, height: 18, borderRadius: isTerminal ? 2 : 20, background: accent, boxShadow: isBrief ? 'none' : `0 0 28px ${accent}` }} /> Signal 40 · Evidence first
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', transform: `translateY(${interpolate(enter, [0, 1], [48, 0])}px)` }}>{children}</div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: `2px solid ${palette.paper}25`, paddingTop: 28, fontSize: 24, color: palette.muted }}><span>财经事实解读</span><span>不构成投资建议</span></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: `2px solid ${palette.paper}25`, paddingTop: 28, fontSize: 24, color: palette.muted }}><span>事实解读</span><span>不构成投资建议</span></div>
     </AbsoluteFill>
   );
 }

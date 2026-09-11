@@ -11,7 +11,7 @@ import { FINANCE_TERMS, similarity, tokensFor, type Article, type TopicCandidate
  *
  * 1. 簇内主题一致性——文章两两之间的关键词重合度分布，而不是来源数；
  * 2. 声明与证据的对应唯一性——同一批证据同时支撑多条声明，说明证据没有真正绑定到声明；
- * 3. 语言与词表匹配度——`lib/domain.ts` 的分词与财经词表是按中文语料调的，
+ * 3. 语言与词表匹配度——`lib/domain.ts` 的分词与主题词表是按中文语料调的，
  *    英文簇上分词退化成裸词匹配，不能拿它的聚类结果去自动生产内容。
  *
  * 判定结果只决定「能不能自动建项目」。不达标的选题照常进人工待办箱，
@@ -121,8 +121,8 @@ export function assessTopicQuality(
   if (pairwise.length && coherence < MIN_COHERENCE) reasons.push(`簇内关键词重合度中位数 ${round(coherence)} 低于 ${MIN_COHERENCE}，聚类可能把不相关的报道并到了一起。`);
   if (articles.length > MAX_COHERENT_CLUSTER_SIZE && coherence < 0.4) reasons.push(`簇内有 ${articles.length} 篇文章但一致性只有 ${round(coherence)}，属于聚类失效而不是热点集中。`);
   if (distinctness < MIN_EVIDENCE_DISTINCTNESS) reasons.push(`声明与证据的对应唯一性 ${round(distinctness)} 低于 ${MIN_EVIDENCE_DISTINCTNESS}，同一批证据同时支撑多条声明。`);
-  if (language !== 'zh') reasons.push(`簇文本语言判定为 ${language}，而分词与财经词表按中文语料调校，不能据此自动生产内容。`);
-  else if (lexiconCoverage < MIN_LEXICON_COVERAGE) reasons.push(`财经词表覆盖率 ${round(lexiconCoverage)} 低于 ${MIN_LEXICON_COVERAGE}，选题与财经领域的相关性不足。`);
+  if (language !== 'zh') reasons.push(`簇文本语言判定为 ${language}，而分词与主题词表按中文语料调校，不能据此自动生产内容。`);
+  else if (lexiconCoverage < MIN_LEXICON_COVERAGE) reasons.push(`主题词表覆盖率 ${round(lexiconCoverage)} 低于 ${MIN_LEXICON_COVERAGE}，选题与词表所描述领域的相关性不足。`);
 
   return {
     version: TOPIC_QUALITY_VERSION,

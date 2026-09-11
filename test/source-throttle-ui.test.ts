@@ -7,6 +7,10 @@ const operations = fs.readFileSync(
   'components/operations-dashboard.tsx',
   'utf8',
 );
+const connectorRelease = fs.readFileSync(
+  'components/connector-release-control.tsx',
+  'utf8',
+);
 
 void test('source UI configures priority and explains deterministic budget throttling', () => {
   for (const marker of [
@@ -35,7 +39,9 @@ void test('operations UI exposes current multiplier, skipped count, and recovery
   }
 });
 
-void test('source UI exposes stable-bucket connector canary and automatic stop controls', () => {
+// 发布控制搬到了运维页，但它是连接器版本的控制面，不是来源的控制面：
+// 断言跟着实现走到 connector-release-control，来源页只需要留下摘要和入口。
+void test('connector release UI exposes stable-bucket canary and automatic stop controls', () => {
   for (const marker of [
     '灰度来源比例（1–100）',
     '自动停止失败率（0.01–100%）',
@@ -46,6 +52,16 @@ void test('source UI exposes stable-bucket connector canary and automatic stop c
     'canaryFailureRateBps',
     'canaryMinRuns',
   ]) {
-    assert.ok(manager.includes(marker), marker);
+    assert.ok(connectorRelease.includes(marker), marker);
+  }
+  assert.ok(
+    operations.includes('<ConnectorReleaseControl />'),
+    '运维页挂载发布控制',
+  );
+  for (const marker of ['<ConnectorReleaseSummary', 'href="/operations"']) {
+    assert.ok(
+      manager.includes(marker) || connectorRelease.includes(marker),
+      marker,
+    );
   }
 });

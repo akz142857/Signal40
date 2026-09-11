@@ -113,3 +113,27 @@ void test('页面容器使用同一档纵向间距', () => {
     }
   }
 });
+
+void test('每一页都有自己的浏览器标签标题', () => {
+  // 根布局曾经写死 title: 'Signal 40 · 选题雷达'，于是切到来源、自动化、运营
+  // 任何一页，浏览器标签都还写着「选题雷达」。
+  const layout = readFileSync(new URL('../app/layout.tsx', import.meta.url), 'utf8');
+  assert.match(layout, /title: \{ default: 'Signal 40', template: '%s' \}/);
+  assert.doesNotMatch(layout, /title: 'Signal 40 · 选题雷达'/);
+
+  for (const [page, title] of [
+    ['app/page.tsx', '选题雷达'],
+    ['app/sources/page.tsx', '来源控制台'],
+    ['app/automation/page.tsx', '自动化控制台'],
+    ['app/operations/page.tsx', '运行与 SLO'],
+    ['app/inbox/page.tsx', '待办'],
+    ['app/governance/page.tsx', '治理'],
+    ['app/settings/diagnostics/page.tsx', '系统自检'],
+  ] as const) {
+    assert.match(
+      readFileSync(new URL(`../${page}`, import.meta.url), 'utf8'),
+      new RegExp(`export const metadata: Metadata = \\{ title: 'Signal 40 · ${title}' \\}`),
+      page,
+    );
+  }
+});

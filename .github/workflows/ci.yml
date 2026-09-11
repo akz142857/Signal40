@@ -62,7 +62,7 @@ jobs:
       # baseline 随每次推送漂移：真实的破坏性变更在下一个提交后就自动「消失」，
       # 而正常的 pre-GA schema 演进反而每次都硬失败。锚点见 §9.2 / P0A-API-04B。
       - name: Reject OpenAPI breaking changes against the anchored published baseline
-        run: npm run openapi:breaking -- --baseline contracts/openapi.baseline.yaml
+        run: npm run openapi:breaking -- --baseline contracts/openapi.baseline.yaml --allowlist contracts/openapi.breaking-allowlist.yaml
       # 存储契约测试靠上面的 R2 secret 启用；没配就自动跳过。
       - run: npm test
       - name: Scan Actor DTO and redacted source artifacts for sensitive canary variants

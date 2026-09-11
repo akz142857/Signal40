@@ -28,8 +28,63 @@ export const AUTOMATION_STAGES = [
 ] as const;
 
 export type AutomationStage = (typeof AUTOMATION_STAGES)[number];
+
+/**
+ * 采集、选题质量评估、指标回流不挂在某个项目上，编排引擎对它们取「任一启用中的
+ * 策略开着就跑」；其余四个阶段才是按项目所属策略逐个判定的。
+ *
+ * 这个区分以前只存在于 orchestrator 里一处硬编码的 `stage === 'ingestion' || …`，
+ * 界面把七个阶段排成一模一样的网格，于是在 A 策略上关掉采集、采集照跑（因为 B
+ * 说了 auto）看起来像 bug。放在这里，引擎和界面共用同一份定义。
+ */
+export const GLOBAL_AUTOMATION_STAGES = [
+  'ingestion',
+  'topic_quality',
+  'metrics',
+] as const satisfies readonly AutomationStage[];
+
+export function isGlobalStage(stage: AutomationStage) {
+  return (GLOBAL_AUTOMATION_STAGES as readonly AutomationStage[]).includes(stage);
+}
+
+/**
+ * `manual` 是历史值。引擎里所有判断都是 `=== 'auto'`，也就是 `manual` 和 `off`
+ * 走完全相同的分支——界面却把它当成第三个选项摆出来，选了以后什么都不会变。
+ *
+ * 类型保留三个值，好让已经落库的 stages_json 照常解析；`stageMode()` 把 `manual`
+ * 归一成 `off`，让「不自动」这件事是显式的而不是碰巧的。界面只提供两个选项。
+ */
 export type StageMode = 'auto' | 'manual' | 'off';
 export const STAGE_MODES = ['auto', 'manual', 'off'] as const;
+export const SELECTABLE_STAGE_MODES = ['auto', 'off'] as const;
+
+/** 同一阶段连续失败这么多次就熔断，暂停该阶段并进待办箱。 */
+export const BREAKER_FAILURE_THRESHOLD = 3;
+/** 熔断冷却时长；冷却结束后放行一次，成功即复位。 */
+export const BREAKER_COOLDOWN_MS = 15 * 60_000;
+
+export type BreakerState = Record<
+  string,
+  { failures: number; openedAt: string | null; lastError: string }
+>;
+
+/**
+ * 某个阶段此刻是真的被挡住，还是冷却已过、下一轮就会重试。
+ *
+ * `failures` 要等一次成功才清零，所以只看 `failures >= 阈值` 会把「正在重试」
+ * 说成「已熔断」。引擎放行与否看的是冷却窗口，界面必须用同一个判据。
+ */
+export function breakerStatus(
+  breakers: BreakerState,
+  stage: string,
+  now: Date,
+): 'closed' | 'open' | 'cooling_down' {
+  const state = breakers[stage];
+  if (!state || state.failures < BREAKER_FAILURE_THRESHOLD || !state.openedAt) return 'closed';
+  return now.valueOf() - new Date(state.openedAt).valueOf() < BREAKER_COOLDOWN_MS
+    ? 'open'
+    : 'cooling_down';
+}
 
 export type ApprovalKind = 'research' | 'script' | 'qc' | 'publish';
 
@@ -219,8 +274,9 @@ export function isPolicyActive(policy: AutomationPolicy, now = new Date()) {
   return { active: true, reason: '' };
 }
 
-export function stageMode(policy: AutomationPolicy, stage: AutomationStage): StageMode {
-  return policy.stages[stage] ?? 'manual';
+/** 引擎只认 auto 与不自动两种；历史落库的 `manual` 在这里归一成 `off`。 */
+export function stageMode(policy: AutomationPolicy, stage: AutomationStage): 'auto' | 'off' {
+  return policy.stages[stage] === 'auto' ? 'auto' : 'off';
 }
 
 export function inQuietHours(policy: AutomationPolicy, now = new Date()) {

@@ -305,7 +305,7 @@ export function RadarDashboard({
         {
           name: 'list_topic_candidates',
           title: '读取选题候选',
-          description: '读取当前工作台中达到指定最低分数的财经选题候选。',
+          description: '读取当前工作台中达到指定最低分数的选题候选。',
           inputSchema: {
             type: 'object',
             properties: {
@@ -344,7 +344,7 @@ export function RadarDashboard({
           name: 'import_topic_articles',
           title: '导入文章并分析',
           description:
-            '导入已经获得授权的财经文章元数据，运行聚类评分并保存结果。',
+            '导入已经获得授权的文章元数据，运行聚类评分并保存结果。',
           inputSchema: {
             type: 'object',
             additionalProperties: false,
@@ -479,16 +479,13 @@ export function RadarDashboard({
     (topic) => topic.gate.passed && topic.verificationStatus === 'verified',
   ).length;
   const lead = topics[0];
-  const heat = lead
-    ? [34, 42, 38, 51, 58, 66, Math.max(72, lead.score - 8), lead.score]
-    : [];
 
   return (
     <main className="min-h-screen bg-background text-foreground">
       <PageHeader
         icon={<Radar className="size-5" />}
         title="选题雷达"
-        subtitle="今天值得拍的财经题：高分表示值得研究，只有通过自动证据门禁并经人工批准才能导出视频协议。"
+        subtitle="今天值得拍的选题：高分表示值得研究，只有通过自动证据门禁并经人工批准才能导出视频协议。"
         actions={<>
           <span className="hidden items-center gap-2 text-sm text-muted-foreground xl:flex">
             <span className="size-2 rounded-full bg-chart-1 shadow-[0_0_0_4px_var(--color-signal-glow)]" />
@@ -613,43 +610,6 @@ export function RadarDashboard({
         </section>
 
         <aside className="space-y-4">
-          <section className="overflow-hidden rounded-2xl border border-border bg-card">
-            <div className="flex items-center justify-between border-b border-border p-4">
-              <div>
-                <p className="font-mono text-xs uppercase tracking-[0.15em] text-muted-foreground">
-                  Topic heat
-                </p>
-                <h2 className="mt-1 font-semibold">
-                  {lead?.keywords[0]?.toUpperCase() || '主题'} 升温
-                </h2>
-              </div>
-              <span className="font-mono text-2xl font-semibold text-chart-1">
-                {lead?.score ?? '—'}
-              </span>
-            </div>
-            <div className="p-4">
-              <div
-                className="flex h-28 items-end gap-2"
-                aria-label="头部选题热度走势"
-              >
-                {heat.map((value, index) => (
-                  <span
-                    key={`${value}-${index}`}
-                    className="flex-1 rounded-t bg-chart-1/20"
-                    style={{ height: `${value}%` }}
-                  >
-                    <span
-                      className={`block w-full rounded-t bg-chart-1 ${index === heat.length - 1 ? 'h-full' : 'h-[7px]'}`}
-                    />
-                  </span>
-                ))}
-              </div>
-              <div className="mt-2 flex justify-between font-mono text-[11px] text-muted-foreground">
-                <span>8 小时前</span>
-                <span>现在</span>
-              </div>
-            </div>
-          </section>
           {lead && (
             <section className="rounded-2xl border border-border bg-card p-4">
               <div className="mb-4 flex items-center gap-2">
@@ -708,7 +668,7 @@ export function RadarDashboard({
             value={importText}
             onChange={(event) => setImportText(event.target.value)}
             placeholder={
-              'source,sourceType,title,url,publishedAt,summary\n财经来源,media,标题,https://example.com/a,2026-09-08T02:00:00Z,摘要'
+              'source,sourceType,title,url,publishedAt,summary\n示例来源,media,标题,https://example.com/a,2026-09-08T02:00:00Z,摘要'
             }
           />
           <p className="text-xs text-muted-foreground">
@@ -776,7 +736,7 @@ export function RadarDashboard({
                         ['簇内一致性', selected.quality.coherence],
                         ['一致性下限', selected.quality.coherenceFloor],
                         ['证据区分度', selected.quality.evidenceDistinctness],
-                        ['财经词表覆盖', selected.quality.lexiconCoverage],
+                        ['主题词表覆盖', selected.quality.lexiconCoverage],
                       ].map(([label, value]) => <div className="rounded-xl bg-secondary/70 p-3" key={String(label)}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-mono text-xl font-semibold">{Math.round(Number(value) * 100)}%</p></div>)}
                     </div>
                     <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 语言：{selected.quality.language} · {selected.quality.automatable ? '允许自动建项目' : '禁止自动建项目'}</p>

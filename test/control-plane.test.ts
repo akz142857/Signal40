@@ -169,7 +169,7 @@ void test('采集入队拒绝缺失或与当前配置不匹配的授权', async 
     enqueueIngestionRun(db, {
       sourceConfigId: 'source-stale-rights', idempotencyKey: 'stale-rights', actor,
     }, baseTime),
-    /没有当前有效的财经编辑采集授权/,
+    /没有当前有效的编辑采集授权/,
   );
   assert.equal(Number(((await db.client.query("SELECT COUNT(*) AS total FROM jobs WHERE idempotency_key = 'stale-rights'")).rows[0] as { total: number }).total), 0);
 });

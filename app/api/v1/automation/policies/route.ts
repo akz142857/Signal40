@@ -24,7 +24,9 @@ export async function GET(request: Request) {
     `)
       .bind(since)
       .all<{ policy_id: string; cost_micros: number }>(),
-    db.prepare('SELECT automation_policy_id AS policy_id, COUNT(*) AS project_count FROM content_projects WHERE automation_policy_id IS NOT NULL GROUP BY automation_policy_id').all<{ policy_id: string; project_count: number }>(),
+    // 项目数和成本并排显示成「近 30 天」，所以两条查询必须用同一个时间窗，
+    // 否则一个是 30 天、一个是全时段，看的人无从分辨。
+    db.prepare('SELECT automation_policy_id AS policy_id, COUNT(*) AS project_count FROM content_projects WHERE automation_policy_id IS NOT NULL AND created_at >= ? GROUP BY automation_policy_id').bind(since).all<{ policy_id: string; project_count: number }>(),
     db.prepare(`
       SELECT COALESCE(metadata_json ->> 'trigger', 'human') AS trigger, COUNT(*) AS total
       FROM audit_events WHERE created_at >= ? GROUP BY COALESCE(metadata_json ->> 'trigger', 'human')
@@ -37,9 +39,12 @@ export async function GET(request: Request) {
     policies: await listAutomationPolicies(db),
     defaults: defaultAutomationPolicy(),
     costs: Object.fromEntries([...policyIds].map((id) => [id, { projectCount: projectByPolicy.get(id) ?? 0, costMicros: costByPolicy.get(id) ?? 0 }])),
+    // 只有显式写了 trigger 的审计事件才能分辨来源，其余（worker 写的作业完成、
+    // 采集提交等）既不是自动化也不是人工，所以这里只分「自动化」与「其余」，
+    // 不把没有标注的一律算成人工——那会让自动化占比系统性偏低。
     activity: {
       automated: Number(activity.results.find((row) => row.trigger === 'automation')?.total ?? 0),
-      human: activity.results.filter((row) => row.trigger !== 'automation').reduce((sum, row) => sum + Number(row.total), 0),
+      other: activity.results.filter((row) => row.trigger !== 'automation').reduce((sum, row) => sum + Number(row.total), 0),
       since,
     },
   });
