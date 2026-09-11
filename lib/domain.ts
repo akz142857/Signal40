@@ -170,6 +170,20 @@ function shortHash(value: string) {
   return sha256Hex(value).slice(0, 16);
 }
 
+/**
+ * 形如 example.com、a-b.co.uk 的主机名。
+ *
+ * Google News 的 RSS 把来源域名追加在标题末尾（“…… - washingtonpost.com”），
+ * 于是这个域名出现在该媒体的每一条标题里。当成话题词，同一家媒体的两条无关
+ * 报道会因为共享域名而被判为相似；当成关键词，它又因为够长而顶掉真正的主题词
+ * ——首页上就出现过一条 Trump/Epstein 的新闻被标成
+ * “RESPIRATORY-THERAPY.COM 升温”。
+ *
+ * 用通用形状而不是 TLD 名单：名单一定会漏，而这里判错的方向是丢掉一个词，
+ * 比把域名当主题安全。代价是 node.js 这类带点的词也会被丢，财经语料里可以接受。
+ */
+const HOSTNAME_TOKEN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/;
+
 function clean(value: string) {
   return value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
@@ -179,6 +193,7 @@ export function tokensFor(article: Pick<ArticleInput, 'title' | 'summary'>) {
   const tokens = new Set<string>();
 
   for (const match of text.matchAll(/[a-z][a-z0-9.+-]{1,}|\d+(?:\.\d+)?%?/g)) {
+    if (HOSTNAME_TOKEN.test(match[0])) continue;
     tokens.add(match[0]);
   }
   for (const term of FINANCE_TERMS) {

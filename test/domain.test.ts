@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   normalizeArticles,
   runPipeline,
+  tokensFor,
   type ArticleInput,
 } from '../lib/domain.ts';
 import { sampleArticles } from './fixtures/sample-articles.ts';
@@ -10,6 +11,54 @@ import { createVideoProject } from '../lib/video-project.ts';
 import { parseArticleImport } from '../lib/import.ts';
 
 const now = new Date('2026-09-08T02:00:00.000Z');
+
+void test('域名不进话题词：既不当关键词，也不参与聚类', () => {
+  // Google News 的 RSS 把来源域名追加在标题末尾，于是它出现在该媒体的每一条标题里。
+  const tokens = tokensFor({
+    title: 'Democrats play up Trump investigations in Dallas - washingtonpost.com',
+    summary: '转载自 respiratory-therapy.com 与 https://example.co.uk/a。',
+  });
+  for (const host of [
+    'washingtonpost.com',
+    'respiratory-therapy.com',
+    'example.co.uk',
+  ]) {
+    assert.equal(tokens.has(host), false, host);
+  }
+  // 带点、带连字符的普通词不能被一起误伤。
+  const kept = tokensFor({
+    title: 'covid-19 拖累 inc. 的 q3 营收',
+    summary: '毛利率 12.5%。',
+  });
+  for (const token of ['covid-19', 'inc.', 'q3', '12.5%']) {
+    assert.equal(kept.has(token), true, token);
+  }
+
+  // 同一家媒体的两条无关报道，此前会因为共享域名而被判为相似。
+  const sameOutlet = runPipeline(
+    [
+      {
+        title: 'Democrats play up Trump investigations - washingtonpost.com',
+        url: 'https://news.google.com/a',
+        source: 'Google News',
+        sourceType: 'media',
+        publishedAt: '2026-09-08T01:00:00.000Z',
+      },
+      {
+        title: 'Dallas convention traffic advisory - washingtonpost.com',
+        url: 'https://news.google.com/b',
+        source: 'Google News',
+        sourceType: 'media',
+        publishedAt: '2026-09-08T01:10:00.000Z',
+      },
+    ],
+    now,
+  );
+  assert.equal(sameOutlet.length, 2);
+  for (const topic of sameOutlet) {
+    assert.equal(topic.keywords.includes('washingtonpost.com'), false);
+  }
+});
 
 void test('normalization removes exact URL and title duplicates', () => {
   const input = sampleArticles(now)[0];
