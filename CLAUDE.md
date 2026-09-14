@@ -8,6 +8,8 @@ Signal 40 is an evidence-first short-video production system (topic-agnostic; th
 
 `docs/IMPLEMENTATION_STATUS.md` is the acceptance ledger and uses a fixed vocabulary: `Implemented locally → Delivered → Deployed → Integrated → Accepted` (`Blocked`/`Experimental` are orthogonal tags). "Implemented locally" means code plus local evidence exists; "Accepted" additionally requires the target environment, real upstream, and a named owner. Never upgrade a status in the docs without that evidence, and never invent "Integrated locally".
 
+Other docs worth reading before touching their subsystem: `docs/OPERATIONS_RUNBOOK.md` (on-call, backup/restore), `docs/SOURCE_SLO_POLICY.md` (the versioned SLO policy the code implements), `docs/SOURCE_INGESTION_THREAT_MODEL.md`, `docs/SOURCE_CHAOS_DRILL.md`, `docs/RELEASE_CHECKLIST.md`.
+
 ## Commands
 
 Requires Node 22.13+ (native TS via `--experimental-strip-types`), FFmpeg, Docker for real renders.
@@ -21,7 +23,7 @@ make check                    # lint + typecheck + openapi-lint + test + test-ev
 make verify                   # check + test-render + drill-restore + audit (full local release gate)
 docker compose up -d          # local PostgreSQL (host port 55432), control plane, workers, scheduler
 
-npm test                                                       # node --test test/*.test.ts (56 files)
+npm test                                                       # node --test test/*.test.ts (~260 tests; 3 object-storage contract tests skip without R2 credentials)
 node --test --experimental-strip-types test/workflow.test.ts   # single test file
 npm run test:evaluation       # 100-scenario synthetic gate-contract regression
 npm run test:render           # render smoke test (needs Chromium/FFmpeg; CI runs it in Docker)
@@ -44,6 +46,8 @@ npm run worker          # combined; development only — forbidden in production
 npm run scheduler       # resident orchestration loop (needs SIGNAL40_AUTOMATION_ACTOR_ID to write anything)
 ```
 
+Local config lives in the repo-root `.env` (template: `.env.example`); `vinext` loads it natively, node scripts via `--env-file-if-exists=.env`, shell scripts via `scripts/lib-pg.sh`; already-exported variables win. Compose does **not** inject the whole `.env` — each workload gets an explicit allowlist, verified by `compose:env:verify`.
+
 Operational / diagnostic scripts: `walk` (drive a project through the workflow), `ingest:real`, `check:storage`, `source-slo:report`, `source:chaos`, `source:sensitive-canary`, `social-evidence:evaluate`, `drill:restore`, `image:verify`, `compose:env:verify`.
 
 Local video pipeline from an exported project: `project:migrate` → `voice:local` → `render` → `qc:media` (see README). `qc:media` exits non-zero when narration/subtitles/music don't cover the timeline — that is a publish blocker by design, never silently shorten target duration.
@@ -55,7 +59,7 @@ CI (`.github/workflows/ci.yml`) has two jobs. `application` runs against a Postg
 Three runtimes sharing `lib/`:
 
 1. **Control plane** — vinext (Next-style App Router on Vite) served by a plain Node process (`vinext start`, `Dockerfile`). PostgreSQL and Cloudflare R2 (via its S3-compatible endpoint) are wired up in `lib/runtime.ts` — the only `lib/` module that reads `process.env`. REST API under `app/api/v1/` (contract: `contracts/openapi.yaml`); UI pages: `/` topic radar, `/sources`, `/projects/[id]` workbench, `/automation`, `/inbox`, `/operations`, `/governance`, `/settings/diagnostics`.
-2. **Source worker** (`source-worker/Dockerfile`, same `render-worker/worker.ts` entrypoint under `SIGNAL40_WORKER_PROFILE=source`) — leases only `ingestion` jobs. It has no database, object-storage, or media credentials.
+2. **Source worker** (`source-worker/Dockerfile`, same `render-worker/worker.ts` entrypoint under `SIGNAL40_WORKER_PROFILE=source`) — leases only `ingestion` jobs. It has no database, object-storage, or media credentials. WeChat/Xiaohongshu sources can run either OpenCLI search (needs a host Chrome profile + Browser Bridge, so it does not work in the default container) or an approved third-party RSS/RSSHub feed; OpenCLI is candidate discovery, not a verified account subscription.
 3. **Render worker** (`render-worker/`) — Docker image with Chromium/FFmpeg; runs Remotion renders (`video/` compositions via `render-worker/render.ts`), OpenAI TTS, media QC, and publish.
 
 Workers poll the control plane's job-lease API (`/api/v1/jobs/lease`) with `x-worker-token`. The queue is PostgreSQL leases (`SELECT ... FOR UPDATE SKIP LOCKED`) with heartbeat renewal, lease epochs, backoff and DLQ (at-least-once). Leases are also gated on declared worker `capabilities` (`source:rss`, `source:http-json`, …) and an integer `capabilityProtocolVersion` per capability — the connector's *protocol* version gates lease authorization; its product version does not.
@@ -79,7 +83,7 @@ Infrastructure adapters:
 - `workload-env.ts` — resolves the worker profile and its token, and in production mode *refuses to start* a combined worker, a shared worker token, or a process whose environment carries variables outside its profile's blast radius. Adding an env var to a worker means updating the forbidden lists here.
 - `net-guard.ts` — SSRF guards (URL scheme/redirect/DNS-private-range checks) used by every outbound fetch.
 
-Source subscription and ingestion (the largest subsystem, ~40 `lib/source-*.ts` modules, one test file each):
+Source subscription and ingestion (the largest subsystem, ~30 `lib/source-*.ts` modules plus `lib/source-connectors/`, each with its own test file):
 
 - `source-lifecycle-status.ts` is the vocabulary hub — lifecycle (`draft/connecting/tested/enabled/degraded/paused/archived`), rights (`pending/approved/revoked/expired`), run status (incl. `rights_blocked`), quarantine, connector release modes, acceptance states. Import these constants; don't restate the strings.
 - `source-connectors/registry.ts` — the connector catalog (RSS/Atom, HTTP JSON, public web page, WeChat, Xiaohongshu), each with its adapter, capability, minimum interval, and support matrix. `source-adapters.ts` implements the parsing/mapping.
@@ -93,6 +97,22 @@ Source subscription and ingestion (the largest subsystem, ~40 `lib/source-*.ts` 
 - `opencli-social.ts` / `social-evidence.ts` / `source-relationship-classifier.ts` — social candidate discovery via OpenCLI, and the conservative evidence classifier (`original/repost/quote/syndicated/unknown`). Unknown and low-confidence classifications **fail closed**; the calibration policy in `social-evidence.ts` (false-independent rate, independent recall, minimum production sample) is a frozen, approved gate — `/governance` operates it.
 
 Database: PostgreSQL. Drizzle schema in `db/schema.ts` (55 tables), generated SQL migrations in `drizzle/` (33 files), applied by `scripts/migrate-pg.ts` (tracked in `schema_migrations`, checksum-verified by `lib/migration-integrity.ts`). Never edit applied migrations; change the schema and run `db:generate`. The schema deliberately declares **no foreign keys** — referential integrity is enforced in application code, and every delete path removes its child rows explicitly.
+
+### Tests
+
+`node --test` over `test/*.test.ts`, no test framework. Two harnesses matter:
+
+- `test/pg-memory.ts` — an in-process real PostgreSQL (PGlite/WASM) built by replaying `drizzle/*.sql`. Tests run against real PG so dialect errors (`json_extract`, missing derived-table aliases, `CASE WHEN` boolean typing) fail in `node --test` instead of in production.
+- `test/route-runtime.ts` + `test/route-alias-hook.mjs` — let tests `import` `app/api/**` route modules directly: the hook resolves `@/…` path aliases and swaps `@/lib/runtime` (which would otherwise open a real pool and S3 client at import time) for a stub backed by PGlite. Route SQL is genuinely executed. Write-path route tests belong in `test/routes-write-paths.test.ts` / `test/critical-routes.test.ts`; a new write route without one means its SQL has never run.
+
+### UI
+
+App Router pages under `app/`, panels in `components/` (`radar-dashboard`, `source-manager`, `automation-console`, `attention-inbox`, `operations-dashboard`, `governance-dashboard`, `diagnostics-panel`, `components/workspace/*` for `/projects/[id]`), shadcn primitives in `components/ui/`. Conventions that were deliberately converged and should not drift back:
+
+- `lib/page-shell.ts` owns the *single* content width (`PAGE_WIDTH_CLASS`) and the one navigation list (`GLOBAL_NAVIGATION`) shared by desktop and mobile. Don't add a per-page width token.
+- `components/page-shell.tsx` renders the global app bar (identity shown once, local forged identity explicitly labeled) and the page header; pages render content only.
+- Detail and editing surfaces go in drawers/sheets rather than expanding the list page; the UI never displays a number the engine can't produce (no invented trend charts, no console text that disagrees with engine state).
+- The UI reads identity from `GET /api/v1/session` (`hooks/use-session.ts`), never hardcoded roles.
 
 **No seed or sample data ships in production paths.** The home page and `GET /api/topics` read the database and return an empty list when nothing has been ingested. Deterministic article fixtures live in `test/fixtures/sample-articles.ts` and are imported only by tests and `scripts/render-smoke.ts`. Never wire a fixture into `app/` or `lib/` — in an evidence-first system, data that cannot be told apart from real ingestion is worse than no data.
 
