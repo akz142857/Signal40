@@ -1,5 +1,7 @@
 import { db, resolveRequestActor } from '@/lib/runtime';
-import { sourceApiError } from '@/lib/source-api-error';
+import { sourceApiError, sourceResultError } from '@/lib/source-api-error';
+import { deleteUningestedSource } from '@/lib/source-lifecycle';
+import { boundedTrimmedText, positiveInteger } from '@/lib/source-action-validation';
 import {
   normalizeSourceRuntimeConfig,
   sourceLocatorForConfig,
@@ -352,4 +354,39 @@ export async function PATCH(
       rightsRequestId: result.rightsRequestId,
     },
   });
+}
+
+/**
+ * 删除一条从未采集过内容的来源配置。
+ *
+ * 有内容的来源仍然只能归档或走依法删除：那条路径要出回执，因为它销毁的是证据。
+ * 这里删的是一条没跑过任何采集的配置，服务端会重新核对这一点，不信任客户端的判断。
+ */
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const actor = await resolveRequestActor(request);
+  if (!sourceActionAllowed(actor, 'source.delete')) {
+    return sourceApiError('只有管理员可以删除来源。', 403);
+  }
+  let body: { expectedVersion?: number; reason?: string };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return sourceApiError('请求体必须是 JSON。', 400);
+  }
+  const expectedVersion = positiveInteger(body.expectedVersion);
+  if (!expectedVersion) return sourceApiError('expectedVersion 必填。', 422);
+  const reason = boundedTrimmedText(body.reason, { minimum: 0, maximum: 500 })
+    ?? '在来源列表中删除未采集内容的来源。';
+  const { id } = await context.params;
+  const result = await deleteUningestedSource(db, {
+    sourceId: id,
+    expectedVersion,
+    reason,
+    actor: actor!,
+  });
+  if ('error' in result) return sourceResultError(result);
+  return Response.json(result);
 }

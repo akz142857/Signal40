@@ -12,6 +12,8 @@ export const SOURCE_ACTION_ROLES = {
   'source.ownership.manage': ['admin'],
   'source.rights.decide': ['admin'],
   'source.archive': ['admin'],
+  /** 硬删除仅限没有任何采集内容的来源；有内容的走 source.legal-delete。 */
+  'source.delete': ['admin'],
   'source.withdraw': ['admin'],
   'source.legal-delete': ['admin'],
   'source.legal-hold.create': ['admin'],

@@ -204,6 +204,8 @@ export function projectPublicSourceRecord(row: Record<string, unknown>) {
     publicErrorMessage: publicSourceErrorMessage(row.last_error_code),
     consecutiveFailures: integer(row.consecutive_failures),
     hasActiveRun: Boolean(row.active_run_id),
+    /** 未产生任何采集内容时为 true：此时删除不销毁证据，界面可以直接给删除入口。 */
+    hardDeletable: Boolean(Number(row.hard_deletable ?? 0)),
     deletionStatus: nullableString(row.deletion_status, 100),
     deletionRequestId: nullableString(row.deletion_request_id, 200),
     pendingRightsRequestId: nullableString(row.pending_rights_request_id, 200),

@@ -41,6 +41,14 @@ export async function GET(request: Request) {
       (SELECT id FROM source_deletion_requests dr WHERE dr.source_config_id = source_configs.id AND dr.status <> 'completed' ORDER BY dr.created_at DESC LIMIT 1) AS deletion_request_id,
       (SELECT id FROM source_rights_requests rr WHERE rr.source_config_id = source_configs.id AND rr.status = 'pending' ORDER BY rr.created_at DESC LIMIT 1) AS pending_rights_request_id,
       (SELECT requested_by FROM source_rights_requests rr WHERE rr.source_config_id = source_configs.id AND rr.status = 'pending' ORDER BY rr.created_at DESC LIMIT 1) AS pending_rights_requested_by,
+      -- 没有采集运行、内容归属、原始载荷、未解除保全和既有删除请求，才是「删掉不销毁任何证据」。
+      CASE WHEN enabled = 0
+        AND NOT EXISTS (SELECT 1 FROM ingestion_runs ir WHERE ir.source_config_id = source_configs.id)
+        AND NOT EXISTS (SELECT 1 FROM source_item_origins so WHERE so.source_config_id = source_configs.id)
+        AND NOT EXISTS (SELECT 1 FROM raw_payload_uploads rp WHERE rp.source_config_id = source_configs.id)
+        AND NOT EXISTS (SELECT 1 FROM source_legal_holds lh WHERE lh.source_config_id = source_configs.id AND lh.released_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM source_deletion_requests dq WHERE dq.source_config_id = source_configs.id)
+      THEN 1 ELSE 0 END AS hard_deletable,
       created_at, updated_at
     FROM source_configs WHERE lifecycle_status != 'archived' ORDER BY name
   `)

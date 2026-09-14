@@ -69,7 +69,7 @@ void test('actor source projection is an exact allowlist and strips execution ma
     'checkpointVersion', 'consecutiveFailures', 'costMicrosPerRequest',
     'createdAt', 'deletionRequestId',
     'deletionStatus', 'pendingRightsRequestId', 'pendingRightsRequestedBy',
-    'effectiveScheduleMultiplier', 'enabled', 'estimatedRequestsPerRun', 'hasActiveRun',
+    'effectiveScheduleMultiplier', 'enabled', 'estimatedRequestsPerRun', 'hasActiveRun', 'hardDeletable',
     'healthStatus', 'id', 'lastSuccessAt', 'lastTestedAt',
     'lifecycleStatus', 'monthlyBudgetMicros', 'name', 'nextRunAt', 'ownerTeamId',
     'platform', 'publicConfig', 'publicErrorCode', 'publicErrorMessage',
@@ -78,6 +78,8 @@ void test('actor source projection is an exact allowlist and strips execution ma
     'version', 'adapter', 'publisherEntityId',
   ].sort());
   assert.equal(projected.hasActiveRun, true);
+  // 判定在服务端完成：投影里缺这一列时按「不能直接删」处理。
+  assert.equal(projected.hardDeletable, false);
   assert.equal(projected.publicErrorMessage, '来源网络暂时不可用。');
   assert.equal(
     (projected.publicConfig as { url?: string }).url,
