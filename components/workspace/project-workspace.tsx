@@ -13,7 +13,12 @@ import { MetricsPanel } from '@/components/workspace/metrics-panel';
 import { ProductionConfig } from '@/components/workspace/production-config';
 import type { ProjectRecord } from '@/lib/control-plane';
 import type { ContentState, GateResult, Role } from '@/lib/workflow';
-import { stableHash } from '@/lib/workflow';
+import {
+  CONTENT_STATE_LABELS as stateLabels,
+  PRIMARY_NEXT_STATE as nextState,
+  stableHash,
+} from '@/lib/workflow';
+import { projectNextStep } from '@/lib/project-next-step';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 
 const VideoPreview = lazy(() => import('@/components/workspace/video-preview').then((module) => ({ default: module.VideoPreview })));
@@ -30,23 +35,6 @@ const phases = [
   { label: '质检', states: ['QC_PENDING', 'QC_APPROVED'], icon: Gauge },
   { label: '发布', states: ['PUBLISH_SCHEDULED', 'PUBLISHED', 'MEASURED'], icon: Film },
 ] as const;
-
-const nextState: Partial<Record<ContentState, ContentState>> = {
-  DRAFT: 'RESEARCHING',
-  RESEARCHING: 'EVIDENCE_READY',
-  EVIDENCE_READY: 'EDITOR_APPROVED',
-  EDITOR_APPROVED: 'SCRIPT_DRAFT',
-  SCRIPT_DRAFT: 'SCRIPT_APPROVED',
-  SCRIPT_APPROVED: 'ASSETS_READY',
-  ASSETS_READY: 'RENDER_QUEUED',
-  QC_PENDING: 'QC_APPROVED',
-  QC_APPROVED: 'PUBLISH_SCHEDULED',
-  PUBLISHED: 'MEASURED',
-};
-
-const stateLabels: Record<ContentState, string> = {
-  DRAFT: '项目草稿', RESEARCHING: '研究中', EVIDENCE_READY: '证据就绪', EDITOR_APPROVED: '研究已批准', SCRIPT_DRAFT: '脚本草稿', SCRIPT_APPROVED: '脚本已批准', ASSETS_READY: '资产就绪', RENDER_QUEUED: '等待渲染', RENDERING: '渲染中', QC_PENDING: '等待质检', QC_APPROVED: '终审通过', PUBLISH_SCHEDULED: '已排期', PUBLISHED: '已发布', MEASURED: '已回流', CHANGES_REQUESTED: '要求修改', REJECTED: '已驳回', FAILED: '失败', CANCELLED: '已取消',
-};
 
 async function readError(response: Response) {
   const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -65,7 +53,8 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   const [incidentKind, setIncidentKind] = useState('correction');
   const [incidentSeverity, setIncidentSeverity] = useState('medium');
   // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关；身份本身由 AppBar 展示。
-  useSession();
+  // 这里还要用它的角色判断「下一步当前身份能不能动手」。
+  const session = useSession();
   // 生产环境返回空对象，服务端用反向代理注入的真实身份；
   // 只有本机开发且服务端明确允许时，才带上伪造角色头。
   const actorHeaders = useCallback(
@@ -322,6 +311,11 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
   const canRequestChanges = ['EVIDENCE_READY', 'EDITOR_APPROVED', 'SCRIPT_DRAFT', 'SCRIPT_APPROVED', 'ASSETS_READY', 'QC_PENDING', 'QC_APPROVED', 'PUBLISHED'].includes(project.state);
   const requiredApproval = project.state === 'EVIDENCE_READY' ? 'research' : project.state === 'SCRIPT_DRAFT' ? 'script' : project.state === 'QC_PENDING' ? 'qc' : project.state === 'QC_APPROVED' ? 'publish' : null;
   const gateSummary = useMemo(() => ({ passed: gates.filter((gate) => gate.passed).length, total: gates.length }), [gates]);
+  // 下一步用的是服务端同一套状态机与门禁结果：这里只负责把它讲成一句话。
+  const nextStep = useMemo(
+    () => projectNextStep({ state: project.state, gates, role: session.actor?.role ?? null }),
+    [gates, project.state, session.actor?.role],
+  );
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -344,6 +338,22 @@ export function ProjectWorkspace({ initialProject }: { initialProject: ProjectRe
 
         <div className="space-y-5">
           {message && <output className="block rounded-xl border border-chart-3/30 bg-chart-3/10 px-4 py-3 text-sm">{message}</output>}
+          <section className="rounded-xl border border-border bg-card px-4 py-3 text-sm" aria-label="下一步">
+            <div className="flex flex-wrap items-center gap-2">
+              {nextStep.waitingOnMachine
+                ? <LoaderCircle className="size-4 shrink-0 animate-spin text-muted-foreground" />
+                : nextStep.actorCanAct
+                  ? <Play className="size-4 shrink-0 text-chart-1" />
+                  : <CircleAlert className="size-4 shrink-0 text-chart-2" />}
+              <p className="font-medium">{nextStep.title}</p>
+              {nextStep.targetState && !nextStep.actorCanAct && !nextStep.waitingOnMachine && (
+                <span className="rounded-full bg-secondary px-2 py-0.5 text-xs">
+                  {nextStep.blockedGates.length ? '门禁未通过' : '当前身份无权执行'}
+                </span>
+              )}
+            </div>
+            <p className="mt-1 leading-6 text-muted-foreground">{nextStep.detail}</p>
+          </section>
           {orphaned.length > 0 && <div className="rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
             <p className="font-semibold">入队的作业没有人会执行</p>
             <p className="mt-1 leading-6">{orphaned.map((job) => job.kind).join('、')} 作业已排队超过 60 秒，但没有任何在线 Worker 声明能处理这些类型。请确认 render-worker 服务是否在运行（<span className="font-mono">docker compose up -d render-worker</span>），或到 <Link className="underline" href="/settings/diagnostics">系统自检</Link> 查看原因。</p>

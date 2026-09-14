@@ -37,6 +37,12 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { Label } from '@/components/ui/label';
 import { PageContainer, PageHeader } from '@/components/page-shell';
+import { OnboardingChecklist } from '@/components/onboarding-checklist';
+import {
+  currentOnboardingStep,
+  onboardingComplete,
+  type OnboardingStep,
+} from '@/lib/onboarding';
 import type {
   ArticleInput,
   TopicCandidate,
@@ -106,8 +112,11 @@ async function readError(response: Response) {
 
 export function RadarDashboard({
   initialTopics,
+  onboarding = [],
 }: {
   initialTopics: TopicCandidate[];
+  /** 服务端按真实状态算出的上手清单；全部完成时不渲染。 */
+  onboarding?: OnboardingStep[];
 }) {
   // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关。
   useSession();
@@ -479,6 +488,9 @@ export function RadarDashboard({
     (topic) => topic.gate.passed && topic.verificationStatus === 'verified',
   ).length;
   const lead = topics[0];
+  const onboardingDone = !onboarding.length || onboardingComplete(onboarding);
+  const pendingStepCount = onboarding.filter((step) => step.status !== 'done').length;
+  const nextStep = currentOnboardingStep(onboarding);
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -500,13 +512,15 @@ export function RadarDashboard({
           <div className="mb-5 flex flex-col justify-between gap-4 border-b border-border pb-5 sm:flex-row sm:items-end">
             <div>
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
-                Daily radar / {sourceLabel}
+                Daily radar / {onboardingDone ? sourceLabel : `还差 ${pendingStepCount} 步`}
               </p>
-              {message && (
-                <output className="mt-2 block text-sm font-medium">
-                  {message}
-                </output>
-              )}
+              <output className="mt-2 block text-sm font-medium">
+                {onboardingDone
+                  ? message
+                  : nextStep
+                    ? `现在这一步：${nextStep.title}`
+                    : message}
+              </output>
             </div>
             <div className="flex flex-wrap gap-2" aria-label="候选筛选">
               <FilterButton
@@ -529,6 +543,8 @@ export function RadarDashboard({
               </FilterButton>
             </div>
           </div>
+
+          {!onboardingDone && <OnboardingChecklist steps={onboarding} />}
 
           <div className="grid gap-3">
             {filteredTopics.map((topic, index) => {
