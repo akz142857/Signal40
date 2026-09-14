@@ -57,6 +57,7 @@ import {
   type ContentState,
   type GateResult,
   type Role,
+  PRIMARY_NEXT_STATE,
 } from './workflow.ts';
 
 /**
@@ -214,18 +215,7 @@ function recordSuccess(breakers: BreakerState, stage: string) {
 }
 
 /** 项目当前状态下的下一步机械动作；返回 null 表示这一步需要人。 */
-const NEXT_STATE: Partial<Record<ContentState, ContentState>> = {
-  DRAFT: 'RESEARCHING',
-  RESEARCHING: 'EVIDENCE_READY',
-  EVIDENCE_READY: 'EDITOR_APPROVED',
-  EDITOR_APPROVED: 'SCRIPT_DRAFT',
-  SCRIPT_DRAFT: 'SCRIPT_APPROVED',
-  SCRIPT_APPROVED: 'ASSETS_READY',
-  ASSETS_READY: 'RENDER_QUEUED',
-  QC_PENDING: 'QC_APPROVED',
-  QC_APPROVED: 'PUBLISH_SCHEDULED',
-  PUBLISHED: 'MEASURED',
-};
+const NEXT_STATE = PRIMARY_NEXT_STATE;
 
 /** 目标状态对应的问责审批；没有对应项说明这一步是纯机械的。 */
 const APPROVAL_FOR_STATE: Partial<Record<ContentState, ApprovalKind>> = {
