@@ -60,6 +60,42 @@ void test('域名不进话题词：既不当关键词，也不参与聚类', () 
   }
 });
 
+void test('一天的英文新闻不会塌成一个选题，讲同一件事的才合并', () => {
+  // 真实语料里出现过的塌缩：46 篇互不相关的新闻并成 1 个候选。
+  // 起因是任何三字母以上的英文词都被当作「强词」，共享一个就判同一话题。
+  const items = [
+    {
+      title: 'Emmy awards 2026: The Pitt and Widow’s Bay take home major awards',
+      summary: 'Widow’s Bay and The Pitt dominated the 2026 Emmy awards ceremony.',
+    },
+    {
+      title: 'Emmy Winners 2026: Widow’s Bay dominates with 14 wins',
+      summary: 'The Pitt and Widow’s Bay led the 2026 Emmy awards winners list.',
+    },
+    { title: '10-year Treasury yield rises to highest since 2007', summary: 'Bond investors repriced the long end.' },
+    { title: 'Trump calls Nvidia CEO Jensen Huang during summit', summary: 'The call touched on export controls.' },
+    { title: 'NFL Power Rankings Week 2: which teams suffered the worst', summary: 'Seattle and Denver both slipped.' },
+    { title: 'Scientists find first adult T. rex trackway in Wyoming', summary: 'The footprints suggest a solitary animal.' },
+    { title: 'Apple releases iOS 27 with Siri overhaul', summary: 'The assistant gains on-device reasoning.' },
+    { title: 'Mitch McConnell returns to Senate after health absence', summary: 'He resumed committee duties on Monday.' },
+  ];
+  const topics = runPipeline(
+    items.map((item, index) => ({
+      ...item,
+      url: `https://news.example.com/${index}`,
+      source: 'Example News',
+      sourceType: 'media' as const,
+      publishedAt: new Date(now.valueOf() - index * 60_000).toISOString(),
+    })),
+    now,
+  );
+  // 两条 Emmy 合成一个，其余各自成题——既不塌缩，也没有拒绝合并真正相关的两条。
+  assert.equal(topics.length, items.length - 1);
+  const merged = topics.filter((topic) => topic.articles.length > 1);
+  assert.equal(merged.length, 1);
+  for (const article of merged[0].articles) assert.match(article.title, /Emmy/);
+});
+
 void test('normalization removes exact URL and title duplicates', () => {
   const input = sampleArticles(now)[0];
   assert.equal(normalizeArticles([input, { ...input }]).length, 1);

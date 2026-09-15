@@ -16,6 +16,22 @@ export const SOURCE_TYPES = [
 ] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 
+/**
+ * 一手来源：证据门禁认的原始出处（财报/公告、公司官方发布、原始市场数据）。
+ * 媒体报道和社交内容是转述，单靠它们过不了门禁。
+ *
+ * 门禁判据只有这一处定义，界面要解释「为什么过不了」时也读这里，
+ * 免得提示词和引擎各说各话。
+ */
+export const PRIMARY_EVIDENCE_SOURCE_TYPES: readonly SourceType[] = [
+  'filing',
+  'company',
+  'market',
+];
+
+/** 通过门禁所需的独立证据份数。 */
+export const MINIMUM_INDEPENDENT_EVIDENCE = 2;
+
 export type ArticleInput = {
   id?: string;
   source: string;
@@ -217,17 +233,56 @@ export function similarity(left: Set<string>, right: Set<string>) {
   return intersection / Math.min(left.size, right.size);
 }
 
-function isStrongTopicToken(token: string) {
-  return (
-    STRONG_TOPIC_TERMS.has(token) ||
-    /^[a-z][a-z0-9.+-]{2,}$/.test(token) ||
-    /^\d+(?:\.\d+)?%$/.test(token)
+/**
+ * 语料里出现得太普遍的词不参与聚类判定。
+ *
+ * `isStrongTopicToken` 把任何三字母以上的英文词都算「强词」，于是 says、new、trump
+ * 这种天天出现的词一个就能把两条毫不相干的新闻判成同一个选题。文档频率是语料自己
+ * 给出的答案，不用维护停用词表——但样本太小时频率没有意义，所以只在语料够大时启用。
+ */
+const COMMON_TOKEN_MIN_ARTICLES = 12;
+const COMMON_TOKEN_RATIO = 0.25;
+const COMMON_TOKEN_MIN_HITS = 4;
+
+export function commonTokens(tokenSets: readonly Set<string>[]) {
+  const common = new Set<string>();
+  if (tokenSets.length < COMMON_TOKEN_MIN_ARTICLES) return common;
+  const documentFrequency = new Map<string, number>();
+  for (const tokens of tokenSets) {
+    for (const token of tokens) {
+      documentFrequency.set(token, (documentFrequency.get(token) ?? 0) + 1);
+    }
+  }
+  const limit = Math.max(
+    COMMON_TOKEN_MIN_HITS,
+    tokenSets.length * COMMON_TOKEN_RATIO,
   );
+  for (const [token, count] of documentFrequency) {
+    // 词表里的词是这套系统要找的主题本身，出现得多是命中而不是噪声。
+    if (STRONG_TOPIC_TERMS.has(token) || FINANCE_TERMS.includes(token)) continue;
+    if (count > limit) common.add(token);
+  }
+  return common;
 }
 
+function discriminative(tokens: Set<string>, common: Set<string>) {
+  if (!common.size) return tokens;
+  const kept = new Set<string>();
+  for (const token of tokens) if (!common.has(token)) kept.add(token);
+  return kept;
+}
+
+/**
+ * 「强重合」只认词表里的主题词。
+ *
+ * 原本 `isStrongTopicToken` 把任何三字母以上的英文词都算强词，共享一个就直接判定
+ * 同一话题（相似度记满分）。一天的新闻里 trump、says、says 这类词到处都是，第一个
+ * 簇借它们把后面所有文章吃掉——46 篇塌成 1 个选题就是这么来的。
+ * 词表之外的词不再有这种一票通过的权力，改由 Jaccard 相似度决定。
+ */
 function hasStrongOverlap(left: Set<string>, right: Set<string>) {
   for (const token of left) {
-    if (isStrongTopicToken(token) && right.has(token)) return true;
+    if (STRONG_TOPIC_TERMS.has(token) && right.has(token)) return true;
   }
   return false;
 }
@@ -293,18 +348,50 @@ export function normalizeArticles(inputs: ArticleInput[]) {
   );
 }
 
-type Cluster = { articles: Article[]; tokens: Set<string> };
+type Cluster = {
+  articles: Article[];
+  /** 簇内所有文章的词并集，只用于挑关键词。 */
+  tokens: Set<string>;
+  /** 簇代表（第一篇文章）的判定用词；聚类只比它，不比并集也不比其他成员。 */
+  seedTokens: Set<string>;
+};
 
+/**
+ * 聚类用的相似度：共享词数除以并集（Jaccard），且至少要共享两个词。
+ *
+ * 导出的 `similarity` 用较小的那个词集当分母，这对只有标题、十来个词的新闻条目
+ * 过于宽松——共享三个词就到 0.3。并集当分母会把「两条都很短且只碰巧撞上几个词」
+ * 压回去，而真正讲同一件事的两条标题共享比例本来就高。
+ */
+function clusterSimilarity(left: Set<string>, right: Set<string>) {
+  if (!left.size || !right.size) return 0;
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  if (shared < 2) return 0;
+  return shared / (left.size + right.size - shared);
+}
+
+/**
+ * 每个簇由它的第一篇文章代表，后来的文章只和这篇代表比。
+ *
+ * 不比并集：并集随簇变大不断膨胀，而相似度分母取两者较小的一个，于是大簇对任何
+ * 新文章都显得很像——一天 46 篇新闻会全部塌进同一个选题。
+ * 也不做单链传递：A 像 B、B 像 C 就把 A 和 C 放一起，同样会顺着链条把不相干的
+ * 文章串成一簇，只是塌得慢一点。
+ */
 export function clusterArticles(articles: Article[], threshold = 0.3) {
+  const tokenSets = articles.map((article) => tokensFor(article));
+  const common = commonTokens(tokenSets);
   const clusters: Cluster[] = [];
-  for (const article of articles) {
-    const articleTokens = tokensFor(article);
+  for (const [index, article] of articles.entries()) {
+    const articleTokens = tokenSets[index];
+    const matchTokens = discriminative(articleTokens, common);
     let bestCluster: Cluster | undefined;
     let bestSimilarity = 0;
     for (const cluster of clusters) {
-      const score = hasStrongOverlap(articleTokens, cluster.tokens)
+      const score = hasStrongOverlap(matchTokens, cluster.seedTokens)
         ? 1
-        : similarity(articleTokens, cluster.tokens);
+        : clusterSimilarity(matchTokens, cluster.seedTokens);
       if (score > bestSimilarity) {
         bestCluster = cluster;
         bestSimilarity = score;
@@ -314,7 +401,11 @@ export function clusterArticles(articles: Article[], threshold = 0.3) {
       bestCluster.articles.push(article);
       for (const token of articleTokens) bestCluster.tokens.add(token);
     } else {
-      clusters.push({ articles: [article], tokens: articleTokens });
+      clusters.push({
+        articles: [article],
+        tokens: new Set(articleTokens),
+        seedTokens: matchTokens,
+      });
     }
   }
   return clusters;
@@ -388,9 +479,10 @@ function scoreCluster(
       breakdown.explainability * 0.1,
   );
   const hasPrimarySource = cluster.articles.some((article) =>
-    ['filing', 'company', 'market'].includes(article.sourceType),
+    PRIMARY_EVIDENCE_SOURCE_TYPES.includes(article.sourceType),
   );
-  const passed = hasPrimarySource && independentSourceCount >= 2;
+  const passed =
+    hasPrimarySource && independentSourceCount >= MINIMUM_INDEPENDENT_EVIDENCE;
   const gate: EvidenceGate = {
     passed,
     hasPrimarySource,
