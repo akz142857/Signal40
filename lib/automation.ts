@@ -4,13 +4,14 @@ import type { GateResult, Role } from './workflow.ts';
 /**
  * 自动化策略：哪些阶段自动、哪几道审批可以预先授权、依据谁的身份放行、护栏是什么。
  *
- * 两条硬性约束写在这里，而不是留给界面自觉：
+ * 一条硬性约束写在这里，而不是留给界面自觉：
  *
- * 1. **职责分离**：G7 判定的是发布批准人与研究批准人的 `actor_id` 不同。
- *    同一个人同时自动放行研究与发布，这条约束就形同虚设，
- *    所以 `researchAuthorizedBy` 与 `publishAuthorizedBy` 必须是不同的真实成员；
- * 2. **默认不放行**：四道问责门禁（G3/G4/G6/G7）默认 `manual`，发布审批
- *    即使显式开启也要同时满足全部条件、日限额与静默时段。
+ * - **默认不放行**：四道问责门禁（G3/G4/G6/G7）默认 `manual`，发布审批
+ *   即使显式开启也要同时满足全部条件、日限额与静默时段。
+ *
+ * 原本还有第二条：研究类与发布类授权人必须是不同的真实成员，用来支撑 G7 的职责分离。
+ * 这条已按单人运营的明确决定移除——授权人仍然必须是在职、且角色能做那道审批的真人，
+ * 只是不再要求是两个人。
  *
  * 预先授权是可撤销、有范围、有有效期的：`expires_at` 一过就自动转人工，
  * 不需要人记得去关。
@@ -218,8 +219,8 @@ export function serializeAutomationPolicy(policy: AutomationPolicy) {
 }
 
 /**
- * 策略校验。除了取值范围，这里强制两条规则：
- * 自动放行必须指定授权人，且研究类与发布类授权人不能是同一个人。
+ * 策略校验。除了取值范围，这里强制一条规则：自动放行必须指定授权人。
+ * （原本还要求研究类与发布类授权人是两个人，已随职责分离一起移除。）
  */
 export function validateAutomationPolicy(policy: AutomationPolicy, now = new Date()) {
   const errors: string[] = [];
@@ -244,9 +245,6 @@ export function validateAutomationPolicy(policy: AutomationPolicy, now = new Dat
   const autoResearchKinds = (['research', 'script', 'qc'] as const).filter((kind) => policy.autoApprovals[kind].enabled);
   if (autoResearchKinds.length && !policy.researchAuthorizedBy) errors.push('开启研究、脚本或终审自动放行时必须指定 research_authorized_by。');
   if (policy.autoApprovals.publish.enabled && !policy.publishAuthorizedBy) errors.push('开启发布自动放行时必须指定 publish_authorized_by。');
-  if (policy.researchAuthorizedBy && policy.publishAuthorizedBy && policy.researchAuthorizedBy === policy.publishAuthorizedBy) {
-    errors.push('研究类与发布类自动授权人必须是不同的真实成员，否则 G7 的职责分离形同虚设。');
-  }
   if ((autoResearchKinds.length || policy.autoApprovals.publish.enabled) && !policy.expiresAt) {
     errors.push('自动放行必须设置预先授权有效期（expiresAt）。');
   }
@@ -348,7 +346,7 @@ export function autoApprovalDecision(
     if (!context.qcPassed) reasons.push('自动 QC 未全部通过。');
   }
   if (kind === 'publish') {
-    if (!policy.publishAuthorizedBy || policy.publishAuthorizedBy === policy.researchAuthorizedBy) reasons.push('发布授权人缺失或与研究授权人相同，职责分离不成立。');
+    if (!policy.publishAuthorizedBy) reasons.push('发布授权人缺失。');
     if (!context.qcPassed) reasons.push('自动 QC 未全部通过。');
     if (!gate('G6_CONTENT_TECH_QC')?.passed) reasons.push('G6 未通过。');
     if (context.dailyPublishCount >= policy.guardrails.dailyPublishLimit) reasons.push(`当日自动发布量已达上限 ${policy.guardrails.dailyPublishLimit}。`);

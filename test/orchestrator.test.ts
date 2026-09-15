@@ -478,8 +478,9 @@ void test('指标回流分别追踪 2h、24h、7d 窗口，不会被早期快照
   );
 });
 
-void test('研究与发布授权人相同的策略在保存时就被拒绝', () => {
-  const policy: AutomationPolicy = {
+void test('研究与发布授权人可以是同一个人，但授权人本身仍然必填', () => {
+  // 职责分离已按单人运营的决定移除：同一个人两头批是允许的。
+  const base: AutomationPolicy = {
     ...defaultAutomationPolicy(),
     id: 'policy_same',
     name: '同一个人两头批',
@@ -495,12 +496,19 @@ void test('研究与发布授权人相同的策略在保存时就被拒绝', () 
     publishAuthorizedBy: 'editor-1',
     expiresAt: at(3600).toISOString(),
   };
-  const validation = validateAutomationPolicy(policy, baseTime);
-  assert.equal(validation.valid, false);
-  assert.ok(validation.errors.some((error) => error.includes('职责分离')));
+  assert.equal(validateAutomationPolicy(base, baseTime).valid, true);
+
+  const missing = validateAutomationPolicy(
+    { ...base, publishAuthorizedBy: null },
+    baseTime,
+  );
+  assert.equal(missing.valid, false);
+  assert.ok(missing.errors.some((error) => error.includes('publish_authorized_by')));
 });
 
-void test('授权人相同的策略即使绕过校验落库，自动放行也会被拒绝', async () => {
+void test('缺少发布授权人的策略即使绕过校验落库，自动放行也会被拒绝', async () => {
+  // 职责分离移除后，两头同一个人是允许的；但自动放行写入的仍然必须是一个真人的
+  // 批准记录，所以授权人为空时引擎照样拒绝，并留下待办。
   const db = await createMemoryPg();
   await seedMembers(db);
   await seedPolicy(db, {
@@ -511,7 +519,7 @@ void test('授权人相同的策略即使绕过校验落库，自动放行也会
       publish: { enabled: true },
     },
     researchAuthorizedBy: 'editor-1',
-    publishAuthorizedBy: 'editor-1',
+    publishAuthorizedBy: null,
     expiresAt: at(3600).toISOString(),
   });
   const projectId = await seedProject(db, 'QC_APPROVED');
@@ -522,7 +530,7 @@ void test('授权人相同的策略即使绕过校验落库，自动放行也会
     [projectId],
   );
   assert.ok(
-    String((items.rows[0] as { reason: string }).reason).includes('职责分离'),
+    String((items.rows[0] as { reason: string }).reason).includes('发布授权人缺失'),
   );
 });
 

@@ -85,7 +85,7 @@ void test('rights dossier parser requires governed fields and tamper hashes', ()
   );
 });
 
-void test('only a distinct active admin with explicit rights capability can create a verified grant', async () => {
+void test('an active admin with explicit rights capability can create a verified grant', async () => {
   const { db, request, rightsConfigHash } = await seedPending();
   const requester = { id: 'requester', email: 'requester@test', role: 'admin' as const };
   const ordinary = { id: 'ordinary-admin', email: 'ordinary@test', role: 'admin' as const };
@@ -96,12 +96,7 @@ void test('only a distinct active admin with explicit rights capability can crea
   const dossier = parseSourceRightsDecisionDossier(dossierInput, now);
   assert.equal('error' in dossier, false);
   if ('error' in dossier) return;
-  const self = await decideSourceRightsRequest(db, {
-    sourceConfigId: 'source-rights-approval', requestId: request.id,
-    expectedSourceVersion: 1, decision: 'approve', note: '提交者不能批准自己的来源权利请求。',
-    dossier: dossier.dossier, idempotencyKey: 'self-decision', actor: requester,
-  }, now);
-  assert.deepEqual(self, { status: 403, error: '权利声明提交者不能审批自己的请求。' });
+  // 职责分离移除后，提交者自己也能批；「来源权利审批」这项能力仍然必须显式授予。
   const noCapability = await decideSourceRightsRequest(db, {
     sourceConfigId: 'source-rights-approval', requestId: request.id,
     expectedSourceVersion: 1, decision: 'approve', note: '普通管理员不应拥有隐式权利批准能力。',

@@ -16,6 +16,12 @@ make setup                     # npm ci + PostgreSQL 幂等迁移
 make dev                       # 再次确认迁移后启动 127.0.0.1:3001
 ```
 
+```bash
+make start              # 控制面，构建产物是最新的，不用再 build
+npm run worker:source   # 采集 worker
+npm run scheduler       # 编排循环
+```
+
 R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com`，`S3_REGION=auto`，
 凭据用 R2 API Token）。本地开发不起对象存储替身——分片上传、用户元数据、校验和这几处
 行为差异用替身测不出真结论，所以开发和 CI 都对着真实 R2 桶跑。
@@ -205,8 +211,8 @@ npm audit --omit=dev
 3. **建策略**：`/automation` 新建策略并启用。新策略默认机械步骤自动、四道审批人工、
    自动建项目关闭。
 4. **（可选）开预先授权**：勾选要自动放行的审批，指定授权人和有效期。
-   研究/脚本/终审用一个授权人，发布用另一个——两者必须是**不同的真实成员**，
-   否则 G7 的职责分离形同虚设，保存时和每次自动放行时都会校验。
+   授权人必须是在职、且角色能做那道审批的真实成员；研究类与发布类可以是同一个人
+   （职责分离已按单人运营的决定移除，见 CLAUDE.md 的不变量一节）。
    自动放行写入的是那个人的批准记录，note 注明依据哪条策略，审计里以 `trigger=automation` 区分。
 
 人工干预：

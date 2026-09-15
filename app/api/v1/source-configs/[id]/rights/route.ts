@@ -71,7 +71,7 @@ export async function POST(
   `).bind(body.requestId, id).first<{ requested_by: string }>();
   if (!rightsRequest) return sourceApiError('权利请求不存在。', 404);
   if (!sourceActionAllowed(actor, 'source.rights.decide', { requestedBy: rightsRequest.requested_by })) {
-    return sourceApiError('权利声明提交者不能审批自己的请求。', 403);
+    return sourceApiError('当前角色无权审批来源使用权。', 403);
   }
   const result = await decideSourceRightsRequest(db, {
     sourceConfigId: id,

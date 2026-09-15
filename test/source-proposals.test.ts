@@ -12,7 +12,7 @@ const researcher = { id: 'researcher-1', email: 'r@signal40.test', role: 'resear
 const otherResearcher = { id: 'researcher-2', email: 'r2@signal40.test', role: 'researcher' as const };
 const admin = { id: 'admin-1', email: 'a@signal40.test', role: 'admin' as const };
 
-void test('researcher proposal stays separate from source lifecycle until another actor approves it', async () => {
+void test('researcher proposal stays separate from source lifecycle until it is approved', async () => {
   const db = await createMemoryPg();
   const created = await createSourceProposal(db, {
     name: 'Example Feed',
@@ -32,15 +32,6 @@ void test('researcher proposal stays separate from source lifecycle until anothe
   assert.equal((await listSourceProposals(db, researcher)).length, 1);
   assert.equal((await listSourceProposals(db, otherResearcher)).length, 0);
   assert.equal((await listSourceProposals(db, admin)).length, 1);
-
-  const selfDecision = await decideSourceProposal(db, {
-    proposalId: created.proposal.id,
-    decision: 'approve',
-    note: '不应允许提案人审批自己的来源。',
-    idempotencyKey: 'proposal-self-decision',
-    actor: { ...admin, id: researcher.id },
-  }, now);
-  assert.deepEqual(selfDecision, { status: 403, error: '提案发起人不能批准或拒绝自己的提案。' });
 
   const decided = await decideSourceProposal(db, {
     proposalId: created.proposal.id,

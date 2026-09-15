@@ -109,7 +109,7 @@ export async function decideCheckpointCutover(
     if (!cutover) return { status: 404 as const, error: 'checkpoint cutover 不存在。' };
     if (cutover.status !== 'pending') return { status: 409 as const, error: `checkpoint cutover 已处于 ${cutover.status}。` };
     if (!sourceActionAllowed(input.actor, 'source.checkpoint.decide', { requestActorId: cutover.requested_by })) {
-      return { status: 409 as const, error: '申请人不能批准或拒绝自己的 checkpoint cutover。' };
+      return { status: 409 as const, error: '当前角色无权决定 checkpoint cutover。' };
     }
     if (input.decision === 'reject') {
       await tx.prepare(`

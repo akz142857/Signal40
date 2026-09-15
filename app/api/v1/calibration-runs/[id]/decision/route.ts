@@ -16,7 +16,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const run = await tx.prepare("SELECT id, status, created_by, calibration_kind, case_count, metrics_json, policy_json FROM calibration_runs WHERE id = ? LIMIT 1 FOR UPDATE").bind(id).first<{ id: string; status: string; created_by: string; calibration_kind: string; case_count: number; metrics_json: unknown; policy_json: unknown }>();
     if (!run) return { status: 404 as const, error: '校准运行不存在。' };
     if (run.status !== 'candidate') return { status: 409 as const, error: `校准运行已处于 ${run.status}。` };
-    if (run.created_by === actor.id) return { status: 409 as const, error: '校准提交者不能审批自己的结果。' };
     if (body.decision === 'approved' && run.calibration_kind === 'social_evidence' && !socialEvidenceCalibrationPasses(run.case_count, run.policy_json, run.metrics_json)) {
       return { status: 409 as const, error: 'Social Evidence 的标注量、误独立率、召回率或生产抽样未达到冻结策略。' };
     }

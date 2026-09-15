@@ -1132,16 +1132,19 @@ export async function evaluateProjectGates(
     },
     {
       code: 'G7_PUBLISH_APPROVAL',
+      // 这条原本还要求发布批准人与研究批准人是不同的 actor_id。按单人运营的明确
+      // 决定移除：第二个签字人只能是同一个人的第二个账号，挡不住任何东西，却让
+      // 整条流程在界面上走不通。审计仍然记录每一次批准由谁、在什么时候、针对哪个
+      // 快照做出。要恢复成编辑部模式，这里连同 lib/source-authorization.ts 和
+      // lib/automation.ts 的授权人校验一起加回来。
       passed:
         publishApproval?.decision === 'approved' &&
-        publishApproval.subject_hash === project.immutableHash &&
-        publishApproval.actor_id !== researchApproval?.actor_id,
+        publishApproval.subject_hash === project.immutableHash,
       reasons:
         publishApproval?.decision === 'approved' &&
-        publishApproval.subject_hash === project.immutableHash &&
-        publishApproval.actor_id !== researchApproval?.actor_id
+        publishApproval.subject_hash === project.immutableHash
           ? []
-          : ['当前成片尚未由独立发布人批准'],
+          : ['当前成片尚未经人工发布审批'],
     },
     {
       code: 'G8_POST_PUBLISH',

@@ -44,16 +44,20 @@ void test('source action matrix is exhaustive and auditors never receive writes'
   }
 });
 
-void test('proposal, checkpoint and legal-hold decisions enforce separation of duties', () => {
+void test('提案、检查点、legal hold、权利审批都允许提交者本人决定', () => {
+  // 职责分离（必须换一个人批）已按单人运营的决定移除。这里断言的是移除后的行为：
+  // 同一个人可以批自己提的，但请求上下文仍然必须存在——缺少 requestedBy 之类的
+  // 关联信息时照旧拒绝，避免路由忘记带上下文就放行。
   const admin = { id: 'admin-1', email: 'admin@signal40.test', role: 'admin' as const, canManageSourceLegal: true };
-  assert.equal(sourceActionAllowed(admin, 'source.proposal.decide', { requestedBy: admin.id }), false);
+  assert.equal(sourceActionAllowed(admin, 'source.proposal.decide', { requestedBy: admin.id }), true);
   assert.equal(sourceActionAllowed(admin, 'source.proposal.decide', { requestedBy: 'researcher-1' }), true);
-  assert.equal(sourceActionAllowed(admin, 'source.checkpoint.decide', { requestActorId: admin.id }), false);
-  assert.equal(sourceActionAllowed(admin, 'source.checkpoint.decide', { requestActorId: 'admin-2' }), true);
-  assert.equal(sourceActionAllowed(admin, 'source.legal-hold.release', { createdBy: admin.id }), false);
-  assert.equal(sourceActionAllowed(admin, 'source.legal-hold.release', { createdBy: 'admin-2' }), true);
-  assert.equal(sourceActionAllowed(admin, 'source.rights.decide', { requestedBy: admin.id }), false);
-  assert.equal(sourceActionAllowed(admin, 'source.rights.decide', { requestedBy: 'admin-2' }), true);
+  assert.equal(sourceActionAllowed(admin, 'source.proposal.decide', {}), false);
+  assert.equal(sourceActionAllowed(admin, 'source.checkpoint.decide', { requestActorId: admin.id }), true);
+  assert.equal(sourceActionAllowed(admin, 'source.checkpoint.decide', {}), false);
+  assert.equal(sourceActionAllowed(admin, 'source.legal-hold.release', { createdBy: admin.id }), true);
+  assert.equal(sourceActionAllowed(admin, 'source.legal-hold.release', { createdBy: null }), false);
+  assert.equal(sourceActionAllowed(admin, 'source.rights.decide', { requestedBy: admin.id }), true);
+  assert.equal(sourceActionAllowed(admin, 'source.rights.decide', {}), false);
 });
 
 void test('admin role alone does not grant source legal operations', () => {

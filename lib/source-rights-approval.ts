@@ -356,9 +356,7 @@ export async function decideSourceRightsRequest(
       }
       return { status: 409 as const, error: '权利请求已有决定或已被新配置取代。' };
     }
-    if (request.requested_by === input.actor.id) {
-      return { status: 403 as const, error: '权利声明提交者不能审批自己的请求。' };
-    }
+
     const reused = await tx.prepare(`
       SELECT id FROM source_rights_requests
       WHERE decision_idempotency_key = ? AND id <> ? LIMIT 1
