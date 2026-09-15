@@ -35,12 +35,21 @@ export const SOCIAL_EVIDENCE_ACCEPTANCE_LIMITS = {
 } as const;
 
 /**
- * 未有已批准 Social Evidence 校准前的生产默认值。普通、未纳管的非社交导入
- * 继续走原有人工工作流；所有纳管 origin 与 social/web 信号都失败关闭。
+ * 未有已批准 Social Evidence 校准前的生产默认值。
+ *
+ * `minimumConfidence` 原本是 100，而 `classifyOriginRelationship` 对 host 命中出版主体
+ * 能给出的最高分是 95——两者差 1 档，结果是任何自动分类的纳管 origin 都不合格，
+ * 独立证据恒为 0，证据门禁在没有人工逐条修正的情况下**永远**过不了。这不是保守，
+ * 是判据之间对不上。按明确决定改成 95：让「URL 域名与登记的出版主体一致、且没有
+ * 任何转载信号」这一条可解释的判定算数。
+ *
+ * 其余两条没动，social/web 仍然完全失败关闭：
+ * - `eligibleRelationships` 只有 `original`，转载/引用/联播/未知一律不计；
+ * - `socialAutoProductionEnabled: false`，微信/小红书/网页来源不受这次放宽影响。
  */
 export const SOCIAL_EVIDENCE_FAIL_CLOSED_POLICY: EvidenceQualificationPolicy = {
   version: 'social-evidence/not-approved',
-  minimumConfidence: 100,
+  minimumConfidence: 95,
   eligibleRelationships: ['original'],
   socialAutoProductionEnabled: false,
 };
