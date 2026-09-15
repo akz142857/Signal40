@@ -1221,11 +1221,55 @@ async function work(job: WorkerJob) {
   throw new Error(`Worker 不支持 ${job.kind} 作业。`);
 }
 
+/** 控制面明确拒绝写回（租约被抢、kill switch、legal hold）；重试没有意义。 */
+class JobFinishRejected extends Error {}
+
+const FINISH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+
+async function postFinish(jobId: string, leaseEpoch: number, payload: Record<string, unknown>) {
+  const response = await fetch(`${controlUrl}/api/v1/jobs/${encodeURIComponent(jobId)}/finish`, {
+    method: 'POST',
+    headers: workerHeaders,
+    body: JSON.stringify({ ...payload, leaseEpoch }),
+  });
+  if (response.ok) return;
+  const detail = (await response.text().catch(() => '')).slice(0, 500);
+  if (response.status >= 400 && response.status < 500) {
+    throw new JobFinishRejected(`${response.status} ${detail}`);
+  }
+  throw new Error(`${response.status} ${detail}`);
+}
+
+/**
+ * 完成写回必须重试到底。
+ *
+ * 控制面重启或网络抖动时，一次失败就放弃，作业会一直占着租约直到到期（15 分钟）：
+ * 采集运行卡在 running，来源卡片一直显示「运行中」，「立即采集」一直点不动，
+ * 而活干完了、结果却没人收。这种情况下重试几秒就能救回来。
+ * 4xx 是控制面主动 fence 掉这次执行，属于预期结果，立即抛出不再重试。
+ */
 async function finish(jobId: string, leaseEpoch: number, payload: Record<string, unknown>) {
-  await json(await fetch(`${controlUrl}/api/v1/jobs/${encodeURIComponent(jobId)}/finish`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ ...payload, leaseEpoch }) }));
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= FINISH_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, FINISH_RETRY_DELAYS_MS[attempt - 1]));
+    }
+    try {
+      await postFinish(jobId, leaseEpoch, payload);
+      if (attempt > 0) process.stdout.write(`${jobId}: 完成写回在第 ${attempt + 1} 次尝试后成功\n`);
+      return;
+    } catch (error) {
+      if (error instanceof JobFinishRejected) throw error;
+      lastError = error;
+      process.stderr.write(`${jobId}: 完成写回失败（第 ${attempt + 1} 次）${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 const LEASE_SECONDS = 900;
+/** 控制面暂时不可达时的重试间隔；比空闲轮询慢，避免重启期间刷屏。 */
+const LEASE_RETRY_DELAY_MS = 5_000;
 const HEARTBEAT_INTERVAL_MS = 120_000;
 
 async function renewLeaseNow(job: WorkerJob) {
@@ -1304,9 +1348,19 @@ async function main() {
   const workerHeartbeat = setInterval(() => { void reportWorkerHeartbeat(); }, WORKER_HEARTBEAT_INTERVAL_MS);
   workerHeartbeat.unref?.();
   for (;;) {
-    const response = await fetch(`${controlUrl}/api/v1/jobs/lease`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ workerId, kinds: WORKER_KINDS, capabilities: WORKER_CAPABILITIES, capabilityProtocolVersions: WORKER_CAPABILITY_PROTOCOL_VERSIONS, maxPayloadSchemaVersion: 2, leaseSeconds: LEASE_SECONDS }) });
-    if (response.status === 204) { await new Promise((resolve) => setTimeout(resolve, 2000)); continue; }
-    const { job } = await json<{ job: WorkerJob }>(response);
+    // 控制面重启、网络抖动都会让这次请求直接抛异常。不接住的话异常会穿出 main()，
+    // 整个 Worker 进程当场退出——控制面重启一次，采集就此停摆，而且没人会发现，
+    // 因为界面只看得到「作业在排队」。这里退避后继续轮询。
+    let job: WorkerJob;
+    try {
+      const response = await fetch(`${controlUrl}/api/v1/jobs/lease`, { method: 'POST', headers: workerHeaders, body: JSON.stringify({ workerId, kinds: WORKER_KINDS, capabilities: WORKER_CAPABILITIES, capabilityProtocolVersions: WORKER_CAPABILITY_PROTOCOL_VERSIONS, maxPayloadSchemaVersion: 2, leaseSeconds: LEASE_SECONDS }) });
+      if (response.status === 204) { await new Promise((resolve) => setTimeout(resolve, 2000)); continue; }
+      ({ job } = await json<{ job: WorkerJob }>(response));
+    } catch (error) {
+      process.stderr.write(`领取作业失败：${error instanceof Error ? error.message : String(error)}\n`);
+      await new Promise((resolve) => setTimeout(resolve, LEASE_RETRY_DELAY_MS));
+      continue;
+    }
     const stopHeartbeat = startHeartbeat(job.id, job.lease_epoch);
     try {
       const startedAt = Date.now();

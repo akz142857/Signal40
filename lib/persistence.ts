@@ -106,9 +106,16 @@ export async function persistArticlesWithRevisions(
     ];
     if (existing.content_hash !== value.contentHash) {
       const latest = await db.prepare('SELECT COALESCE(MAX(revision), 0) AS revision FROM article_revisions WHERE article_id = ?').bind(value.id).first<{ revision: number }>();
+      // 内容可能改回之前见过的样子（聚合源的标题会来回变），那一版的修订已经存在。
+      // 唯一索引 (article_id, content_hash) 表达的就是「一份内容只留一条修订」，
+      // 这里按同样的语义只更新观测时间：不加重复行，也不能让整批采集因此失败——
+      // 那会让同一批次反复重试直到进死信，采集从此再也提交不上。
       statements.push(db.prepare(`
         INSERT INTO article_revisions (id, article_id, revision, content_json, content_hash, raw_object_key, observed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (article_id, content_hash) DO UPDATE SET
+          observed_at = excluded.observed_at,
+          raw_object_key = COALESCE(excluded.raw_object_key, article_revisions.raw_object_key)
       `).bind(`article_revision_${crypto.randomUUID()}`, value.id, Number(latest?.revision ?? 0) + 1, JSON.stringify(value), value.contentHash, rawObjectKey, observedAt));
     }
     await db.batch(statements);

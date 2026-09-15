@@ -84,6 +84,21 @@ void test('文章修订按内容哈希增量记录', async () => {
   const third = await db.client.query('SELECT COUNT(*) AS total FROM article_revisions');
   assert.equal(Number((third.rows[0] as { total: number }).total), stored.length + 1);
 
+  // 内容改回之前见过的那一版：修订已经存在，不能再插一条，更不能整批失败。
+  // 聚合源的标题会来回变，这里抛错会让同一批采集反复重试直到进死信。
+  await persistArticlesWithRevisions(db, [stored[0]], new Date(now.valueOf() + 3_000));
+  const reverted = await db.client.query('SELECT COUNT(*) AS total FROM article_revisions');
+  assert.equal(Number((reverted.rows[0] as { total: number }).total), stored.length + 1);
+  const observed = await db.client.query(
+    "SELECT observed_at FROM article_revisions WHERE article_id = $1 AND content_hash = $2",
+    [stored[0].id, stored[0].contentHash],
+  );
+  assert.equal(
+    (observed.rows[0] as { observed_at: string }).observed_at,
+    new Date(now.valueOf() + 3_000).toISOString(),
+    '重新观测到同一版内容要刷新观测时间',
+  );
+
   const recent = await loadRecentArticles(db, new Date(now.valueOf() - 86_400_000), 50);
   assert.ok(recent.length > 0);
 });
