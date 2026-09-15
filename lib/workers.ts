@@ -14,6 +14,13 @@ export const WORKER_ONLINE_WINDOW_SECONDS = 90;
 export const WORKER_RETENTION_DAYS = 7;
 /** 入队后超过这个时长仍没有能处理它的在线 Worker，就告警。 */
 export const ORPHAN_JOB_SECONDS = 60;
+/**
+ * 已被领取的作业超过这个时长没有续约，就认为执行侧已经掉线。
+ *
+ * Worker 每 120 秒续约一次，正常执行中的长作业不会触碰这条线；而写回失败、进程被杀
+ * 之类的情况下，作业会一直挂着租约直到到期（默认 900 秒），界面却只显示「运行中」。
+ */
+export const STALLED_LEASE_SECONDS = 300;
 
 export type WorkerRecord = {
   id: string;

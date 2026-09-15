@@ -200,10 +200,16 @@ export function projectPublicSourceRecord(row: Record<string, unknown>) {
     nextRunAt: nullableString(row.next_run_at, 100),
     lastSuccessAt: nullableString(row.last_success_at, 100),
     lastTestedAt: nullableString(row.last_tested_at, 100),
+    /** 当前配置本身通过过连接测试；改配置会让旧测试作废，这时它是 false。 */
+    testedCurrentConfig: Boolean(Number(row.tested_current_config ?? 0)),
     publicErrorCode: nullableString(row.last_error_code, 100),
     publicErrorMessage: publicSourceErrorMessage(row.last_error_code),
     consecutiveFailures: integer(row.consecutive_failures),
     hasActiveRun: Boolean(row.active_run_id),
+    /** 采集还挂着，但执行侧已经很久没有续约——作业租约到期后才会被重新领取。 */
+    activeRunStalled: Boolean(Number(row.active_run_stalled ?? 0)),
+    /** 停滞作业的租约到期时间，也就是最早会被自动重试的时刻。 */
+    activeRunRetryAt: nullableString(row.active_run_retry_at, 100),
     /** 未产生任何采集内容时为 true：此时删除不销毁证据，界面可以直接给删除入口。 */
     hardDeletable: Boolean(Number(row.hard_deletable ?? 0)),
     deletionStatus: nullableString(row.deletion_status, 100),

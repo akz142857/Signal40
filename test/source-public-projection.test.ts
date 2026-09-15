@@ -69,8 +69,9 @@ void test('actor source projection is an exact allowlist and strips execution ma
     'checkpointVersion', 'consecutiveFailures', 'costMicrosPerRequest',
     'createdAt', 'deletionRequestId',
     'deletionStatus', 'pendingRightsRequestId', 'pendingRightsRequestedBy',
-    'effectiveScheduleMultiplier', 'enabled', 'estimatedRequestsPerRun', 'hasActiveRun', 'hardDeletable',
-    'healthStatus', 'id', 'lastSuccessAt', 'lastTestedAt',
+    'effectiveScheduleMultiplier', 'enabled', 'estimatedRequestsPerRun', 'hasActiveRun',
+    'activeRunStalled', 'activeRunRetryAt', 'hardDeletable',
+    'healthStatus', 'id', 'lastSuccessAt', 'lastTestedAt', 'testedCurrentConfig',
     'lifecycleStatus', 'monthlyBudgetMicros', 'name', 'nextRunAt', 'ownerTeamId',
     'platform', 'publicConfig', 'publicErrorCode', 'publicErrorMessage',
     'rateLimitPerMinute', 'retention', 'rightsStatus', 'scheduleCron',
@@ -80,6 +81,10 @@ void test('actor source projection is an exact allowlist and strips execution ma
   assert.equal(projected.hasActiveRun, true);
   // 判定在服务端完成：投影里缺这一列时按「不能直接删」处理。
   assert.equal(projected.hardDeletable, false);
+  // 同理：缺列时按「当前配置没测过」处理，而不是默认已测。
+  assert.equal(projected.testedCurrentConfig, false);
+  assert.equal(projected.activeRunStalled, false);
+  assert.equal(projected.activeRunRetryAt, null);
   assert.equal(projected.publicErrorMessage, '来源网络暂时不可用。');
   assert.equal(
     (projected.publicConfig as { url?: string }).url,

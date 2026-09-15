@@ -18,6 +18,7 @@ import { validateSourceOwnershipMembers } from '@/lib/source-ownership';
 import { projectPublicSourceRecord } from '@/lib/source-public-projection';
 import { sourceActionAllowed } from '@/lib/source-authorization';
 import { createPendingSourceRightsRequest } from '@/lib/source-rights-approval';
+import { STALLED_LEASE_SECONDS } from '@/lib/workers';
 
 export async function GET(request: Request) {
   const actor = await resolveRequestActor(request);
@@ -37,6 +38,19 @@ export async function GET(request: Request) {
       next_run_at, retry_after, backoff_until, last_attempt_at, last_success_at,
       last_healthy_at, last_tested_at, last_error_code,
       consecutive_failures, active_run_id,
+      -- 正在跑的采集是不是已经掉线：作业还挂着租约，但执行侧很久没有续约了。
+      (SELECT CASE WHEN job.updated_at <= ? THEN 1 ELSE 0 END
+        FROM ingestion_runs run JOIN jobs job ON job.id = run.job_id
+        WHERE run.id = source_configs.active_run_id AND job.status = 'leased' LIMIT 1
+      ) AS active_run_stalled,
+      -- 租约到期时间：停滞的作业到这个点会被重新领取，界面据此告诉用户什么时候自动重试。
+      (SELECT job.lease_expires_at
+        FROM ingestion_runs run JOIN jobs job ON job.id = run.job_id
+        WHERE run.id = source_configs.active_run_id AND job.status = 'leased' LIMIT 1
+      ) AS active_run_retry_at,
+      -- 连接测试绑定的是当时的配置：改过配置之后，旧的测试结果对不上当前 config_hash。
+      CASE WHEN last_tested_config_hash IS NOT NULL AND last_tested_config_hash = config_hash
+        THEN 1 ELSE 0 END AS tested_current_config,
       (SELECT status FROM source_deletion_requests dr WHERE dr.source_config_id = source_configs.id AND dr.status <> 'completed' ORDER BY dr.created_at DESC LIMIT 1) AS deletion_status,
       (SELECT id FROM source_deletion_requests dr WHERE dr.source_config_id = source_configs.id AND dr.status <> 'completed' ORDER BY dr.created_at DESC LIMIT 1) AS deletion_request_id,
       (SELECT id FROM source_rights_requests rr WHERE rr.source_config_id = source_configs.id AND rr.status = 'pending' ORDER BY rr.created_at DESC LIMIT 1) AS pending_rights_request_id,
@@ -52,6 +66,7 @@ export async function GET(request: Request) {
       created_at, updated_at
     FROM source_configs WHERE lifecycle_status != 'archived' ORDER BY name
   `)
+    .bind(new Date(Date.now() - STALLED_LEASE_SECONDS * 1000).toISOString())
     .all();
   return Response.json({
     sources: result.results.map((row) =>

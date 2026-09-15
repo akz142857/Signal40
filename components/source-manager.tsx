@@ -58,6 +58,10 @@ import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { responseErrorText as errorText } from '@/lib/response-error';
 import { pollSourceTest } from '@/lib/source-test-polling';
 import { sourceNextStep } from '@/lib/onboarding';
+import {
+  MINIMUM_INDEPENDENT_EVIDENCE,
+  PRIMARY_EVIDENCE_SOURCE_TYPES,
+} from '@/lib/domain';
 import { PageContainer, PageHeader } from '@/components/page-shell';
 import type {
   IngestionQuarantineStatus,
@@ -85,10 +89,15 @@ type SourceRow = {
   nextRunAt: string | null;
   lastSuccessAt: string | null;
   lastTestedAt: string | null;
+  /** 当前配置本身通过过连接测试；改配置会让旧测试作废。 */
+  testedCurrentConfig: boolean;
   publicErrorMessage: string | null;
   publicErrorCode: string | null;
   consecutiveFailures: number;
   hasActiveRun: boolean;
+  /** 采集还挂着但执行侧已掉线；租约到期后才会自动重试。 */
+  activeRunStalled: boolean;
+  activeRunRetryAt: string | null;
   /** 服务端判定：这条来源没有任何采集内容，删除不销毁证据。 */
   hardDeletable: boolean;
   deletionStatus:
@@ -352,6 +361,37 @@ function ProposalList({
           )}
         </article>
       )) : <p className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">暂无来源提案。</p>}
+    </div>
+  );
+}
+
+/**
+ * 一手来源提示。
+ *
+ * 证据门禁要求候选选题里至少有一篇一手来源，而接入向导的「内容类型」默认是 media。
+ * 全是转述类来源时，连接、采集、选题计算每一步都会成功，只有最后的门禁永远不过——
+ * 这个条件此前只存在于 lib/domain.ts，界面上一个字都没有，撞上去才知道。
+ */
+function PrimarySourceNotice({ sources }: { sources: SourceRow[] }) {
+  // 列表本身已排除归档来源，这里拿到的就是在用的那些。
+  const active = sources;
+  const presentTypes = [
+    ...new Set(active.map((source) => source.publicConfig.sourceType ?? 'media')),
+  ];
+  const hasPrimary = presentTypes.some((type) =>
+    (PRIMARY_EVIDENCE_SOURCE_TYPES as readonly string[]).includes(type),
+  );
+  if (!active.length || hasPrimary) return null;
+  return (
+    <div className="mb-5 rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4">
+      <p className="text-sm font-medium">现有来源都不是一手来源</p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {active.length} 个来源的内容类型是 {presentTypes.join('、')}，都属于转述。
+        自动证据门禁要求同一个选题里至少有一篇一手来源（
+        {PRIMARY_EVIDENCE_SOURCE_TYPES.join(' / ')}），并有{' '}
+        {MINIMUM_INDEPENDENT_EVIDENCE} 份独立证据。只有转述来源时，采集和选题计算都会成功，
+        但雷达上的「可生成」始终是 0。内容类型可以在权利审批那一步调整。
+      </p>
     </div>
   );
 }
@@ -1461,7 +1501,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
     if (
       action === 'discard' &&
       !window.confirm(
-        '丢弃不可恢复，并会让 raw payload 立即进入删除队列。确认继续？',
+        `丢弃不可恢复：这一批次的 ${run.acceptedCount} 条内容会立即退出证据库，raw payload 进入删除队列，选题雷达随即按剩余语料重算（可能变成空）。\n\n重新采集也救不回来——同一条目的时间戳没变会被当成重复跳过，只有之后新发布的内容才会重新进入雷达。确认继续？`,
       )
     )
       return;
@@ -1775,7 +1815,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       termsSnapshot: '',
       expiresAt: '',
     };
-    const canDecideRights = canApproveRights && source.pendingRightsRequestedBy !== actor.id;
+    // 只看审批能力：职责分离移除后，提交者本人也能批自己的请求。
+    // 这里若继续排除提交者，界面会藏起一个服务端其实允许的动作。
+    const canDecideRights = canApproveRights;
     return (
       <>
         <SheetHeader className="border-b border-border p-6 pr-14">
@@ -2437,6 +2479,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
             </div>
           </div>
           <ConnectorReleaseSummary connectors={connectors} className="mb-5" />
+          <PrimarySourceNotice sources={sources} />
           <div className="grid gap-2">
             {sources.map((source) => {
               const capability = capabilityForAdapter(source.adapter);
@@ -2447,6 +2490,8 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                   name: source.name,
                   lifecycleStatus: source.lifecycleStatus,
                   rightsStatus: source.rightsStatus,
+                  sourceType: source.publicConfig.sourceType ?? 'media',
+                  testedCurrentConfig: source.testedCurrentConfig,
                   enabled: source.enabled,
                   pendingRightsRequestedBy: source.pendingRightsRequestedBy,
                 },
@@ -2490,6 +2535,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                         : source.publicConfig.url}
                     </p>
                     <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        内容类型 {source.publicConfig.sourceType ?? 'media'}
+                      </span>
                       <span>权利 {rightsLabels[source.rightsStatus]}</span>
                       <span>
                         下次{' '}
@@ -2505,8 +2553,16 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                             )
                           : '尚无'}
                       </span>
-                      {source.hasActiveRun && (
+                      {source.hasActiveRun && !source.activeRunStalled && (
                         <span className="text-chart-1">运行中</span>
+                      )}
+                      {source.activeRunStalled && (
+                        <span className="text-amber-700 dark:text-amber-300">
+                          采集停滞
+                          {source.activeRunRetryAt
+                            ? ` · ${new Date(source.activeRunRetryAt).toLocaleTimeString('zh-CN')} 自动重试`
+                            : ''}
+                        </span>
                       )}
                       {source.effectiveScheduleMultiplier > 1 && (
                         <span className="text-amber-700 dark:text-amber-300">
@@ -2616,7 +2672,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                     : '连接已验证'}
             </DialogTitle>
             <DialogDescription>
-              保存后先测试连接，再由另一名管理员核验权利，最后才能启用采集。
+              保存后先测试连接，再核验使用权，最后才能启用采集。
             </DialogDescription>
           </DialogHeader>
           {wizardError && (
@@ -3358,8 +3414,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
               ) : (
                 <>
                   <p className="rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">
-                    连接验证已完成，来源已保存。启用前还需要另一名具备「来源权利审批」能力的管理员核对证据——
-                    提交者不能批自己的请求。
+                    连接验证已完成，来源已保存。启用前还需要一名具备「来源权利审批」能力的管理员核对证据。
                   </p>
                   {/*
                     这一步到这里就做完了：没有审批权的人再停在弹窗里也推不动，
@@ -3375,9 +3430,8 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                     <CheckCircle2 />
                     完成，回到来源列表
                   </Button>
-                  {canApproveRights
-                    && pendingSource?.pendingRightsRequestedBy !== actor.id
-                    && pendingSourceId && (
+                  {/* 同上：不再按提交者排除，职责分离已移除。 */}
+                  {canApproveRights && pendingSourceId && (
                     <Button
                       variant="outline"
                       onClick={() => {

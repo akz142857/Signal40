@@ -284,3 +284,51 @@ void test('GET /api/v1/automation/control 说明引擎能不能真的写入', as
   assert.equal(ready.engine.actorId, admin.id);
   setRouteTestContext({ db: database, actor: admin });
 });
+
+void test('GET /api/v1/source-configs 把掉线的采集标成停滞，并给出自动重试时刻', async () => {
+  const { GET } = await import('../app/api/v1/source-configs/route.ts');
+  setRouteTestActor(admin);
+  const now = Date.now();
+  const stamp = new Date(now).toISOString();
+  await database.prepare(`
+    INSERT INTO source_configs
+      (id, name, adapter, platform, source_type, config_json, config_hash, rights_status,
+       lifecycle_status, enabled, rate_limit_per_minute, created_at, updated_at)
+    VALUES (?, ?, 'rss', 'rss', 'media', '{}', 'sha256:stall', 'approved', 'enabled', 1, 30, ?, ?)
+  `).bind('source_stalled', 'Stalled Feed', stamp, stamp).run();
+  await database.prepare(`
+    INSERT INTO jobs
+      (id, kind, required_capability, payload_schema_version, payload_json, status,
+       idempotency_key, attempt, max_attempts, lease_owner, lease_epoch, lease_expires_at,
+       available_at, created_at, updated_at)
+    VALUES (?, 'ingestion', 'source:rss', 2, '{}', 'leased', ?, 1, 5, 'source-worker-1', 1, ?, ?, ?, ?)
+  `).bind(
+    'job_stalled', 'stalled-1',
+    new Date(now + 600_000).toISOString(),
+    stamp, stamp,
+    // 续约停在 10 分钟前：Worker 每 120 秒续一次，正常执行不会落到这里。
+    new Date(now - 600_000).toISOString(),
+  ).run();
+  await database.prepare(`
+    INSERT INTO ingestion_runs (id, source_config_id, job_id, status, trigger, created_at, started_at)
+    VALUES (?, 'source_stalled', 'job_stalled', 'running', 'manual', ?, ?)
+  `).bind('ingestion_stalled', stamp, stamp).run();
+  await database.prepare('UPDATE source_configs SET active_run_id = ? WHERE id = ?')
+    .bind('ingestion_stalled', 'source_stalled').run();
+
+  const stalled = await GET(new Request('http://local/api/v1/source-configs'));
+  assert.equal(stalled.status, 200, await stalled.clone().text());
+  const listed = (await stalled.json() as { sources: { id: string; hasActiveRun: boolean; activeRunStalled: boolean; activeRunRetryAt: string | null }[] })
+    .sources.find((source) => source.id === 'source_stalled');
+  assert.equal(listed?.hasActiveRun, true);
+  assert.equal(listed?.activeRunStalled, true);
+  assert.ok(listed?.activeRunRetryAt, '停滞的采集要给出租约到期时间');
+
+  // 刚续约过的作业仍然是正常运行中，不能被误报成停滞。
+  await database.prepare('UPDATE jobs SET updated_at = ? WHERE id = ?')
+    .bind(new Date(now - 10_000).toISOString(), 'job_stalled').run();
+  const healthy = await GET(new Request('http://local/api/v1/source-configs'));
+  const running = (await healthy.json() as { sources: { id: string; activeRunStalled: boolean }[] })
+    .sources.find((source) => source.id === 'source_stalled');
+  assert.equal(running?.activeRunStalled, false);
+});

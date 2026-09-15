@@ -2576,10 +2576,13 @@ components:
         nextRunAt: { type: [string, 'null'], format: date-time }
         lastSuccessAt: { type: [string, 'null'], format: date-time }
         lastTestedAt: { type: [string, 'null'], format: date-time }
+        testedCurrentConfig: { type: boolean }
         publicErrorCode: { oneOf: [{ $ref: '#/components/schemas/SourceErrorCode' }, { type: 'null' }] }
         publicErrorMessage: { type: [string, 'null'], maxLength: 500 }
         consecutiveFailures: { type: integer, minimum: 0 }
         hasActiveRun: { type: boolean }
+        activeRunStalled: { type: boolean }
+        activeRunRetryAt: { type: [string, 'null'], format: date-time }
         hardDeletable: { type: boolean }
         deletionStatus:
           { type: [string, 'null'], enum: [pending, blocked, deleting, awaiting_external, failed, null] }

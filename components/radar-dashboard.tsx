@@ -489,6 +489,17 @@ export function RadarDashboard({
   ).length;
   const lead = topics[0];
   const onboardingDone = !onboarding.length || onboardingComplete(onboarding);
+  /**
+   * 空列表要说清是「引擎没算出东西」还是「被筛选条件挡住了」。
+   * 原来两种情况共用一句「当前筛选条件下没有候选题」，于是雷达在语料被丢弃、
+   * 或所有来源都过不了证据门禁时，都只说筛选——把唯一的线索藏了起来。
+   */
+  const gateStep = onboarding.find((step) => step.key === 'pass_evidence_gate');
+  const emptyReason = !topics.length
+    ? (currentOnboardingStep(onboarding)?.detail ?? '还没有算出候选选题。')
+    : filter === 'ready' && gateStep && gateStep.status !== 'done'
+      ? gateStep.detail
+      : `当前筛选条件下没有候选题（共 ${topics.length} 个候选）。`;
   const pendingStepCount = onboarding.filter((step) => step.status !== 'done').length;
   const nextStep = currentOnboardingStep(onboarding);
 
@@ -619,7 +630,7 @@ export function RadarDashboard({
             })}
             {!filteredTopics.length && (
               <div className="rounded-2xl border border-dashed border-border p-10 text-center text-muted-foreground">
-                当前筛选条件下没有候选题。
+                {emptyReason}
               </div>
             )}
           </div>
