@@ -17,10 +17,11 @@ import type { GateResult, Role } from './workflow.ts';
  * 不需要人记得去关。
  */
 
-/** 编排引擎划分的阶段。前六个是机械步骤，四道审批单独由 `autoApprovals` 控制。 */
+/** 编排引擎划分的阶段。都是机械步骤，四道审批单独由 `autoApprovals` 控制。 */
 export const AUTOMATION_STAGES = [
   'ingestion',
   'topic_quality',
+  'topic_verification',
   'project_creation',
   'advance',
   'jobs',
@@ -41,6 +42,7 @@ export type AutomationStage = (typeof AUTOMATION_STAGES)[number];
 export const GLOBAL_AUTOMATION_STAGES = [
   'ingestion',
   'topic_quality',
+  'topic_verification',
   'metrics',
 ] as const satisfies readonly AutomationStage[];
 
@@ -131,6 +133,11 @@ export const APPROVAL_ROLES: Record<ApprovalKind, Role[]> = {
 /**
  * 默认策略：机械步骤自动，四道审批人工，自动建项目关闭。
  * 自动建项目要等选题质量指标达标后再由人显式打开（见 `lib/topic-quality.ts`）。
+ *
+ * `topic_verification` 默认开：单人运营下没有第二个人来点「批准」，所以选题核验
+ * 由引擎按可数事实判定（门禁通过 + 质量达标 + 独立来源数达标），不满足就留在待核验。
+ * 它只写 `verified`，永远不写 `rejected`，也永远不覆盖人已经写过的结论——
+ * 自动化可以替人省掉点头，不能替人摇头。
  */
 export function defaultAutomationPolicy(): Omit<AutomationPolicy, 'id' | 'name' | 'version'> {
   return {
@@ -138,6 +145,7 @@ export function defaultAutomationPolicy(): Omit<AutomationPolicy, 'id' | 'name' 
     stages: {
       ingestion: 'auto',
       topic_quality: 'auto',
+      topic_verification: 'auto',
       project_creation: 'off',
       advance: 'auto',
       jobs: 'auto',
@@ -290,10 +298,24 @@ export function policyMatchesProject(policy: AutomationPolicy, project: { brand:
   return true;
 }
 
+/**
+ * 这条选题够不够格进自动化。
+ *
+ * `minTopicScore` 是启发式打分的下限，口径一改（`lib/topic-scoring.ts` 的 `SCORING_VERSION`）
+ * 同一条选题的分数就会变。所以准入不能只压在它身上：独立证据来源数是数出来的事实，
+ * 换任何打分口径都不会变，把它一并要求，自动建项目就有了一条不随调参漂移的底线。
+ * 传不进来源数时按 0 处理——拿不到证据就不放行，方向朝关。
+ */
 export function policyMatchesTopic(
   policy: AutomationPolicy,
-  topic: { score: number; sourceTypes?: readonly string[]; quality?: { automatable?: boolean; score?: number } | null },
+  topic: {
+    score: number;
+    independentSourceCount?: number;
+    sourceTypes?: readonly string[];
+    quality?: { automatable?: boolean; score?: number } | null;
+  },
 ) {
+  if ((topic.independentSourceCount ?? 0) < policy.guardrails.minIndependentSources) return false;
   if (topic.score < policy.scope.minTopicScore) return false;
   if (policy.scope.requireTopicQuality && !topic.quality?.automatable) return false;
   if (policy.scope.requireTopicQuality && (topic.quality?.score ?? -1) < policy.scope.minQualityScore) return false;

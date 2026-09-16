@@ -61,6 +61,7 @@ type Run = {
 const stageLabels: Record<AutomationStage, string> = {
   ingestion: '采集',
   topic_quality: '选题质量评估',
+  topic_verification: '选题自动核验',
   project_creation: '自动建项目',
   advance: '状态推进',
   jobs: '作业编排（配音/渲染）',

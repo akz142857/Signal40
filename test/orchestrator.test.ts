@@ -688,3 +688,108 @@ void test('渲染被预算挡下时项目不会推进到没有作业的 RENDER_Q
     '没有渲染作业就不能进 RENDER_QUEUED',
   );
 });
+
+/** 造一条只有选题行、还没有人核验过的候选。 */
+async function seedUnreviewedTopic(
+  db: MemoryPg,
+  overrides: { quality?: Record<string, unknown>; sourceCount?: number } = {},
+) {
+  const topic = runPipeline(sampleArticles(baseTime), baseTime).find(
+    (candidate) => candidate.gate.passed,
+  );
+  assert.ok(topic, '样本文章里应当有一个通过自动证据门禁的选题');
+  await db.client.query(
+    `INSERT INTO topics (id, title, keywords_json, score, heat_change, score_breakdown_json, source_count, status, gate_json, quality_json, updated_at)
+     VALUES ($1, $2, '[]', $3, 0, '{}', $4, 'ready', $5, $6, $7)`,
+    [
+      topic.id,
+      topic.title,
+      Math.max(topic.score, 60),
+      overrides.sourceCount ?? topic.sourceCount,
+      JSON.stringify(topic.gate),
+      JSON.stringify(
+        overrides.quality ?? { automatable: true, score: 90 },
+      ),
+      baseTime.toISOString(),
+    ],
+  );
+  return topic.id;
+}
+
+void test('门禁与质量都达标的选题由引擎自动核验，审计写明是策略干的', async () => {
+  const db = await createMemoryPg();
+  await seedMembers(db);
+  const policy = await seedPolicy(db);
+  const topicId = await seedUnreviewedTopic(db);
+  await tick(db, at(1));
+  const events = await db.client.query(
+    'SELECT status, note FROM verification_events WHERE topic_id = $1',
+    [topicId],
+  );
+  assert.equal(events.rows.length, 1);
+  assert.equal((events.rows[0] as { status: string }).status, 'verified');
+  assert.match(
+    String((events.rows[0] as { note: string }).note),
+    /独立证据来源 \d+ 个/,
+  );
+  const audits = await db.client.query(
+    "SELECT metadata_json FROM audit_events WHERE entity_id = $1 AND action = 'topic.verified'",
+    [topicId],
+  );
+  assert.equal(audits.rows.length, 1);
+  const raw = (audits.rows[0] as { metadata_json: string | object }).metadata_json;
+  const metadata = (typeof raw === 'string' ? JSON.parse(raw) : raw) as {
+    trigger: string;
+    policyId: string;
+  };
+  assert.equal(metadata.trigger, 'automation');
+  assert.equal(metadata.policyId, policy.id);
+});
+
+void test('质量不达标的选题留在待核验，引擎不会替人摇头写驳回', async () => {
+  const db = await createMemoryPg();
+  await seedMembers(db);
+  await seedPolicy(db);
+  const topicId = await seedUnreviewedTopic(db, {
+    quality: { automatable: false, score: 10 },
+  });
+  await tick(db, at(1));
+  const events = await db.client.query(
+    'SELECT status FROM verification_events WHERE topic_id = $1',
+    [topicId],
+  );
+  assert.equal(events.rows.length, 0);
+});
+
+void test('人已经驳回过的选题，引擎不会把它改回已核验', async () => {
+  const db = await createMemoryPg();
+  await seedMembers(db);
+  await seedPolicy(db);
+  const topicId = await seedUnreviewedTopic(db);
+  await db.client.query(
+    "INSERT INTO verification_events (id, topic_id, status, note, created_at) VALUES ('verify_human', $1, 'rejected', '证据对不上，先不做。', $2)",
+    [topicId, baseTime.toISOString()],
+  );
+  await tick(db, at(1));
+  const events = await db.client.query(
+    'SELECT status FROM verification_events WHERE topic_id = $1 ORDER BY created_at',
+    [topicId],
+  );
+  assert.equal(events.rows.length, 1);
+  assert.equal((events.rows[0] as { status: string }).status, 'rejected');
+});
+
+void test('关掉选题自动核验这一阶段后，引擎不再写核验结论', async () => {
+  const db = await createMemoryPg();
+  await seedMembers(db);
+  await seedPolicy(db, {
+    stages: { ...defaultAutomationPolicy().stages, topic_verification: 'off' },
+  });
+  const topicId = await seedUnreviewedTopic(db);
+  await tick(db, at(1));
+  const events = await db.client.query(
+    'SELECT status FROM verification_events WHERE topic_id = $1',
+    [topicId],
+  );
+  assert.equal(events.rows.length, 0);
+});

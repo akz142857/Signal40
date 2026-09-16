@@ -40,7 +40,7 @@ import { raiseAttentionItem, notifyPendingAttention } from './attention.ts';
 import { expireDueSourceRights } from './source-rights.ts';
 import { reconcileSourceOwnership } from './source-ownership.ts';
 import { assessTopicQuality, type TopicQuality } from './topic-quality.ts';
-import { loadTopic } from './persistence.ts';
+import { loadTopic, recordVerification } from './persistence.ts';
 import { createProjectV2 } from './project-v2.ts';
 import { evaluateScriptDuration } from './script-duration.ts';
 import { checkScriptCompliance } from './script-compliance.ts';
@@ -649,7 +649,110 @@ async function runTopicQuality(
     recordSuccess(runner.breakers, 'topic_quality');
 }
 
-/** 3. 建项目：达标选题 + 策略允许 + 未超日限额。 */
+/**
+ * 3. 选题自动核验：按可数事实替人点头。
+ *
+ * 建项目那一步要求 `verificationStatus === 'verified'`，而写核验结论的只有编辑。
+ * 单人运营下那一步就是整条链路的死结：选题算出来了、门禁过了、也没人来点。
+ *
+ * 这里只做一件很窄的事——把「门禁已过、质量达标、独立来源数达标」的选题标成
+ * 已核验，并把判定依据原样写进核验备注和审计。几条边界是刻意的：
+ *
+ * - 只处理 `unreviewed`。人写过的结论（批准或驳回）永远不覆盖。
+ * - 只写 `verified`，不写 `rejected`。自动化替人省掉点头，不替人摇头；
+ *   不达标的留在待核验，等人看或等证据补齐。
+ * - `recordVerification` 自己还会再拦一次门禁未过的批准，这里的判断不是唯一防线。
+ */
+async function runTopicVerification(
+  runner: StageRunner,
+  allowed: boolean,
+  policies: AutomationPolicy[],
+) {
+  if (!allowed) return;
+  const { db, now, limits } = runner;
+  const errorsBefore = runner.errors.length;
+  const eligiblePolicies = policies.filter(
+    (policy) => stageMode(policy, 'topic_verification') === 'auto',
+  );
+  if (!eligiblePolicies.length) return;
+  const rows = await db
+    .prepare(`
+      SELECT t.id FROM topics t
+      WHERE t.status = 'ready'
+        AND t.id NOT IN (SELECT topic_id FROM verification_events)
+      ORDER BY t.score DESC LIMIT ?
+    `)
+    .bind(limits.topics)
+    .all<{ id: string }>();
+  for (const row of rows.results) {
+    try {
+      const topic = await loadTopic(db, row.id);
+      if (!topic || topic.verificationStatus !== 'unreviewed') continue;
+      if (!topic.gate.passed) continue;
+      const sourceTypes = [
+        ...new Set(topic.articles.map((article) => article.sourceType)),
+      ];
+      const policy = eligiblePolicies.find((candidate) =>
+        policyMatchesTopic(candidate, {
+          score: topic.score,
+          independentSourceCount: topic.sourceCount,
+          sourceTypes,
+          quality: topic.quality ?? null,
+        }),
+      );
+      if (!policy) continue;
+      const note = [
+        '自动核验：',
+        `独立证据来源 ${topic.sourceCount} 个，已找到一手来源，`,
+        `选题分 ${topic.score}`,
+        topic.quality ? `，质量分 ${topic.quality.score}` : '',
+        `。策略「${policy.name}」。`,
+      ].join('');
+      const result = await recordVerification(db, row.id, 'verified', note, now, {
+        additionalStatements: () => [
+          db
+            .prepare(`
+              INSERT INTO audit_events (id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at)
+              VALUES (?, ?, ?, 'topic.verified', 'topic', ?, ?, ?, ?, ?)
+            `)
+            .bind(
+              `audit_${crypto.randomUUID()}`,
+              runner.actor.id,
+              runner.actor.role,
+              row.id,
+              stableHash({ topicId: row.id, status: 'verified', note }),
+              JSON.stringify({
+                trigger: 'automation',
+                policyId: policy.id,
+                score: topic.score,
+                independentSourceCount: topic.sourceCount,
+                qualityScore: topic.quality?.score ?? null,
+              }),
+              crypto.randomUUID(),
+              now.toISOString(),
+            ),
+        ],
+      });
+      if ('error' in result) continue;
+      runner.actions.push({
+        stage: 'topic_verification',
+        action: 'topic.verified',
+        topicId: row.id,
+        detail: {
+          policyId: policy.id,
+          score: topic.score,
+          independentSourceCount: topic.sourceCount,
+        },
+      });
+    } catch (error) {
+      await fail(runner, 'topic_verification', error, { topicId: row.id });
+    }
+  }
+  if (runner.errors.length === errorsBefore)
+    recordSuccess(runner.breakers, 'topic_verification');
+}
+
+/** 4. 建项目：达标选题 + 策略允许 + 未超日限额。 */
 async function runProjectCreation(
   runner: StageRunner,
   policies: AutomationPolicy[],
@@ -704,6 +807,7 @@ async function runProjectCreation(
         if (
           !policyMatchesTopic(policy, {
             score: row.score,
+            independentSourceCount: topic.sourceCount,
             sourceTypes,
             quality: quality as TopicQuality,
           })
@@ -1618,6 +1722,8 @@ export async function runAutomationTick(
     await runIngestion(runner, stageAllowed('ingestion'));
   if (!breakerOpen(breakers, 'topic_quality', now))
     await runTopicQuality(runner, stageAllowed('topic_quality'), policies);
+  if (!breakerOpen(breakers, 'topic_verification', now))
+    await runTopicVerification(runner, stageAllowed('topic_verification'), policies);
   if (!breakerOpen(breakers, 'project_creation', now))
     await runProjectCreation(runner, policies);
 

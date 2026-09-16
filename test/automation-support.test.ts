@@ -15,6 +15,7 @@ import {
   breakerStatus,
   defaultAutomationPolicy,
   isGlobalStage,
+  policyMatchesTopic,
   stageMode,
 } from '../lib/automation.ts';
 import { readFile } from 'node:fs/promises';
@@ -273,8 +274,11 @@ void test('阶段只有自动与不自动：历史落库的 manual 归一成 off
 });
 
 void test('全局阶段的定义由 lib 给出，界面和引擎共用一份', () => {
-  // 采集、选题质量评估、指标回流不挂在项目上，引擎对所有启用中的策略取「或」。
-  assert.deepEqual([...GLOBAL_AUTOMATION_STAGES], ['ingestion', 'topic_quality', 'metrics']);
+  // 采集、选题质量评估、选题自动核验、指标回流不挂在项目上，引擎对所有启用中的策略取「或」。
+  assert.deepEqual(
+    [...GLOBAL_AUTOMATION_STAGES],
+    ['ingestion', 'topic_quality', 'topic_verification', 'metrics'],
+  );
   for (const stage of GLOBAL_AUTOMATION_STAGES) assert.equal(isGlobalStage(stage), true, stage);
   for (const stage of ['project_creation', 'advance', 'jobs', 'publish'] as const) {
     assert.equal(isGlobalStage(stage), false, stage);
@@ -304,4 +308,29 @@ void test('自动化控制台不再逐字段写库，且删除策略要二次确
   assert.match(console_, /window\.confirm\(/);
   // 角色分渲染：只读角色看到的不是一堆注定 403 的控件。
   assert.match(console_, /const canEdit = session\.actor\?\.role === 'admin'/);
+});
+
+
+void test('独立证据不够时不自动建项目，哪怕启发式打分很高', () => {
+  // 分数是可调参的启发式，来源数是数出来的。准入必须压在数得出来的那一边，
+  // 否则改一次打分口径就等于悄悄放宽了自动生产的准入线。
+  const policy = {
+    ...defaultAutomationPolicy(),
+    id: 'policy_test',
+    name: '测试策略',
+    version: 1,
+    scope: { ...defaultAutomationPolicy().scope, minTopicScore: 60, requireTopicQuality: false },
+    guardrails: { ...defaultAutomationPolicy().guardrails, minIndependentSources: 2 },
+  };
+  const quality = { automatable: true, score: 100 };
+  assert.equal(
+    policyMatchesTopic(policy, { score: 99, independentSourceCount: 1, quality }),
+    false,
+  );
+  assert.equal(
+    policyMatchesTopic(policy, { score: 99, independentSourceCount: 2, quality }),
+    true,
+  );
+  // 调用方没给来源数时按 0 处理：拿不到证据就不放行。
+  assert.equal(policyMatchesTopic(policy, { score: 99, quality }), false);
 });
