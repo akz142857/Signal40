@@ -1,5 +1,6 @@
 import type { SqlDatabase, SqlStatement } from './sql.ts';
 import type { Article, TopicCandidate, VerificationStatus } from './domain.ts';
+import { SCORING_VERSION } from './topic-scoring.ts';
 
 type TopicRow = {
   id: string;
@@ -245,11 +246,12 @@ export async function persistPipeline(
     statements.push(
       db
         .prepare(`
-      INSERT INTO topics (id, title, keywords_json, run_id, score, heat_change, score_breakdown_json, source_count, status, gate_json, updated_at)
-      VALUES ${valueSlots(topicChunk.length, 11)}
+      INSERT INTO topics (id, title, keywords_json, run_id, score, heat_change, score_breakdown_json, scoring_version, source_count, status, gate_json, updated_at)
+      VALUES ${valueSlots(topicChunk.length, 12)}
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title, keywords_json = excluded.keywords_json, run_id = excluded.run_id,
         score = excluded.score, heat_change = excluded.heat_change, score_breakdown_json = excluded.score_breakdown_json,
+        scoring_version = excluded.scoring_version,
         source_count = excluded.source_count, status = excluded.status, gate_json = excluded.gate_json,
         quality_json = '{}', updated_at = excluded.updated_at
     `)
@@ -262,6 +264,7 @@ export async function persistPipeline(
             topic.score,
             topic.heatChange,
             JSON.stringify(topic.scoreBreakdown),
+            SCORING_VERSION,
             topic.sourceCount,
             topic.status,
             JSON.stringify(topic.gate),

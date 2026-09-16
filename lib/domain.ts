@@ -6,6 +6,12 @@ import {
   type EvidenceOrigin,
   type EvidenceRelationship,
 } from './social-evidence.ts';
+import {
+  scoreBreakdownFromFeatures,
+  weightedScore,
+  type ScoreBreakdown,
+  type ScoreFeatures,
+} from './topic-scoring.ts';
 
 export const SOURCE_TYPES = [
   'social',
@@ -75,14 +81,8 @@ export type Article = Required<
   evidenceOrigins?: EvidenceOrigin[];
 };
 
-export type ScoreBreakdown = {
-  resonance: number;
-  velocity: number;
-  numericImpact: number;
-  sourceQuality: number;
-  freshness: number;
-  explainability: number;
-};
+
+export type { ScoreBreakdown, ScoreFeatures } from './topic-scoring.ts';
 
 export type EvidenceGate = {
   passed: boolean;
@@ -411,10 +411,6 @@ export function clusterArticles(articles: Article[], threshold = 0.3) {
   return clusters;
 }
 
-function clamp(value: number) {
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
 function scoreCluster(
   cluster: Cluster,
   now: Date,
@@ -436,9 +432,6 @@ function scoreCluster(
     cluster.articles.flatMap((article) => article.evidenceOrigins?.length ? article.evidenceOrigins : [article]),
     evidencePolicy,
   );
-  const sourceTypes = new Set(
-    cluster.articles.map((article) => article.sourceType),
-  );
   const ages = cluster.articles.map((article) =>
     Math.max(
       0,
@@ -451,33 +444,21 @@ function scoreCluster(
     .join(' ');
   const numericMatches = text.match(/\d+(?:\.\d+)?%?|[¥￥$]\s?\d+/g) ?? [];
 
-  const breakdown: ScoreBreakdown = {
-    resonance: clamp(independentSourceCount * 19 + sourceTypes.size * 7),
-    velocity: clamp(
-      26 + recentCount * 20 + Math.max(0, independentSourceCount - 1) * 8,
-    ),
-    numericImpact: clamp(44 + numericMatches.length * 18),
-    sourceQuality: clamp(
+  const features: ScoreFeatures = {
+    independentSourceCount,
+    recentArticleCount: recentCount,
+    numericMentionCount: numericMatches.length,
+    sourceQualityAverage:
       cluster.articles.reduce(
         (sum, article) => sum + SOURCE_QUALITY[article.sourceType],
         0,
       ) / cluster.articles.length,
-    ),
-    freshness: clamp(100 - Math.min(...ages) * 8),
-    explainability: clamp(
-      46 +
-        FINANCE_TERMS.filter((term) => clean(text).includes(term)).length * 8 +
-        (numericMatches.length ? 14 : 0),
-    ),
+    freshestAgeHours: Math.min(...ages),
+    lexiconHitCount: FINANCE_TERMS.filter((term) => clean(text).includes(term))
+      .length,
   };
-  const score = clamp(
-    breakdown.resonance * 0.25 +
-      breakdown.velocity * 0.2 +
-      breakdown.numericImpact * 0.15 +
-      breakdown.sourceQuality * 0.2 +
-      breakdown.freshness * 0.1 +
-      breakdown.explainability * 0.1,
-  );
+  const breakdown = scoreBreakdownFromFeatures(features);
+  const score = weightedScore(breakdown);
   const hasPrimarySource = cluster.articles.some((article) =>
     PRIMARY_EVIDENCE_SOURCE_TYPES.includes(article.sourceType),
   );
@@ -501,9 +482,9 @@ function scoreCluster(
 
   return {
     score,
-    heatChange: clamp(
-      recentCount * 4 + Math.max(0, independentSourceCount - 1) * 3,
-    ),
+    // 「热度」= 最近一小时新增的篇数。以前是 recentCount*4 + (来源数-1)*3，
+    // 界面上那个「热度 +7」既不是篇数也不是百分比，没有单位可言。
+    heatChange: recentCount,
     scoreBreakdown: breakdown,
     sourceCount: independentSourceCount,
     sources: [...uniqueSources],

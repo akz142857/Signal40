@@ -76,6 +76,12 @@ export const topics = pgTable(
     score: integer('score').notNull(),
     heatChange: integer('heat_change').notNull().default(0),
     scoreBreakdownJson: text('score_breakdown_json').notNull(),
+    /**
+     * 打分口径版本（`lib/topic-scoring.ts` 的 `SCORING_VERSION`）。
+     * 分数决定自动化挑不挑这条选题，换了口径的分数不能直接跟旧分数比大小；
+     * 版本号落库之后，「这两个分数可比吗」是查得出来的，不用靠记。
+     */
+    scoringVersion: integer('scoring_version').notNull().default(1),
     sourceCount: integer('source_count').notNull(),
     status: text('status', {
       enum: ['ready', 'needs_primary_source', 'needs_corroboration'],

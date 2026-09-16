@@ -588,7 +588,7 @@ export function RadarDashboard({
                   <div className="min-w-0">
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <span className="rounded-md bg-secondary px-2 py-1 font-mono text-xs font-semibold">
-                        热度 +{topic.heatChange}
+                        1 小时内 +{topic.heatChange} 篇
                       </span>
                       <span className="flex items-center gap-1 text-xs text-muted-foreground">
                         <Clock3 className="size-3.5" />
