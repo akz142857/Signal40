@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   ArrowUpRight,
   BarChart3,
@@ -13,10 +14,11 @@ import {
   Film,
   LoaderCircle,
   Radar,
+  Settings2,
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -37,7 +39,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { Label } from '@/components/ui/label';
 import { PageContainer, PageHeader } from '@/components/page-shell';
-import { OnboardingChecklist } from '@/components/onboarding-checklist';
 import {
   currentOnboardingStep,
   onboardingComplete,
@@ -514,6 +515,15 @@ export function RadarDashboard({
             <span className="size-2 rounded-full bg-chart-1 shadow-[0_0_0_4px_var(--color-signal-glow)]" />
             {sourceLabel}
           </span>
+          {!onboardingDone && (
+            <Link
+              href={nextStep?.action?.href ?? '/sources'}
+              className={buttonVariants({ variant: 'outline', size: 'default' })}
+            >
+              <Settings2 />
+              {nextStep?.action?.label ?? '查看来源配置'}
+            </Link>
+          )}
           <Button variant="outline" onClick={() => setImportOpen(true)}><FileUp />导入文章</Button>
         </>}
       />
@@ -554,8 +564,6 @@ export function RadarDashboard({
               </FilterButton>
             </div>
           </div>
-
-          {!onboardingDone && <OnboardingChecklist steps={onboarding} />}
 
           <div className="grid gap-3">
             {filteredTopics.map((topic, index) => {

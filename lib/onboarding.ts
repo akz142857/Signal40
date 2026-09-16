@@ -285,7 +285,7 @@ export function computeOnboardingChecklist(state: OnboardingState): OnboardingSt
       key: 'pass_evidence_gate',
       title: '通过证据门禁',
       status: 'blocked',
-      detail: `${state.latestRunTopicCount} 个候选都没过门禁。${describeSources(primaryTyped)} 登记的是一手来源，但还没启用或使用权还没批准，一篇文章都没供上——先把它们走完测试连接、权利审批、启用这三步。`,
+      detail: `${state.latestRunTopicCount} 个候选都没过门禁：门禁要求每个选题里至少有一篇一手来源，而登记为一手来源的 ${describeSources(primaryTyped)} 还没启用或使用权还没批准，一篇文章都没供上。先给它们走完测试连接、权利审批、启用这三步。`,
       action: { label: '去启用一手来源', href: '/sources' },
     };
   } else {
