@@ -658,7 +658,9 @@ async function runTopicQuality(
  * 这里只做一件很窄的事——把「门禁已过、质量达标、独立来源数达标」的选题标成
  * 已核验，并把判定依据原样写进核验备注和审计。几条边界是刻意的：
  *
- * - 只处理 `unreviewed`。人写过的结论（批准或驳回）永远不覆盖。
+ * - 只处理 `unreviewed`。人写过的结论（批准或驳回）永远不覆盖。判断的是「最近一条
+ *   核验事件的状态」，不是「有没有核验事件」：`saveRun` 会给每条落库的选题写一行
+ *   `unreviewed`，按有没有行来筛，这个阶段一条选题都选不出来。
  * - 只写 `verified`，不写 `rejected`。自动化替人省掉点头，不替人摇头；
  *   不达标的留在待核验，等人看或等证据补齐。
  * - `recordVerification` 自己还会再拦一次门禁未过的批准，这里的判断不是唯一防线。
@@ -679,7 +681,11 @@ async function runTopicVerification(
     .prepare(`
       SELECT t.id FROM topics t
       WHERE t.status = 'ready'
-        AND t.id NOT IN (SELECT topic_id FROM verification_events)
+        AND COALESCE((
+          SELECT v.status FROM verification_events v
+          WHERE v.topic_id = t.id
+          ORDER BY v.created_at DESC, v.seq DESC LIMIT 1
+        ), 'unreviewed') = 'unreviewed'
       ORDER BY t.score DESC LIMIT ?
     `)
     .bind(limits.topics)

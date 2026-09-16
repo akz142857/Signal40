@@ -713,6 +713,12 @@ async function seedUnreviewedTopic(
       baseTime.toISOString(),
     ],
   );
+  // saveRun 落库时会给每条选题写一行 status='unreviewed' 的核验事件，
+  // 所以「还没人核验过」在库里长这样，而不是一条事件都没有。
+  await db.client.query(
+    "INSERT INTO verification_events (id, topic_id, status, note, created_at) VALUES ($1, $2, 'unreviewed', '', $3)",
+    [`verify_seed_${topic.id}`, topic.id, baseTime.toISOString()],
+  );
   return topic.id;
 }
 
@@ -722,14 +728,17 @@ void test('门禁与质量都达标的选题由引擎自动核验，审计写明
   const policy = await seedPolicy(db);
   const topicId = await seedUnreviewedTopic(db);
   await tick(db, at(1));
+  // saveRun 写的那行 unreviewed 仍在，引擎在它后面追加一条 verified。
   const events = await db.client.query(
-    'SELECT status, note FROM verification_events WHERE topic_id = $1',
+    'SELECT status, note FROM verification_events WHERE topic_id = $1 ORDER BY seq',
     [topicId],
   );
-  assert.equal(events.rows.length, 1);
-  assert.equal((events.rows[0] as { status: string }).status, 'verified');
+  assert.deepEqual(
+    events.rows.map((row) => (row as { status: string }).status),
+    ['unreviewed', 'verified'],
+  );
   assert.match(
-    String((events.rows[0] as { note: string }).note),
+    String((events.rows[1] as { note: string }).note),
     /独立证据来源 \d+ 个/,
   );
   const audits = await db.client.query(
@@ -755,7 +764,7 @@ void test('质量不达标的选题留在待核验，引擎不会替人摇头写
   });
   await tick(db, at(1));
   const events = await db.client.query(
-    'SELECT status FROM verification_events WHERE topic_id = $1',
+    "SELECT status FROM verification_events WHERE topic_id = $1 AND status <> 'unreviewed'",
     [topicId],
   );
   assert.equal(events.rows.length, 0);
@@ -772,7 +781,7 @@ void test('人已经驳回过的选题，引擎不会把它改回已核验', asy
   );
   await tick(db, at(1));
   const events = await db.client.query(
-    'SELECT status FROM verification_events WHERE topic_id = $1 ORDER BY created_at',
+    "SELECT status FROM verification_events WHERE topic_id = $1 AND status <> 'unreviewed' ORDER BY seq",
     [topicId],
   );
   assert.equal(events.rows.length, 1);
@@ -788,7 +797,7 @@ void test('关掉选题自动核验这一阶段后，引擎不再写核验结论
   const topicId = await seedUnreviewedTopic(db);
   await tick(db, at(1));
   const events = await db.client.query(
-    'SELECT status FROM verification_events WHERE topic_id = $1',
+    "SELECT status FROM verification_events WHERE topic_id = $1 AND status <> 'unreviewed'",
     [topicId],
   );
   assert.equal(events.rows.length, 0);
