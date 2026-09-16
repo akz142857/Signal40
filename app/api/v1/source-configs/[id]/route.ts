@@ -45,7 +45,12 @@ export async function GET(
       (SELECT id FROM source_deletion_requests dr WHERE dr.source_config_id = source_configs.id AND dr.status <> 'completed' ORDER BY dr.created_at DESC LIMIT 1) AS deletion_request_id,
       (SELECT id FROM source_rights_requests rr WHERE rr.source_config_id = source_configs.id AND rr.status = 'pending' ORDER BY rr.created_at DESC LIMIT 1) AS pending_rights_request_id,
       (SELECT requested_by FROM source_rights_requests rr WHERE rr.source_config_id = source_configs.id AND rr.status = 'pending' ORDER BY rr.created_at DESC LIMIT 1) AS pending_rights_requested_by,
-      created_at, updated_at
+      created_at, updated_at,
+      -- 和列表接口取同一个判断：连接测试绑定的是当时的配置，改过配置之后旧结果对不上当前
+      -- config_hash。漏掉这一列不会报错，投影会把缺列当 false，于是这个接口对每一条来源
+      -- 都说「没测过」——测试通过了也看不出来。
+      CASE WHEN last_tested_config_hash IS NOT NULL AND last_tested_config_hash = config_hash
+        THEN 1 ELSE 0 END AS tested_current_config
     FROM source_configs WHERE id = ? LIMIT 1
   `)
     .bind(id)

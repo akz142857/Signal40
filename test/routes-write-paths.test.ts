@@ -332,3 +332,31 @@ void test('GET /api/v1/source-configs 把掉线的采集标成停滞，并给出
     .sources.find((source) => source.id === 'source_stalled');
   assert.equal(running?.activeRunStalled, false);
 });
+
+void test('GET /api/v1/source-configs/[id] 报出「当前配置已测过」，和列表接口口径一致', async () => {
+  // 详情接口的 SELECT 曾经漏掉 tested_current_config，而投影把缺列当 false，
+  // 于是它对每一条来源都说「没测过」——测试通过了界面也看不出来，启用那一步无从解释。
+  const source = await database.prepare('SELECT id, config_hash FROM source_configs LIMIT 1')
+    .first<{ id: string; config_hash: string }>();
+  assert.ok(source);
+  await database.prepare('UPDATE source_configs SET last_tested_config_hash = ? WHERE id = ?')
+    .bind(source.config_hash, source.id).run();
+
+  const { GET } = await import('../app/api/v1/source-configs/[id]/route.ts');
+  setRouteTestActor(admin);
+  const detail = await GET(new Request(`http://local/api/v1/source-configs/${source.id}`), {
+    params: Promise.resolve({ id: source.id }),
+  });
+  assert.equal(detail.status, 200, await detail.clone().text());
+  const payload = await detail.json() as { source: { testedCurrentConfig: boolean } };
+  assert.equal(payload.source.testedCurrentConfig, true);
+
+  // 配置改了之后旧测试结果对不上，两个接口都必须说「没测过」。
+  await database.prepare("UPDATE source_configs SET last_tested_config_hash = 'sha256:stale' WHERE id = ?")
+    .bind(source.id).run();
+  const stale = await GET(new Request(`http://local/api/v1/source-configs/${source.id}`), {
+    params: Promise.resolve({ id: source.id }),
+  });
+  const stalePayload = await stale.json() as { source: { testedCurrentConfig: boolean } };
+  assert.equal(stalePayload.source.testedCurrentConfig, false);
+});
