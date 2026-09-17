@@ -45,11 +45,15 @@ void test('英文按词计速率，目标时长可以反推字数预算', () => 
   assert.ok(budget.characters > 150 && budget.characters < 180, `45 秒的中文字数预算 ${budget.characters} 不合理`);
 });
 
-void test('语言判定区分中英文，英文簇不进入自动化', () => {
+void test('语言只是观测值，不再决定能不能自动化', () => {
   assert.equal(detectLanguage('存储芯片价格上涨'), 'zh');
   assert.equal(detectLanguage('Memory chip prices rose'), 'en');
   const englishArticles: Article[] = Array.from({ length: 3 }, (_, index) => ({
     id: `article_en_${index}`,
+    embedding: [],
+    embeddingModel: '',
+    embeddingVersion: 0,
+    embeddingSourceHash: '',
     source: `Source ${index}`,
     sourceType: index === 0 ? 'filing' : 'media',
     author: '',
@@ -61,8 +65,13 @@ void test('语言判定区分中英文，英文簇不进入自动化', () => {
     contentHash: `hash${index}`,
   }));
   const quality = assessTopicQuality({ articles: englishArticles, sourceCount: 3 }, now);
+  assert.equal(quality.language, 'en');
   assert.equal(quality.automatable, false);
-  assert.ok(quality.reasons.some((reason) => reason.includes('语言')));
+  // 挡下来的理由必须是「没有语义向量、判定不了」，不能是「它是英文」——
+  // 语言不再是门禁，否则换个语料这条链路又会因为语言被无差别挡住。
+  assert.ok(!quality.reasons.some((reason) => reason.includes('语言判定为')));
+  assert.ok(quality.reasons.some((reason) => reason.includes('语义向量')));
+  assert.equal(quality.coherenceMode, 'token');
 });
 
 void test('同一批证据支撑多条声明时区分度为 0', () => {
@@ -72,6 +81,10 @@ void test('同一批证据支撑多条声明时区分度为 0', () => {
   // 几条声明的证据集合就完全相同，区分度为 0——这正是自动建项目默认关闭的原因。
   const primaryArticles: Article[] = Array.from({ length: 3 }, (_, index) => ({
     id: `article_zh_${index}`,
+    embedding: [],
+    embeddingModel: '',
+    embeddingVersion: 0,
+    embeddingSourceHash: '',
     source: `原始来源 ${index}`,
     sourceType: 'filing',
     author: '',
@@ -274,10 +287,11 @@ void test('阶段只有自动与不自动：历史落库的 manual 归一成 off
 });
 
 void test('全局阶段的定义由 lib 给出，界面和引擎共用一份', () => {
-  // 采集、选题质量评估、选题自动核验、指标回流不挂在项目上，引擎对所有启用中的策略取「或」。
+  // 采集、语义向量、选题质量评估、选题自动核验、指标回流不挂在项目上，
+  // 引擎对所有启用中的策略取「或」。
   assert.deepEqual(
     [...GLOBAL_AUTOMATION_STAGES],
-    ['ingestion', 'topic_quality', 'topic_verification', 'metrics'],
+    ['ingestion', 'embedding', 'topic_quality', 'topic_verification', 'metrics'],
   );
   for (const stage of GLOBAL_AUTOMATION_STAGES) assert.equal(isGlobalStage(stage), true, stage);
   for (const stage of ['project_creation', 'advance', 'jobs', 'publish'] as const) {

@@ -39,7 +39,20 @@ import {
 import { raiseAttentionItem, notifyPendingAttention } from './attention.ts';
 import { expireDueSourceRights } from './source-rights.ts';
 import { reconcileSourceOwnership } from './source-ownership.ts';
-import { assessTopicQuality, type TopicQuality } from './topic-quality.ts';
+import { assessTopicQuality, TOPIC_QUALITY_VERSION, type TopicQuality } from './topic-quality.ts';
+import { EMBEDDING_VERSION, embeddingInputText } from './embedding.ts';
+import {
+  embeddingJobInFlight,
+  enqueueEmbeddingJob,
+  EMBEDDING_JOB_ITEM_LIMIT,
+  pendingArticleEmbeddings,
+  pendingDomainCentroids,
+  type EmbeddingJobItem,
+} from './embedding-jobs.ts';
+import { domainConfigHash, loadTopicDomains } from './topic-domains.ts';
+
+/** 向量回填窗口：比选题的 72 小时滚动窗口宽一点，免得刚好在边界上的文章永远没向量。 */
+const EMBEDDING_BACKFILL_WINDOW_HOURS = 96;
 import { loadTopic, recordVerification } from './persistence.ts';
 import { createProjectV2 } from './project-v2.ts';
 import { evaluateScriptDuration } from './script-duration.ts';
@@ -138,6 +151,8 @@ export type OrchestratorContext = {
   /** `team_members` 里的服务账号 user_id；缺失时引擎不做任何写入。 */
   automationActorId?: string;
   monthlyRenderBudgetMicros?: number;
+  /** 语义向量模型；空字符串表示没配置，向量阶段不排作业、质量判定按 fail closed 处理。 */
+  embeddingModel?: string;
   notify?: { url?: string; secret?: string };
   fetchImpl?: typeof fetch;
 };
@@ -557,7 +572,117 @@ async function runIngestion(runner: StageRunner, allowed: boolean) {
     recordSuccess(runner.breakers, 'ingestion');
 }
 
-/** 2. 选题质量评估：写入 `topics.quality_json`，不达标的进待办箱。 */
+/**
+ * 2. 语义向量：给还没有当前口径向量的文章和领域中心排作业。
+ *
+ * 这一阶段只排作业、不算向量——算在 Render Worker 上，因为 OPENAI_API_KEY 只有它持有。
+ *
+ * 同时只允许一个向量作业在途：在途作业不会把它的文章从待嵌入集合里摘掉，
+ * 不做这层限制的话，每 30 秒就会排一个和上一批高度重叠的新作业，同一批文本反复付费嵌入。
+ *
+ * 一个作业只装一个来源的文章：租约边界要按 `sourceConfigId` 复核授权，
+ * 混装就没法判定——这也顺带把作业载荷压到了一次 API 请求的大小。
+ */
+async function runEmbedding(runner: StageRunner, allowed: boolean) {
+  if (!allowed) return;
+  // 没配模型就整段跳过。注意这在默认配置下不会发生（`lib/runtime.ts` 有默认模型），
+  // 真正的关闭开关是把这个阶段设成 `off`；这里只是防御调用方显式传空串。
+  const model = runner.context.embeddingModel ?? '';
+  if (!model) return;
+  const { db, now } = runner;
+  const errorsBefore = runner.errors.length;
+  try {
+    if (await embeddingJobInFlight(db)) {
+      recordSuccess(runner.breakers, 'embedding');
+      return;
+    }
+    const since = new Date(now.valueOf() - EMBEDDING_BACKFILL_WINDOW_HOURS * 3_600_000);
+    const domains = pendingDomainCentroids(await loadTopicDomains(db), model, EMBEDDING_VERSION);
+    // 领域中心优先：缺一个中心向量，所有选题的领域相关性就都判定不了，
+    // 而文章向量少几篇只影响那几篇。
+    let items: EmbeddingJobItem[] = domains.map((domain) => ({
+      subject: 'domain' as const,
+      id: domain.id,
+      text: domain.description,
+      sourceHash: domain.descriptionHash,
+    }));
+    let sourceConfigId: string | null = null;
+    let articleCount = 0;
+    if (!items.length) {
+      const articles = await pendingArticleEmbeddings(
+        db,
+        model,
+        EMBEDDING_VERSION,
+        since,
+        EMBEDDING_JOB_ITEM_LIMIT,
+      );
+      // 取第一篇文章所属来源，只装同来源的——租约复核按单一 sourceConfigId 判定。
+      sourceConfigId = articles[0]?.sourceConfigId ?? null;
+      const sameSource = articles.filter(
+        (article) => article.sourceConfigId === sourceConfigId,
+      );
+      articleCount = sameSource.length;
+      items = sameSource.map((article) => ({
+        subject: 'article' as const,
+        id: article.id,
+        text: embeddingInputText({ title: article.title, summary: article.summary }),
+        sourceHash: article.sourceHash,
+      }));
+    }
+    items = items.slice(0, EMBEDDING_JOB_ITEM_LIMIT);
+    if (!items.length) {
+      recordSuccess(runner.breakers, 'embedding');
+      return;
+    }
+    const enqueued = await enqueueEmbeddingJob(
+      db,
+      items,
+      model,
+      now,
+      EMBEDDING_VERSION,
+      sourceConfigId,
+    );
+    if (enqueued?.changes) {
+      runner.jobsEnqueued += 1;
+      const detail = {
+        jobId: enqueued.jobId,
+        model,
+        sourceConfigId,
+        articleCount,
+        domainCount: domains.length,
+        itemCount: enqueued.itemCount,
+      };
+      runner.actions.push({
+        stage: 'embedding',
+        action: 'embedding.job_enqueued',
+        detail,
+      });
+      // 每一条自动写入都要有审计，带 trigger 与策略归属——这是编排引擎的通用约定，
+      // 向量阶段没有理由例外：它决定了把哪些来源内容发给第三方。
+      await db
+        .prepare(`
+          INSERT INTO audit_events (id, actor_id, actor_role, action, entity_type, entity_id, after_hash, metadata_json, request_id, created_at)
+          VALUES (?, ?, ?, 'embedding.job_enqueued', 'job', ?, ?, ?, ?, ?)
+        `)
+        .bind(
+          `audit_${crypto.randomUUID()}`,
+          runner.actor.id,
+          runner.actor.role,
+          enqueued.jobId,
+          stableHash(detail),
+          JSON.stringify({ trigger: 'automation', ...detail }),
+          crypto.randomUUID(),
+          now.toISOString(),
+        )
+        .run();
+    }
+  } catch (error) {
+    await fail(runner, 'embedding', error, {});
+  }
+  if (runner.errors.length === errorsBefore) recordSuccess(runner.breakers, 'embedding');
+}
+
+/** 3. 选题质量评估：写入 `topics.quality_json`，不达标的进待办箱。 */
 async function runTopicQuality(
   runner: StageRunner,
   allowed: boolean,
@@ -566,14 +691,44 @@ async function runTopicQuality(
   if (!allowed) return;
   const { db, now, limits } = runner;
   const errorsBefore = runner.errors.length;
+  const embeddingModel = runner.context.embeddingModel ?? '';
+  const domains = await loadTopicDomains(db);
+  // 一个领域都没配 = 全部选题都不可自动化，而且会一直如此。这不是 per-topic 的
+  // 信息级提示能说清的事——它只对「门禁已过且分数达标」的选题发，
+  // 那种选题在没有领域时本来就近乎为零，于是待办箱什么都不说。
+  if (!domains.some((domain) => domain.enabled)) {
+    await raiseAttentionItem(
+      db,
+      {
+        kind: 'topic_quality',
+        severity: 'warning',
+        dedupeKey: 'topic_domains:unconfigured',
+        reason:
+          '没有配置任何启用中的主题领域，所有选题都会因为「无法判断是否落在生产范围内」而不自动建项目。用 `npm run domain -- add <名称> <描述>` 配置。',
+        detail: { domainCount: domains.length },
+      },
+      now,
+    );
+  }
   const rows = await db
     .prepare(`
       SELECT t.id, t.score, t.updated_at, t.quality_json
       FROM topics t
       WHERE t.quality_json = '{}' OR t.quality_json IS NULL
+        -- 口径版本变了就必须重算：旧 quality_json 里的一致性是按词元算的，
+        -- 和新口径的阈值不是一个量纲，留着会让门禁拿旧数做新判定。
+        -- quality_json 是 text 列，取字段前必须显式转 jsonb。
+        OR COALESCE(NULLIF(t.quality_json, '')::jsonb ->> 'version', '') <> ?
+        -- 降级结论必须可恢复：向量还没算好时判出来的是「按词元口径、判定不了」，
+        -- 只看版本号的话这个结论会被自己的版本号永久锁死，向量补齐也翻不了身。
+        OR COALESCE(NULLIF(t.quality_json, '')::jsonb ->> 'coherenceMode', '') = 'token'
+        OR COALESCE(NULLIF(t.quality_json, '')::jsonb ->> 'domainStatus', '') <> 'evaluated'
+        -- 反方向：结论的生命周期不能长于它依据的配置。停用领域、改阈值、改描述
+        -- 之后，旧的「达标」必须失效重判。
+        OR COALESCE(NULLIF(t.quality_json, '')::jsonb ->> 'domainConfigHash', '') <> ?
       ORDER BY t.score DESC LIMIT ?
     `)
-    .bind(limits.topics)
+    .bind(TOPIC_QUALITY_VERSION, domainConfigHash(domains), limits.topics)
     .all<{
       id: string;
       score: number;
@@ -587,7 +742,11 @@ async function runTopicQuality(
     try {
       const topic = await loadTopic(db, row.id);
       if (!topic) continue;
-      const quality = assessTopicQuality(topic, now);
+      const quality = assessTopicQuality(topic, now, {
+        domains,
+        embeddingModel,
+        embeddingVersion: EMBEDDING_VERSION,
+      });
       await db.batch([
         db
           .prepare('UPDATE topics SET quality_json = ? WHERE id = ?')
@@ -1726,6 +1885,8 @@ export async function runAutomationTick(
 
   if (!breakerOpen(breakers, 'ingestion', now))
     await runIngestion(runner, stageAllowed('ingestion'));
+  if (!breakerOpen(breakers, 'embedding', now))
+    await runEmbedding(runner, stageAllowed('embedding'));
   if (!breakerOpen(breakers, 'topic_quality', now))
     await runTopicQuality(runner, stageAllowed('topic_quality'), policies);
   if (!breakerOpen(breakers, 'topic_verification', now))

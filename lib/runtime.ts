@@ -3,6 +3,7 @@ import { configurePgTypeParsers, createPgDatabase } from './sql-pg.ts';
 import type { SqlDatabase } from './sql.ts';
 import type { ObjectStorage } from './storage.ts';
 import { controlPlaneWorkerTokens, validateControlPlaneEnvironment } from './workload-env.ts';
+import { DEFAULT_EMBEDDING_MODEL } from './embedding.ts';
 import { createS3Client, createS3Storage } from './storage-s3.ts';
 import { resolveActor, type Actor } from './workflow.ts';
 
@@ -110,6 +111,16 @@ export const config = {
   get schedulerToken() {
     return process.env.SCHEDULER_TOKEN;
   },
+  /**
+   * 语义向量模型。
+   *
+   * **不配也不等于关闭**：这里有默认值，所以不设这个变量就是用默认模型照常算向量、
+   * 照常产生 OpenAI 费用。真正的关闭开关是把自动化策略的 `embedding` 阶段设成 `off`，
+   * 那之后聚类退回词元口径、质量门禁按 fail closed 判为不可自动化。
+   */
+  get embeddingModel() {
+    return process.env.SIGNAL40_EMBEDDING_MODEL ?? DEFAULT_EMBEDDING_MODEL;
+  },
   get webhookSecret() {
     return process.env.WEBHOOK_SECRET;
   },
@@ -165,6 +176,7 @@ export const config = {
       s3AccessKeyId: process.env.S3_ACCESS_KEY_ID,
       s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
       openAiApiKey: process.env.OPENAI_API_KEY,
+      embeddingModel: process.env.SIGNAL40_EMBEDDING_MODEL ?? DEFAULT_EMBEDDING_MODEL,
       youtubeAccessToken: process.env.YOUTUBE_ACCESS_TOKEN,
       workerToken: controlPlaneWorkerTokens(process.env).shared,
       sourceWorkerToken: process.env.SIGNAL40_SOURCE_WORKER_TOKEN,

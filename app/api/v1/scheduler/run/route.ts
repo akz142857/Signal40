@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     trigger: 'manual',
     automationActorId: config.automationActorId,
     monthlyRenderBudgetMicros: Number(config.monthlyRenderBudgetMicros ?? 0),
+    embeddingModel: config.embeddingModel,
     notify: { url: config.attentionWebhookUrl, secret: config.webhookSecret },
     limits: { projects: 5, projectCreations: 1, publishes: 1, notifications: 5 },
   });

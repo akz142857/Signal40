@@ -771,10 +771,17 @@ export function RadarDashboard({
                         ['簇内一致性', selected.quality.coherence],
                         ['一致性下限', selected.quality.coherenceFloor],
                         ['证据区分度', selected.quality.evidenceDistinctness],
-                        ['主题词表覆盖', selected.quality.lexiconCoverage],
+                        ['向量覆盖率', selected.quality.embeddingCoverage],
                       ].map(([label, value]) => <div className="rounded-xl bg-secondary/70 p-3" key={String(label)}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-mono text-xl font-semibold">{Math.round(Number(value) * 100)}%</p></div>)}
                     </div>
-                    <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 语言：{selected.quality.language} · {selected.quality.automatable ? '允许自动建项目' : '禁止自动建项目'}</p>
+                    <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 一致性口径：{selected.quality.coherenceMode === 'semantic' ? '语义余弦' : '词元（降级）'} · 语言：{selected.quality.language} · {selected.quality.automatable ? '允许自动建项目' : '禁止自动建项目'}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{
+                      selected.quality.domainStatus === 'evaluated'
+                        ? `领域「${selected.quality.domainName}」相关性 ${selected.quality.domainRelevance}（阈值 ${selected.quality.domainThreshold}）`
+                        : selected.quality.domainStatus === 'no_domains'
+                          ? '未配置主题领域，无法判断是否落在生产范围内'
+                          : '领域中心向量缺失或口径不一致，领域相关性无法判定'
+                    }</p>
                     {selected.quality.reasons.length > 0 && <ul className="mt-2 space-y-1 text-sm leading-6 text-chart-2">{selected.quality.reasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>}
                   </> : <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">尚未评估；下一轮调度器会计算质量指标。</p>}
                 </section>

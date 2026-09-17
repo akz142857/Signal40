@@ -19,8 +19,19 @@
  * 这样两次运行的分数能不能直接比较是可判定的，而不是靠猜。
  */
 
-/** 评分口径版本。改动参数、权重或分项定义都要 +1。 */
-export const SCORING_VERSION = 2;
+/**
+ * 评分口径版本。改动参数、权重或分项定义都要 +1。
+ *
+ * 3：可解释性分项从「命中中文财经词表的词数」换成「与主题领域中心向量的余弦」。
+ *   词表命中数把语言混进了可解释性——英文选题命中不了中文词，于是无论内容多清晰
+ *   都拿 0 分，而这个分项本来要回答的是「这条选题讲得清不清楚、属不属于我们做的事」。
+ * 4：余弦不再走 `saturatingScore`。那条曲线的契约是「计数的 0 是真实的 0」，
+ *   而余弦没有真零点：本项目实测无关文本的余弦中位数就有 0.228（见
+ *   `lib/domain.ts` 的 `EMBEDDING_CLUSTER_THRESHOLD` 注释），套进去会让完全跑题的
+ *   选题拿到 41 分，判别区间被压到 41–80，再乘 0.1 权重后全体差不到 4 分。
+ *   改成以实测基线为零点的线性映射。
+ */
+export const SCORING_VERSION = 4;
 
 export type ScoreBreakdown = {
   resonance: number;
@@ -43,8 +54,15 @@ export type ScoreFeatures = {
   sourceQualityAverage: number;
   /** 最新一篇文章的小时龄。 */
   freshestAgeHours: number;
-  /** 命中主题词表的词数。 */
-  lexiconHitCount: number;
+  /**
+   * 与最接近的主题领域中心向量的余弦，0–1。
+   *
+   * 没有配领域、或者选题还没算出向量时是 0——和「算过了、确实跑题」同分。
+   * 这在**排序**上是可以接受的：两种情况都不该排在已经判定属于生产范围的选题前面。
+   * 「判定不了」和「判定为跑题」的区别由 `lib/topic-quality.ts` 的 domainStatus
+   * 承担，那里是门禁，必须分得清。
+   */
+  domainRelevance: number;
 };
 
 /**
@@ -58,8 +76,22 @@ export const SCORING_PARAMETERS = {
   velocityHalfSaturationArticles: 2,
   /** 出现 3 个数字/金额时冲击力 50 分。 */
   numericHalfSaturationMentions: 3,
-  /** 命中 3 个词表词时可解释性 50 分。 */
-  explainabilityHalfSaturationTerms: 3,
+  /**
+   * 可解释性的零点：本项目语料上无关文本两两余弦的中位数。
+   *
+   * 这个数不是选来好看的，是 `scripts/calibrate-embedding-threshold.ts` 在 200 篇
+   * 真实文章、19900 对上测出来的（p50 = 0.228）。低于它等于「和这个领域没关系」，
+   * 该拿 0 分。换模型或换语料要重跑标定并同步改这里。
+   */
+  explainabilityBaselineRelevance: 0.228,
+  /**
+   * 可解释性的满分点：到这个余弦算「明确属于这个领域」。
+   *
+   * 取 0.62 与 `EMBEDDING_CLUSTER_THRESHOLD` 同源——那是同一份标定数据里
+   * 「讲的是同一件事」的分界。取固定值而不是各领域自己的阈值：分数要跨运行、
+   * 跨领域可比，用每个领域自己的阈值归一会让「阈值定得松的领域」普遍拿高分。
+   */
+  explainabilityFullRelevance: 0.62,
   /** 每过 12 小时时效分减半。 */
   freshnessHalfLifeHours: 12,
 } as const;
@@ -84,6 +116,19 @@ export function saturatingScore(count: number, halfSaturation: number) {
   return Math.round(100 * (1 - 0.5 ** (count / halfSaturation)));
 }
 
+/**
+ * 有基线的量 → 分数：基线及以下 0 分，满分点及以上 100 分，中间线性。
+ *
+ * 余弦这类量不能用 `saturatingScore`：那条曲线假设「0 就是没有」，
+ * 而任意两段自然语言之间的余弦都有一个不低的基线，套进去会让"完全无关"
+ * 也拿到四十多分，把整个分项的判别区间压掉一半。
+ */
+export function baselineScore(value: number, baseline: number, full: number) {
+  if (!(full > baseline)) return 0;
+  const normalized = (value - baseline) / (full - baseline);
+  return Math.round(100 * Math.min(1, Math.max(0, normalized)));
+}
+
 /** 小时龄 → 时效分：按半衰期衰减，永远为正，不会像线性扣分那样一天后变成负数再被截断。 */
 export function halfLifeScore(ageHours: number, halfLifeHours: number) {
   return Math.round(100 * 0.5 ** (Math.max(0, ageHours) / halfLifeHours));
@@ -106,9 +151,10 @@ export function scoreBreakdownFromFeatures(features: ScoreFeatures): ScoreBreakd
     ),
     sourceQuality: Math.round(Math.min(100, Math.max(0, features.sourceQualityAverage))),
     freshness: halfLifeScore(features.freshestAgeHours, params.freshnessHalfLifeHours),
-    explainability: saturatingScore(
-      features.lexiconHitCount,
-      params.explainabilityHalfSaturationTerms,
+    explainability: baselineScore(
+      features.domainRelevance,
+      params.explainabilityBaselineRelevance,
+      params.explainabilityFullRelevance,
     ),
   };
 }

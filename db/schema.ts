@@ -54,6 +54,26 @@ export const articles = pgTable(
     publishedAt: text('published_at').notNull(),
     metricsJson: text('metrics_json').notNull().default('{}'),
     contentHash: text('content_hash').notNull(),
+    /**
+     * 语义向量，JSON 数组。空串表示还没算过。
+     *
+     * 不用 pgvector：测试跑在 PGlite（WASM）上，扩展装不进去，
+     * 而聚类只在簇内抽样做两两比较（40 篇 = 780 次点积），
+     * 在应用层算余弦比引入一个测试环境复现不了的扩展划算。
+     */
+    embeddingJson: text('embedding_json').notNull().default(''),
+    /** 产出这个向量的模型标识；换模型后旧向量不能和新向量比余弦。 */
+    embeddingModel: text('embedding_model').notNull().default(''),
+    /** 向量口径版本（`lib/embedding.ts` 的 `EMBEDDING_VERSION`）；改输入文本构造方式要 +1。 */
+    embeddingVersion: integer('embedding_version').notNull().default(0),
+    embeddedAt: text('embedded_at').notNull().default(''),
+    /**
+     * 嵌入输入文本（标题 + 摘要）的哈希。
+     *
+     * 不复用 `content_hash`：那个是 shortHash(url|title)，不含摘要，
+     * 拿它当向量新鲜度凭据会漏掉「只改摘要」的改动。
+     */
+    embeddingSourceHash: text('embedding_source_hash').notNull().default(''),
     createdAt: text('created_at').notNull(),
   },
   (table) => [
@@ -63,6 +83,47 @@ export const articles = pgTable(
       table.sourceType,
       table.publishedAt,
     ),
+    /** 「哪些文章还没算向量」是调度器每轮都要问的问题；前导列必须能做等值匹配。 */
+    index('idx_articles_embedding_source_hash_published_at').on(
+      table.embeddingSourceHash,
+      table.publishedAt,
+    ),
+  ],
+);
+
+/**
+ * 主题领域：自动化允许生产的内容范围。
+ *
+ * 取代原先写死在 `lib/domain.ts` 的中文财经词表——词表把「这个选题是不是我要做的领域」
+ * 和「这个选题是什么语言」绑死了：英文选题命中不了中文词，于是永远被判为跑题。
+ * 领域改用一段自然语言描述、嵌成中心向量，选题与它比余弦，语言无关。
+ */
+export const topicDomains = pgTable(
+  'topic_domains',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    /** 领域描述，同时是中心向量的嵌入输入；改描述会让旧中心向量失效。 */
+    description: text('description').notNull(),
+    /** 描述的哈希；和 centroid_source_hash 不一致就说明中心向量过期，要重算。 */
+    descriptionHash: text('description_hash').notNull(),
+    centroidJson: text('centroid_json').notNull().default(''),
+    centroidSourceHash: text('centroid_source_hash').notNull().default(''),
+    centroidModel: text('centroid_model').notNull().default(''),
+    centroidVersion: integer('centroid_version').notNull().default(0),
+    /** 判定「属于这个领域」的余弦下限。 */
+    relevanceThreshold: text('relevance_threshold').notNull().default('0.3'),
+    enabled: text('enabled', { enum: ['true', 'false'] })
+      .notNull()
+      .default('true'),
+    createdBy: text('created_by').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    uniqueIndex('idx_topic_domains_name').on(table.name),
+    index('idx_topic_domains_enabled').on(table.enabled),
   ],
 );
 
@@ -1324,6 +1385,7 @@ export const jobs = pgTable(
     kind: text('kind', {
       enum: [
         'ingestion',
+        'embedding',
         'voice',
         'preview',
         'render',

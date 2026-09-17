@@ -20,6 +20,7 @@ import type { GateResult, Role } from './workflow.ts';
 /** 编排引擎划分的阶段。都是机械步骤，四道审批单独由 `autoApprovals` 控制。 */
 export const AUTOMATION_STAGES = [
   'ingestion',
+  'embedding',
   'topic_quality',
   'topic_verification',
   'project_creation',
@@ -41,6 +42,7 @@ export type AutomationStage = (typeof AUTOMATION_STAGES)[number];
  */
 export const GLOBAL_AUTOMATION_STAGES = [
   'ingestion',
+  'embedding',
   'topic_quality',
   'topic_verification',
   'metrics',
@@ -144,6 +146,7 @@ export function defaultAutomationPolicy(): Omit<AutomationPolicy, 'id' | 'name' 
     scope: { brands: [], locales: [], sourceTypes: [], minTopicScore: 60, minQualityScore: 70, requireTopicQuality: true },
     stages: {
       ingestion: 'auto',
+      embedding: 'auto',
       topic_quality: 'auto',
       topic_verification: 'auto',
       project_creation: 'off',

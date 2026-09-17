@@ -8,9 +8,15 @@ import {
   SCORING_PARAMETERS,
   SCORING_VERSION,
   weightedScore,
+  baselineScore,
   type ScoreFeatures,
 } from '../lib/topic-scoring.ts';
-import { MINIMUM_INDEPENDENT_EVIDENCE, runPipeline } from '../lib/domain.ts';
+import {
+  EMBEDDING_CLUSTER_THRESHOLD,
+  MINIMUM_INDEPENDENT_EVIDENCE,
+  runPipeline,
+} from '../lib/domain.ts';
+import { DEFAULT_RELEVANCE_THRESHOLD } from '../lib/topic-domains.ts';
 import { sampleArticles } from './fixtures/sample-articles.ts';
 
 const baseFeatures: ScoreFeatures = {
@@ -19,12 +25,30 @@ const baseFeatures: ScoreFeatures = {
   numericMentionCount: 0,
   sourceQualityAverage: 0,
   freshestAgeHours: 0,
-  lexiconHitCount: 0,
+  domainRelevance: 0,
 };
 
 void test('权重之和是 1，否则综合分的量纲就不是 0–100', () => {
   const total = Object.values(SCORE_WEIGHTS).reduce((sum, weight) => sum + weight, 0);
   assert.ok(Math.abs(total - 1) < 1e-9, `权重之和 ${total}`);
+});
+
+void test('可解释性的零点是实测基线，完全跑题拿 0 分而不是四十多分', () => {
+  // 余弦没有真零点：无关文本的余弦中位数在本项目语料上就有 0.228。
+  // 用 saturatingScore 会让这个值拿到 41 分，把判别区间压掉一半。
+  const { explainabilityBaselineRelevance: baseline, explainabilityFullRelevance: full } =
+    SCORING_PARAMETERS;
+  assert.ok(full > baseline);
+  assert.equal(baselineScore(baseline, baseline, full), 0);
+  assert.equal(baselineScore(baseline - 0.1, baseline, full), 0);
+  assert.equal(baselineScore(full, baseline, full), 100);
+  assert.equal(baselineScore(full + 0.3, baseline, full), 100);
+  assert.equal(baselineScore((baseline + full) / 2, baseline, full), 50);
+  // 满分点与聚类阈值同源：两个数都来自同一份标定，各自漂移会让「算进领域」
+  // 和「讲的是同一件事」落在两套互相解释不了的口径上。
+  assert.equal(full, EMBEDDING_CLUSTER_THRESHOLD);
+  // 领域自己的阈值只做门禁，不参与打分归一——否则阈值定得松的领域普遍拿高分。
+  assert.ok(DEFAULT_RELEVANCE_THRESHOLD > 0 && DEFAULT_RELEVANCE_THRESHOLD < 1);
 });
 
 void test('共振的半饱和点与证据门禁的最低独立证据数一致', () => {
@@ -63,7 +87,7 @@ void test('同一份事实在不同运行里得到同一个分：分数可跨运
     numericMentionCount: 2,
     sourceQualityAverage: 92,
     freshestAgeHours: 1,
-    lexiconHitCount: 4,
+    domainRelevance: 0.45,
   };
   assert.deepEqual(
     scoreBreakdownFromFeatures(features),

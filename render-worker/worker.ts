@@ -9,6 +9,18 @@ import { isPrivateIpAddress } from '../lib/net-guard.ts';
 import { mapHttpJsonPage, parsePublicWebPage, parseRssFeed, assertPublicHttpUrl, type HttpJsonPaginationConfig, type SourceConfigInput, type SourceItemRejection } from '../lib/source-adapters.ts';
 import { validateArticleInput, type ArticleInput } from '../lib/domain.ts';
 import { sha256Hex } from '../lib/hash.ts';
+import { EmbeddingRequestError, embedTexts } from '../lib/embedding-openai.ts';
+import {
+  EMBEDDING_CAPABILITY,
+  EMBEDDING_CAPABILITY_PROTOCOL_VERSION,
+  type EmbeddingJobPayload,
+} from '../lib/embedding-jobs.ts';
+
+/**
+ * text-embedding-3-small 的单价：$0.02 / 1M token，折合 20000 微美元。
+ * 换模型要同步改，否则成本记录会悄悄失真。
+ */
+const EMBEDDING_COST_MICROS_PER_MILLION_TOKENS = 20_000;
 import { sourceItemEventAt, type NormalizedSourceItem } from '../lib/source-normalized-item.ts';
 import {
   advanceHttpJsonPagination,
@@ -1209,12 +1221,94 @@ async function workRender(job: WorkerJob) {
   }
 }
 
+/**
+ * 向量作业：把载荷里的文本嵌成向量写回控制面。
+ *
+ * 落在 Render Worker 是因为 OPENAI_API_KEY 只有它持有；
+ * 换到调度器或控制面去算就得把模型密钥发给它们，那会扩大爆炸半径。
+ * 载荷里直接带文本——这个 Worker 没有数据库凭据，拿不到也不该拿到文章表。
+ */
+async function workEmbedding(job: WorkerJob) {
+  // 没有 key 是配置问题，不是瞬时故障——重试 5 次只是把同一个错误重复 5 遍。
+  if (!openAiApiKey) throw new TerminalJobError('OPENAI_API_KEY 未配置，不能执行向量作业。');
+  const payload = job.payload as unknown as EmbeddingJobPayload;
+  if (payload?.operation !== 'embedding') throw new TerminalJobError('作业载荷不是向量作业。');
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  if (!items.length) throw new TerminalJobError('向量作业载荷没有待嵌入条目。');
+  if (!payload.model || !Number.isInteger(payload.version)) {
+    throw new TerminalJobError('向量作业载荷缺少 model 或 version。');
+  }
+  let vectors: number[][];
+  let tokens: number;
+  let failures: { index: number; reason: string }[];
+  try {
+    ({ vectors, tokens, failures } = await embedTexts(
+      openAiApiKey,
+      payload.model,
+      items.map((item) => item.text),
+    ));
+  } catch (error) {
+    // 可重试的（限流、5xx、网络）原样抛出让作业重试；其余是请求本身的问题，
+    // 重试只会把同一个错误重复 5 次，每次还要重嵌一遍已经成功的批次。
+    if (error instanceof EmbeddingRequestError && !error.retryable) {
+      throw new TerminalJobError(error.message);
+    }
+    throw error;
+  }
+  // 空向量意味着这条的输入是空白文本，写回去没有意义；整批空才是错误。
+  const results = items
+    .map((item, index) => ({
+      subject: item.subject,
+      id: item.id,
+      sourceHash: item.sourceHash,
+      embedding: vectors[index] ?? [],
+    }))
+    .filter((result) => result.embedding.length);
+  if (!results.length) throw new TerminalJobError('向量作业的全部条目都没有可嵌入文本。');
+  const response = await fetch(`${controlUrl}/api/v1/embeddings`, {
+    method: 'POST',
+    headers: workerHeaders,
+    body: JSON.stringify({
+      jobId: job.id,
+      workerId,
+      leaseEpoch: job.lease_epoch,
+      model: payload.model,
+      version: payload.version,
+      results,
+    }),
+  });
+  // 控制面主动拒绝（租约被抢、载荷对不上）是既成事实，重试只会把已经算好的
+  // 向量再算一遍、再被拒一遍。
+  if (response.status >= 400 && response.status < 500) {
+    throw new TerminalJobError(
+      `向量写回被控制面拒绝：${response.status} ${(await response.text().catch(() => '')).slice(0, 200)}`,
+    );
+  }
+  const applied = await json<{
+    articles: number;
+    domains: number;
+    written: number;
+    skipped: number;
+  }>(response);
+  return {
+    ...applied,
+    requested: items.length,
+    embedded: results.length,
+    failed: failures.length,
+    promptTokens: tokens,
+    // 让花销可见。`finishJob` 会把它记进 jobs.cost_micros，
+    // 否则 /operations 上向量作业的成本永远显示 0。
+    costMicros: Math.round((tokens / 1_000_000) * EMBEDDING_COST_MICROS_PER_MILLION_TOKENS),
+  };
+}
+
 async function work(job: WorkerJob) {
   if (job.kind === 'ingestion') {
     if (job.payload.operation === 'source_test') return workSourceTest(job);
     if (job.payload.operation === 'topic_recompute') return workTopicRecompute(job);
     return workIngestion(job);
   }
+  if (job.kind === 'embedding') return workEmbedding(job);
   if (job.kind === 'voice') return workVoice(job);
   if (job.kind === 'preview' || job.kind === 'render') return workRender(job);
   if (job.kind === 'publish') return workPublish(job);
@@ -1283,19 +1377,32 @@ async function renewLeaseNow(job: WorkerJob) {
 const WORKER_KINDS = workerProfile === 'source'
   ? ['ingestion']
   : workerProfile === 'render'
-    ? ['voice', 'preview', 'render', 'publish']
-    : ['ingestion', 'voice', 'preview', 'render', 'publish'];
-const WORKER_CAPABILITIES = workerProfile === 'render' ? [] : ['source:rss', 'source:http-json', 'source:web', 'source:social', 'source:pipeline'];
+    ? ['embedding', 'voice', 'preview', 'render', 'publish']
+    : ['ingestion', 'embedding', 'voice', 'preview', 'render', 'publish'];
+const SOURCE_CAPABILITIES = ['source:rss', 'source:http-json', 'source:web', 'source:social', 'source:pipeline'];
+// 三个 profile 显式分开写，不用 else 兜底：else 同时覆盖 source 和 combined，
+// 顺手就会让 source Worker 申明一个它按 SOURCE_FORBIDDEN 必然没有 OPENAI_API_KEY 的能力。
+const WORKER_CAPABILITIES = workerProfile === 'source'
+  ? SOURCE_CAPABILITIES
+  : workerProfile === 'render'
+    ? [EMBEDDING_CAPABILITY]
+    : [...SOURCE_CAPABILITIES, EMBEDDING_CAPABILITY];
+const SOURCE_CAPABILITY_PROTOCOL_VERSIONS: Record<string, number> = {
+  'source:rss': 1,
+  'source:http-json': 2,
+  'source:web': 1,
+  'source:social': 1,
+  'source:pipeline': 1,
+};
 const WORKER_CAPABILITY_PROTOCOL_VERSIONS: Record<string, number> =
-  workerProfile === 'render'
-    ? {}
-    : {
-        'source:rss': 1,
-        'source:http-json': 2,
-        'source:web': 1,
-        'source:social': 1,
-        'source:pipeline': 1,
-      };
+  workerProfile === 'source'
+    ? SOURCE_CAPABILITY_PROTOCOL_VERSIONS
+    : workerProfile === 'render'
+      ? { [EMBEDDING_CAPABILITY]: EMBEDDING_CAPABILITY_PROTOCOL_VERSION }
+      : {
+          ...SOURCE_CAPABILITY_PROTOCOL_VERSIONS,
+          [EMBEDDING_CAPABILITY]: EMBEDDING_CAPABILITY_PROTOCOL_VERSION,
+        };
 /** 空闲轮询每 2 秒一次，心跳没必要跟着那么密；控制面按 90 秒判定离线。 */
 const WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
 let lastWorkerHeartbeatAt = 0;

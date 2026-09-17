@@ -19,6 +19,7 @@ Requires Node 22.13+ (native TS via `--experimental-strip-types`), FFmpeg, Docke
 ```bash
 make setup                    # npm ci + verify/apply migrations
 make dev                      # migrate, then dev server on 127.0.0.1:3001 (HOST/PORT override)
+make up                       # migrate, then all four resident processes together (control + both workers + scheduler); Ctrl-C stops the set
 make check                    # lint + typecheck + openapi-lint + test + test-evaluation + build
 make verify                   # check + test-render + drill-restore + audit (full local release gate)
 docker compose up -d          # local PostgreSQL (host port 55432), control plane, workers, scheduler
@@ -37,11 +38,11 @@ npm run db:migrations:verify  # immutable-checksum check on already-registered m
 npm run db:migrate            # apply drizzle/ migrations to $DATABASE_URL
 ```
 
-Long-running processes (each needs `SIGNAL40_CONTROL_URL` plus its own token):
+Long-running processes (each needs `SIGNAL40_CONTROL_URL` plus its own token). `make up` (`scripts/dev-up.sh`) starts the whole set at once and ties their lifetimes together — a missing worker never errors, it just leaves its job kinds unleased forever:
 
 ```bash
 npm run worker:source   # leases only 'ingestion' jobs
-npm run worker:render   # leases voice/render/publish jobs
+npm run worker:render   # leases embedding/voice/render/publish jobs
 npm run worker          # combined; development only — forbidden in production mode
 npm run scheduler       # resident orchestration loop (needs SIGNAL40_AUTOMATION_ACTOR_ID to write anything)
 ```
@@ -60,9 +61,9 @@ Three runtimes sharing `lib/`:
 
 1. **Control plane** — vinext (Next-style App Router on Vite) served by a plain Node process (`vinext start`, `Dockerfile`). PostgreSQL and Cloudflare R2 (via its S3-compatible endpoint) are wired up in `lib/runtime.ts` — the only `lib/` module that reads `process.env`. REST API under `app/api/v1/` (contract: `contracts/openapi.yaml`); UI pages: `/` topic radar, `/sources`, `/projects/[id]` workbench, `/automation`, `/inbox`, `/operations`, `/governance`, `/settings/diagnostics`.
 2. **Source worker** (`source-worker/Dockerfile`, same `render-worker/worker.ts` entrypoint under `SIGNAL40_WORKER_PROFILE=source`) — leases only `ingestion` jobs. It has no database, object-storage, or media credentials. WeChat/Xiaohongshu sources can run either OpenCLI search (needs a host Chrome profile + Browser Bridge, so it does not work in the default container) or an approved third-party RSS/RSSHub feed; OpenCLI is candidate discovery, not a verified account subscription.
-3. **Render worker** (`render-worker/`) — Docker image with Chromium/FFmpeg; runs Remotion renders (`video/` compositions via `render-worker/render.ts`), OpenAI TTS, media QC, and publish.
+3. **Render worker** (`render-worker/`) — Docker image with Chromium/FFmpeg; runs Remotion renders (`video/` compositions via `render-worker/render.ts`), OpenAI TTS, semantic embeddings (`embedding` jobs → `POST /api/v1/embeddings`), media QC, and publish. It is the only workload holding `OPENAI_API_KEY`; that is why embeddings are computed here rather than in the scheduler or control plane.
 
-Workers poll the control plane's job-lease API (`/api/v1/jobs/lease`) with `x-worker-token`. The queue is PostgreSQL leases (`SELECT ... FOR UPDATE SKIP LOCKED`) with heartbeat renewal, lease epochs, backoff and DLQ (at-least-once). Leases are also gated on declared worker `capabilities` (`source:rss`, `source:http-json`, …) and an integer `capabilityProtocolVersion` per capability — the connector's *protocol* version gates lease authorization; its product version does not.
+Workers poll the control plane's job-lease API (`/api/v1/jobs/lease`) with `x-worker-token`. The queue is PostgreSQL leases (`SELECT ... FOR UPDATE SKIP LOCKED`) with heartbeat renewal, lease epochs, backoff and DLQ (at-least-once). Leases are also gated on declared worker `capabilities` (`source:rss`, `source:http-json`, …) and an integer `capabilityProtocolVersion` per capability — the connector's _protocol_ version gates lease authorization; its product version does not.
 
 ### Key layers in `lib/` (framework-free; imported by routes, workers, scripts, and tests)
 
@@ -74,14 +75,18 @@ Core workflow:
 - `idempotency.ts` — same key + same payload replays the first result exactly; same key + different payload is rejected. The source modules reimplement this pattern against `audit_events.metadata_json ->> 'idempotencyKey'`.
 - `automation.ts` / `orchestrator.ts` — automation policies (stage modes, pre-authorized approvals, guardrails) and the tick run by `scripts/scheduler.ts` (and by `POST /api/v1/scheduler/run` as a bounded manual wrapper). The orchestrator only ever calls the same `transitionContentProject` the UI does: no gate is skipped or relaxed. Bounded per tick, idempotent keys, per-stage circuit breaker, `pg_try_advisory_xact_lock` when selecting the project set.
 - `attention.ts` / `workers.ts` / `diagnostics.ts` — the `/inbox` (with HMAC notification), worker heartbeats and orphaned-job detection, and the `/settings/diagnostics` self-check.
-- `topic-quality.ts` — cluster coherence, claim↔evidence distinctness, and language/lexicon match written to `topics.quality_json`. Auto project creation stays off until a topic passes; the metric is the gate, not a fix for the clustering.
+- `embedding.ts` / `embedding-openai.ts` / `embedding-jobs.ts` — the single similarity currency: cosine over per-article vectors stored in `articles.embedding_json`. Vectors are computed by the render worker's `embedding` job (OPENAI_API_KEY lives only there) and read back off the row, because `runPipeline` is synchronous and `GET /api/topics` calls it on every page load. `EMBEDDING_VERSION` gates comparability; a model or version mismatch means "not embedded", never "embedded with something else".
+- `topic-domains.ts` — what the system is allowed to auto-produce, as natural-language domain descriptions embedded into centroids (`topic_domains`), replacing the hardcoded `FINANCE_TERMS` lexicon. The lexicon tied "is this off-topic" to "is this Chinese"; cosine against a centroid is language-neutral. Managed with `scripts/topic-domain.ts`.
+- `topic-quality.ts` — cluster coherence, claim↔evidence distinctness, and domain relevance written to `topics.quality_json`. Coherence and relevance are both semantic cosine; language is recorded but is **not** a gate. **Missing vectors fail closed** — clustering degrades to the token path per *pair*, the automation gate does not degrade at all: semantic mode requires every article in the cluster to carry a current-contract vector, not just the sampled 40.
+  `quality_json` is a snapshot, so something has to invalidate it when its premises move. `runTopicQuality` re-evaluates a topic when the quality version changes, when the stored verdict was reached in token mode or with an unevaluated domain (so a degraded verdict can recover once vectors land), and when `domainConfigHash` no longer matches the live domain set (so disabling a domain or raising a threshold retires the verdicts that relied on it).
 - `topic-scoring.ts` — the 0–100 score breakdown plus its `SCORING_VERSION`. Each dimension is driven by exactly one countable fact, and its parameter is a half-saturation count or half-life with a stated unit — not a scatter of multipliers. Scores must stay comparable across runs because `orchestrator.ts` selects topics with `ORDER BY score DESC` across runs; a within-run percentile would put the least-bad candidate of a bad batch on top. Changing a parameter means bumping the version, which is stored per topic in `topics.scoring_version`. The score is only ordering plus one threshold: auto project creation is also floored on independent evidence source count, which no scoring change can move.
+- `topic-scoring.ts`'s `explainability` dimension is driven by domain relevance, not lexicon hits (`SCORING_VERSION` 4). Cosine goes through `baselineScore`, not `saturatingScore`: the latter's contract is "a count of 0 is a real 0", and cosine has no true zero — unrelated text in this corpus sits at 0.228, so the saturating curve would hand a completely off-topic候选 41 points.
 - `script-duration.ts` — narration length estimate shown in the script editor (Chinese ≈3.86 chars/s). Advisory only: never let it shorten `render.durationSeconds`.
 
 Infrastructure adapters:
 
 - `sql.ts` / `sql-pg.ts` — backend-agnostic SQL client interface and its PostgreSQL implementation (`?` placeholders rewritten to `$n`); `storage.ts` / `storage-s3.ts` do the same for object storage. `createS3Client` holds the R2 quirks (region `auto`, `WHEN_REQUIRED` checksums because R2 rejects the SDK's default CRC32 headers).
-- `workload-env.ts` — resolves the worker profile and its token, and in production mode *refuses to start* a combined worker, a shared worker token, or a process whose environment carries variables outside its profile's blast radius. Adding an env var to a worker means updating the forbidden lists here.
+- `workload-env.ts` — resolves the worker profile and its token, and in production mode _refuses to start_ a combined worker, a shared worker token, or a process whose environment carries variables outside its profile's blast radius. Adding an env var to a worker means updating the forbidden lists here.
 - `net-guard.ts` — SSRF guards (URL scheme/redirect/DNS-private-range checks) used by every outbound fetch.
 
 Source subscription and ingestion (the largest subsystem, ~30 `lib/source-*.ts` modules plus `lib/source-connectors/`, each with its own test file):
@@ -97,7 +102,7 @@ Source subscription and ingestion (the largest subsystem, ~30 `lib/source-*.ts` 
 - `source-proposals.ts`, `source-lifecycle.ts` — the propose → approve → connect → test → enable path, and disable/withdraw (which cancels not-yet-started runs and queues a withdrawal pipeline job).
 - `opencli-social.ts` / `social-evidence.ts` / `source-relationship-classifier.ts` — social candidate discovery via OpenCLI, and the conservative evidence classifier (`original/repost/quote/syndicated/unknown`). Unknown and low-confidence classifications **fail closed**; the calibration policy in `social-evidence.ts` (false-independent rate, independent recall, minimum production sample) is a frozen, approved gate — `/governance` operates it.
 
-Database: PostgreSQL. Drizzle schema in `db/schema.ts` (55 tables), generated SQL migrations in `drizzle/` (33 files), applied by `scripts/migrate-pg.ts` (tracked in `schema_migrations`, checksum-verified by `lib/migration-integrity.ts`). Never edit applied migrations; change the schema and run `db:generate`. The schema deliberately declares **no foreign keys** — referential integrity is enforced in application code, and every delete path removes its child rows explicitly.
+Database: PostgreSQL. Drizzle schema in `db/schema.ts` (57 tables), SQL migrations in `drizzle/` (36 files), applied by `scripts/migrate-pg.ts` (tracked in `schema_migrations`, checksum-verified by `lib/migration-integrity.ts`). Never edit applied migrations. **`db:generate` no longer works**: `drizzle/meta/_journal.json` stops at 0018 while the SQL files run to 0035, so drizzle-kit diffs against a snapshot fifteen migrations stale and prompts for rename resolution. Migrations from 0019 on are hand-written in the repo's idempotent style (`IF NOT EXISTS`, `--> statement-breakpoint`, descriptive filename), and each new file must be registered in `drizzle/checksums.json` by hand — `test/migration-integrity.test.ts` asserts the last entry. The schema deliberately declares **no foreign keys** — referential integrity is enforced in application code, and every delete path removes its child rows explicitly.
 
 ### Tests
 
@@ -110,7 +115,7 @@ Database: PostgreSQL. Drizzle schema in `db/schema.ts` (55 tables), generated SQ
 
 App Router pages under `app/`, panels in `components/` (`radar-dashboard`, `source-manager`, `automation-console`, `attention-inbox`, `operations-dashboard`, `governance-dashboard`, `diagnostics-panel`, `components/workspace/*` for `/projects/[id]`), shadcn primitives in `components/ui/`. Conventions that were deliberately converged and should not drift back:
 
-- `lib/page-shell.ts` owns the *single* content width (`PAGE_WIDTH_CLASS`) and the one navigation list (`GLOBAL_NAVIGATION`) shared by desktop and mobile. Don't add a per-page width token.
+- `lib/page-shell.ts` owns the _single_ content width (`PAGE_WIDTH_CLASS`) and the one navigation list (`GLOBAL_NAVIGATION`) shared by desktop and mobile. Don't add a per-page width token.
 - `components/page-shell.tsx` renders the global app bar (identity shown once, local forged identity explicitly labeled) and the page header; pages render content only.
 - Detail and editing surfaces go in drawers/sheets rather than expanding the list page; the UI never displays a number the engine can't produce (no invented trend charts, no console text that disagrees with engine state).
 - The UI reads identity from `GET /api/v1/session` (`hooks/use-session.ts`), never hardcoded roles.

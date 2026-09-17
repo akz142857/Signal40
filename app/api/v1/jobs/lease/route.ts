@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   const token = sourceOnly ? config.sourceWorkerToken : renderOnly ? config.renderWorkerToken : config.workerToken;
   if (!(await authorizeWorker(request, token))) return Response.json({ error: 'Worker 未授权或请求了越界作业类型。' }, { status: 401 });
   try {
-    const capabilities = (body.capabilities ?? []).filter((value): value is string => typeof value === 'string' && /^source:[a-z0-9-]{1,40}$/.test(value)).slice(0, 20);
+    const capabilities = (body.capabilities ?? []).filter((value): value is string => typeof value === 'string' && /^(?:source|embedding):[a-z0-9-]{1,40}$/.test(value)).slice(0, 20);
     const capabilityProtocolVersions = Object.fromEntries(
       capabilities.map((capability) => {
         const candidate = body.capabilityProtocolVersions?.[capability];

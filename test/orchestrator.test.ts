@@ -7,6 +7,14 @@ import {
 } from '../lib/control-plane.ts';
 import { createProjectV2 } from '../lib/project-v2.ts';
 import { runPipeline } from '../lib/domain.ts';
+import { TOPIC_QUALITY_VERSION } from '../lib/topic-quality.ts';
+import { domainConfigHash } from '../lib/topic-domains.ts';
+
+/**
+ * 空领域配置的指纹。种子必须带上它，否则引擎会判定「这条结论依据的领域配置
+ * 已经不在了」并重算——而重算在没有向量的测试库里必然判为不可自动化。
+ */
+const EMPTY_DOMAIN_CONFIG_HASH = domainConfigHash([]);
 import {
   defaultAutomationPolicy,
   serializeAutomationPolicy,
@@ -82,7 +90,15 @@ async function seedPolicy(
 async function seedProject(
   db: MemoryPg,
   state: string,
-  quality: { automatable: boolean } = { automatable: true },
+  // 必须带当前质量口径版本：引擎会把版本对不上的 quality_json 当成陈旧数据重算，
+  // 而重算在没有语义向量的测试库里必然判为不可自动化。
+  quality: Record<string, unknown> = {
+    version: TOPIC_QUALITY_VERSION,
+    automatable: true,
+    coherenceMode: 'semantic',
+    domainStatus: 'evaluated',
+    domainConfigHash: EMPTY_DOMAIN_CONFIG_HASH,
+  },
 ) {
   const topic = runPipeline(sampleArticles(baseTime), baseTime).find(
     (candidate) => candidate.gate.passed,
@@ -655,7 +671,11 @@ void test('选题质量不达标时不自动放行研究审批', async () => {
     expiresAt: at(3600).toISOString(),
   });
   const projectId = await seedProject(db, 'EVIDENCE_READY', {
+    version: TOPIC_QUALITY_VERSION,
     automatable: false,
+    coherenceMode: 'semantic',
+    domainStatus: 'evaluated',
+    domainConfigHash: EMPTY_DOMAIN_CONFIG_HASH,
   });
   await tick(db, at(1));
   assert.equal(
@@ -707,8 +727,17 @@ async function seedUnreviewedTopic(
       Math.max(topic.score, 60),
       overrides.sourceCount ?? topic.sourceCount,
       JSON.stringify(topic.gate),
+      // 必须带上当前质量口径版本：引擎会把版本对不上的 quality_json 当成陈旧数据重算，
+      // 而重算出来的结果在没有语义向量的测试库里是「不可自动化」。
       JSON.stringify(
-        overrides.quality ?? { automatable: true, score: 90 },
+        overrides.quality ?? {
+          version: TOPIC_QUALITY_VERSION,
+          automatable: true,
+          score: 90,
+          coherenceMode: 'semantic',
+          domainStatus: 'evaluated',
+          domainConfigHash: EMPTY_DOMAIN_CONFIG_HASH,
+        },
       ),
       baseTime.toISOString(),
     ],
@@ -760,7 +789,14 @@ void test('质量不达标的选题留在待核验，引擎不会替人摇头写
   await seedMembers(db);
   await seedPolicy(db);
   const topicId = await seedUnreviewedTopic(db, {
-    quality: { automatable: false, score: 10 },
+    quality: {
+      version: TOPIC_QUALITY_VERSION,
+      automatable: false,
+      score: 10,
+      coherenceMode: 'semantic',
+      domainStatus: 'evaluated',
+      domainConfigHash: EMPTY_DOMAIN_CONFIG_HASH,
+    },
   });
   await tick(db, at(1));
   const events = await db.client.query(

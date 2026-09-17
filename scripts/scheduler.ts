@@ -33,6 +33,7 @@ while (!stopping) {
       trigger: 'scheduler',
       automationActorId: config.automationActorId,
       monthlyRenderBudgetMicros: Number(config.monthlyRenderBudgetMicros ?? 0),
+      embeddingModel: config.embeddingModel,
       notify: { url: config.attentionWebhookUrl, secret: config.webhookSecret },
     });
     const summary = `${result.status} 项目 ${result.projectCount} 动作 ${result.actions.length} 错误 ${result.errors.length}`;
