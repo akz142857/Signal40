@@ -131,7 +131,7 @@ export function GovernanceDashboard() {
     try {
       await readJson(await fetch('/api/v1/calibration-runs', { method: 'POST', headers: { 'content-type': 'application/json', ...devIdentityHeaders({ role: 'researcher', id: 'local-researcher' }) }, body: JSON.stringify({ algorithmVersion: calibrationForm.algorithmVersion, datasetLabel: calibrationForm.datasetLabel, caseCount: Number(calibrationForm.caseCount), metrics: { gateAccuracy: Number(calibrationForm.gateAccuracy) }, note: '候选算法离线评估，等待独立编辑审批。' }) }));
       setCalibrationForm((current) => ({ ...current, datasetLabel: '' }));
-      setMessage('校准候选已登记；提交者不能审批自己的结果。');
+      setMessage('校准候选已登记，等待编辑或管理员审批。');
       await refresh();
     } catch (error) { setMessage(error instanceof Error ? error.message : '校准登记失败。'); }
   };

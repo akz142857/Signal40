@@ -7,6 +7,14 @@ import {
 } from '../lib/control-plane.ts';
 import { createProjectV2 } from '../lib/project-v2.ts';
 import { runPipeline } from '../lib/domain.ts';
+import { TOPIC_QUALITY_VERSION } from '../lib/topic-quality.ts';
+import { domainConfigHash } from '../lib/topic-domains.ts';
+
+/**
+ * 空领域配置的指纹。种子必须带上它，否则引擎会判定「这条结论依据的领域配置
+ * 已经不在了」并重算——而重算在没有向量的测试库里必然判为不可自动化。
+ */
+const EMPTY_DOMAIN_CONFIG_HASH = domainConfigHash([]);
 import {
   defaultAutomationPolicy,
   serializeAutomationPolicy,
@@ -82,7 +90,15 @@ async function seedPolicy(
 async function seedProject(
   db: MemoryPg,
   state: string,
-  quality: { automatable: boolean } = { automatable: true },
+  // 必须带当前质量口径版本：引擎会把版本对不上的 quality_json 当成陈旧数据重算，
+  // 而重算在没有语义向量的测试库里必然判为不可自动化。
+  quality: Record<string, unknown> = {
+    version: TOPIC_QUALITY_VERSION,
+    automatable: true,
+    coherenceMode: 'semantic',
+    domainStatus: 'evaluated',
+    domainConfigHash: EMPTY_DOMAIN_CONFIG_HASH,
+  },
 ) {
   const topic = runPipeline(sampleArticles(baseTime), baseTime).find(
     (candidate) => candidate.gate.passed,
@@ -478,8 +494,9 @@ void test('指标回流分别追踪 2h、24h、7d 窗口，不会被早期快照
   );
 });
 
-void test('研究与发布授权人相同的策略在保存时就被拒绝', () => {
-  const policy: AutomationPolicy = {
+void test('研究与发布授权人可以是同一个人，但授权人本身仍然必填', () => {
+  // 职责分离已按单人运营的决定移除：同一个人两头批是允许的。
+  const base: AutomationPolicy = {
     ...defaultAutomationPolicy(),
     id: 'policy_same',
     name: '同一个人两头批',
@@ -495,12 +512,19 @@ void test('研究与发布授权人相同的策略在保存时就被拒绝', () 
     publishAuthorizedBy: 'editor-1',
     expiresAt: at(3600).toISOString(),
   };
-  const validation = validateAutomationPolicy(policy, baseTime);
-  assert.equal(validation.valid, false);
-  assert.ok(validation.errors.some((error) => error.includes('职责分离')));
+  assert.equal(validateAutomationPolicy(base, baseTime).valid, true);
+
+  const missing = validateAutomationPolicy(
+    { ...base, publishAuthorizedBy: null },
+    baseTime,
+  );
+  assert.equal(missing.valid, false);
+  assert.ok(missing.errors.some((error) => error.includes('publish_authorized_by')));
 });
 
-void test('授权人相同的策略即使绕过校验落库，自动放行也会被拒绝', async () => {
+void test('缺少发布授权人的策略即使绕过校验落库，自动放行也会被拒绝', async () => {
+  // 职责分离移除后，两头同一个人是允许的；但自动放行写入的仍然必须是一个真人的
+  // 批准记录，所以授权人为空时引擎照样拒绝，并留下待办。
   const db = await createMemoryPg();
   await seedMembers(db);
   await seedPolicy(db, {
@@ -511,7 +535,7 @@ void test('授权人相同的策略即使绕过校验落库，自动放行也会
       publish: { enabled: true },
     },
     researchAuthorizedBy: 'editor-1',
-    publishAuthorizedBy: 'editor-1',
+    publishAuthorizedBy: null,
     expiresAt: at(3600).toISOString(),
   });
   const projectId = await seedProject(db, 'QC_APPROVED');
@@ -522,7 +546,7 @@ void test('授权人相同的策略即使绕过校验落库，自动放行也会
     [projectId],
   );
   assert.ok(
-    String((items.rows[0] as { reason: string }).reason).includes('职责分离'),
+    String((items.rows[0] as { reason: string }).reason).includes('发布授权人缺失'),
   );
 });
 
@@ -647,7 +671,11 @@ void test('选题质量不达标时不自动放行研究审批', async () => {
     expiresAt: at(3600).toISOString(),
   });
   const projectId = await seedProject(db, 'EVIDENCE_READY', {
+    version: TOPIC_QUALITY_VERSION,
     automatable: false,
+    coherenceMode: 'semantic',
+    domainStatus: 'evaluated',
+    domainConfigHash: EMPTY_DOMAIN_CONFIG_HASH,
   });
   await tick(db, at(1));
   assert.equal(
@@ -679,4 +707,134 @@ void test('渲染被预算挡下时项目不会推进到没有作业的 RENDER_Q
     'ASSETS_READY',
     '没有渲染作业就不能进 RENDER_QUEUED',
   );
+});
+
+/** 造一条只有选题行、还没有人核验过的候选。 */
+async function seedUnreviewedTopic(
+  db: MemoryPg,
+  overrides: { quality?: Record<string, unknown>; sourceCount?: number } = {},
+) {
+  const topic = runPipeline(sampleArticles(baseTime), baseTime).find(
+    (candidate) => candidate.gate.passed,
+  );
+  assert.ok(topic, '样本文章里应当有一个通过自动证据门禁的选题');
+  await db.client.query(
+    `INSERT INTO topics (id, title, keywords_json, score, heat_change, score_breakdown_json, source_count, status, gate_json, quality_json, updated_at)
+     VALUES ($1, $2, '[]', $3, 0, '{}', $4, 'ready', $5, $6, $7)`,
+    [
+      topic.id,
+      topic.title,
+      Math.max(topic.score, 60),
+      overrides.sourceCount ?? topic.sourceCount,
+      JSON.stringify(topic.gate),
+      // 必须带上当前质量口径版本：引擎会把版本对不上的 quality_json 当成陈旧数据重算，
+      // 而重算出来的结果在没有语义向量的测试库里是「不可自动化」。
+      JSON.stringify(
+        overrides.quality ?? {
+          version: TOPIC_QUALITY_VERSION,
+          automatable: true,
+          score: 90,
+          coherenceMode: 'semantic',
+          domainStatus: 'evaluated',
+          domainConfigHash: EMPTY_DOMAIN_CONFIG_HASH,
+        },
+      ),
+      baseTime.toISOString(),
+    ],
+  );
+  // saveRun 落库时会给每条选题写一行 status='unreviewed' 的核验事件，
+  // 所以「还没人核验过」在库里长这样，而不是一条事件都没有。
+  await db.client.query(
+    "INSERT INTO verification_events (id, topic_id, status, note, created_at) VALUES ($1, $2, 'unreviewed', '', $3)",
+    [`verify_seed_${topic.id}`, topic.id, baseTime.toISOString()],
+  );
+  return topic.id;
+}
+
+void test('门禁与质量都达标的选题由引擎自动核验，审计写明是策略干的', async () => {
+  const db = await createMemoryPg();
+  await seedMembers(db);
+  const policy = await seedPolicy(db);
+  const topicId = await seedUnreviewedTopic(db);
+  await tick(db, at(1));
+  // saveRun 写的那行 unreviewed 仍在，引擎在它后面追加一条 verified。
+  const events = await db.client.query(
+    'SELECT status, note FROM verification_events WHERE topic_id = $1 ORDER BY seq',
+    [topicId],
+  );
+  assert.deepEqual(
+    events.rows.map((row) => (row as { status: string }).status),
+    ['unreviewed', 'verified'],
+  );
+  assert.match(
+    String((events.rows[1] as { note: string }).note),
+    /独立证据来源 \d+ 个/,
+  );
+  const audits = await db.client.query(
+    "SELECT metadata_json FROM audit_events WHERE entity_id = $1 AND action = 'topic.verified'",
+    [topicId],
+  );
+  assert.equal(audits.rows.length, 1);
+  const raw = (audits.rows[0] as { metadata_json: string | object }).metadata_json;
+  const metadata = (typeof raw === 'string' ? JSON.parse(raw) : raw) as {
+    trigger: string;
+    policyId: string;
+  };
+  assert.equal(metadata.trigger, 'automation');
+  assert.equal(metadata.policyId, policy.id);
+});
+
+void test('质量不达标的选题留在待核验，引擎不会替人摇头写驳回', async () => {
+  const db = await createMemoryPg();
+  await seedMembers(db);
+  await seedPolicy(db);
+  const topicId = await seedUnreviewedTopic(db, {
+    quality: {
+      version: TOPIC_QUALITY_VERSION,
+      automatable: false,
+      score: 10,
+      coherenceMode: 'semantic',
+      domainStatus: 'evaluated',
+      domainConfigHash: EMPTY_DOMAIN_CONFIG_HASH,
+    },
+  });
+  await tick(db, at(1));
+  const events = await db.client.query(
+    "SELECT status FROM verification_events WHERE topic_id = $1 AND status <> 'unreviewed'",
+    [topicId],
+  );
+  assert.equal(events.rows.length, 0);
+});
+
+void test('人已经驳回过的选题，引擎不会把它改回已核验', async () => {
+  const db = await createMemoryPg();
+  await seedMembers(db);
+  await seedPolicy(db);
+  const topicId = await seedUnreviewedTopic(db);
+  await db.client.query(
+    "INSERT INTO verification_events (id, topic_id, status, note, created_at) VALUES ('verify_human', $1, 'rejected', '证据对不上，先不做。', $2)",
+    [topicId, baseTime.toISOString()],
+  );
+  await tick(db, at(1));
+  const events = await db.client.query(
+    "SELECT status FROM verification_events WHERE topic_id = $1 AND status <> 'unreviewed' ORDER BY seq",
+    [topicId],
+  );
+  assert.equal(events.rows.length, 1);
+  assert.equal((events.rows[0] as { status: string }).status, 'rejected');
+});
+
+void test('关掉选题自动核验这一阶段后，引擎不再写核验结论', async () => {
+  const db = await createMemoryPg();
+  await seedMembers(db);
+  await seedPolicy(db, {
+    stages: { ...defaultAutomationPolicy().stages, topic_verification: 'off' },
+  });
+  const topicId = await seedUnreviewedTopic(db);
+  await tick(db, at(1));
+  const events = await db.client.query(
+    "SELECT status FROM verification_events WHERE topic_id = $1 AND status <> 'unreviewed'",
+    [topicId],
+  );
+  assert.equal(events.rows.length, 0);
 });

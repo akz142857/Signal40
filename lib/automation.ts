@@ -4,22 +4,25 @@ import type { GateResult, Role } from './workflow.ts';
 /**
  * 自动化策略：哪些阶段自动、哪几道审批可以预先授权、依据谁的身份放行、护栏是什么。
  *
- * 两条硬性约束写在这里，而不是留给界面自觉：
+ * 一条硬性约束写在这里，而不是留给界面自觉：
  *
- * 1. **职责分离**：G7 判定的是发布批准人与研究批准人的 `actor_id` 不同。
- *    同一个人同时自动放行研究与发布，这条约束就形同虚设，
- *    所以 `researchAuthorizedBy` 与 `publishAuthorizedBy` 必须是不同的真实成员；
- * 2. **默认不放行**：四道问责门禁（G3/G4/G6/G7）默认 `manual`，发布审批
- *    即使显式开启也要同时满足全部条件、日限额与静默时段。
+ * - **默认不放行**：四道问责门禁（G3/G4/G6/G7）默认 `manual`，发布审批
+ *   即使显式开启也要同时满足全部条件、日限额与静默时段。
+ *
+ * 原本还有第二条：研究类与发布类授权人必须是不同的真实成员，用来支撑 G7 的职责分离。
+ * 这条已按单人运营的明确决定移除——授权人仍然必须是在职、且角色能做那道审批的真人，
+ * 只是不再要求是两个人。
  *
  * 预先授权是可撤销、有范围、有有效期的：`expires_at` 一过就自动转人工，
  * 不需要人记得去关。
  */
 
-/** 编排引擎划分的阶段。前六个是机械步骤，四道审批单独由 `autoApprovals` 控制。 */
+/** 编排引擎划分的阶段。都是机械步骤，四道审批单独由 `autoApprovals` 控制。 */
 export const AUTOMATION_STAGES = [
   'ingestion',
+  'embedding',
   'topic_quality',
+  'topic_verification',
   'project_creation',
   'advance',
   'jobs',
@@ -39,7 +42,9 @@ export type AutomationStage = (typeof AUTOMATION_STAGES)[number];
  */
 export const GLOBAL_AUTOMATION_STAGES = [
   'ingestion',
+  'embedding',
   'topic_quality',
+  'topic_verification',
   'metrics',
 ] as const satisfies readonly AutomationStage[];
 
@@ -130,13 +135,20 @@ export const APPROVAL_ROLES: Record<ApprovalKind, Role[]> = {
 /**
  * 默认策略：机械步骤自动，四道审批人工，自动建项目关闭。
  * 自动建项目要等选题质量指标达标后再由人显式打开（见 `lib/topic-quality.ts`）。
+ *
+ * `topic_verification` 默认开：单人运营下没有第二个人来点「批准」，所以选题核验
+ * 由引擎按可数事实判定（门禁通过 + 质量达标 + 独立来源数达标），不满足就留在待核验。
+ * 它只写 `verified`，永远不写 `rejected`，也永远不覆盖人已经写过的结论——
+ * 自动化可以替人省掉点头，不能替人摇头。
  */
 export function defaultAutomationPolicy(): Omit<AutomationPolicy, 'id' | 'name' | 'version'> {
   return {
     scope: { brands: [], locales: [], sourceTypes: [], minTopicScore: 60, minQualityScore: 70, requireTopicQuality: true },
     stages: {
       ingestion: 'auto',
+      embedding: 'auto',
       topic_quality: 'auto',
+      topic_verification: 'auto',
       project_creation: 'off',
       advance: 'auto',
       jobs: 'auto',
@@ -218,8 +230,8 @@ export function serializeAutomationPolicy(policy: AutomationPolicy) {
 }
 
 /**
- * 策略校验。除了取值范围，这里强制两条规则：
- * 自动放行必须指定授权人，且研究类与发布类授权人不能是同一个人。
+ * 策略校验。除了取值范围，这里强制一条规则：自动放行必须指定授权人。
+ * （原本还要求研究类与发布类授权人是两个人，已随职责分离一起移除。）
  */
 export function validateAutomationPolicy(policy: AutomationPolicy, now = new Date()) {
   const errors: string[] = [];
@@ -244,9 +256,6 @@ export function validateAutomationPolicy(policy: AutomationPolicy, now = new Dat
   const autoResearchKinds = (['research', 'script', 'qc'] as const).filter((kind) => policy.autoApprovals[kind].enabled);
   if (autoResearchKinds.length && !policy.researchAuthorizedBy) errors.push('开启研究、脚本或终审自动放行时必须指定 research_authorized_by。');
   if (policy.autoApprovals.publish.enabled && !policy.publishAuthorizedBy) errors.push('开启发布自动放行时必须指定 publish_authorized_by。');
-  if (policy.researchAuthorizedBy && policy.publishAuthorizedBy && policy.researchAuthorizedBy === policy.publishAuthorizedBy) {
-    errors.push('研究类与发布类自动授权人必须是不同的真实成员，否则 G7 的职责分离形同虚设。');
-  }
   if ((autoResearchKinds.length || policy.autoApprovals.publish.enabled) && !policy.expiresAt) {
     errors.push('自动放行必须设置预先授权有效期（expiresAt）。');
   }
@@ -292,10 +301,24 @@ export function policyMatchesProject(policy: AutomationPolicy, project: { brand:
   return true;
 }
 
+/**
+ * 这条选题够不够格进自动化。
+ *
+ * `minTopicScore` 是启发式打分的下限，口径一改（`lib/topic-scoring.ts` 的 `SCORING_VERSION`）
+ * 同一条选题的分数就会变。所以准入不能只压在它身上：独立证据来源数是数出来的事实，
+ * 换任何打分口径都不会变，把它一并要求，自动建项目就有了一条不随调参漂移的底线。
+ * 传不进来源数时按 0 处理——拿不到证据就不放行，方向朝关。
+ */
 export function policyMatchesTopic(
   policy: AutomationPolicy,
-  topic: { score: number; sourceTypes?: readonly string[]; quality?: { automatable?: boolean; score?: number } | null },
+  topic: {
+    score: number;
+    independentSourceCount?: number;
+    sourceTypes?: readonly string[];
+    quality?: { automatable?: boolean; score?: number } | null;
+  },
 ) {
+  if ((topic.independentSourceCount ?? 0) < policy.guardrails.minIndependentSources) return false;
   if (topic.score < policy.scope.minTopicScore) return false;
   if (policy.scope.requireTopicQuality && !topic.quality?.automatable) return false;
   if (policy.scope.requireTopicQuality && (topic.quality?.score ?? -1) < policy.scope.minQualityScore) return false;
@@ -348,7 +371,7 @@ export function autoApprovalDecision(
     if (!context.qcPassed) reasons.push('自动 QC 未全部通过。');
   }
   if (kind === 'publish') {
-    if (!policy.publishAuthorizedBy || policy.publishAuthorizedBy === policy.researchAuthorizedBy) reasons.push('发布授权人缺失或与研究授权人相同，职责分离不成立。');
+    if (!policy.publishAuthorizedBy) reasons.push('发布授权人缺失。');
     if (!context.qcPassed) reasons.push('自动 QC 未全部通过。');
     if (!gate('G6_CONTENT_TECH_QC')?.passed) reasons.push('G6 未通过。');
     if (context.dailyPublishCount >= policy.guardrails.dailyPublishLimit) reasons.push(`当日自动发布量已达上限 ${policy.guardrails.dailyPublishLimit}。`);

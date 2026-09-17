@@ -785,6 +785,34 @@ paths:
             '422': { $ref: '#/components/responses/SourceValidationError' },
           },
       }
+    delete:
+      {
+        x-source-action: source.delete,
+        summary: "Delete a source that has never ingested anything; sources with ingestion runs, origins, raw payloads, active legal holds, or prior deletion requests must be archived or go through legal deletion",
+        parameters:
+          [
+            {
+              name: sourceId,
+              in: path,
+              required: true,
+              schema: { type: string },
+            },
+          ],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SourceConfigDelete' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Deleted,
+                content: { application/json: { schema: { $ref: '#/components/schemas/SourceConfigDeleteEnvelope' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '403': { $ref: '#/components/responses/SourceForbidden' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+          },
+      }
   /source-configs/{sourceId}/slo-exclusions:
     get:
       summary: List browser-safe manual-pause and planned-maintenance SLO exclusion windows
@@ -2010,6 +2038,27 @@ paths:
             '503': { $ref: '#/components/responses/SourceUnavailable' },
           },
       }
+  /embeddings:
+    post:
+      {
+        summary: Write semantic embedding vectors back for a leased embedding job; every result must belong to that job's payload,
+        security: [{ renderWorkerToken: [] }],
+        requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EmbeddingWriteback' } } } },
+        responses:
+          {
+            '200':
+              {
+                description: Vectors applied,
+                content: { application/json: { schema: { $ref: '#/components/schemas/EmbeddingWritebackResult' } } },
+              },
+            '400': { $ref: '#/components/responses/SourceBadRequest' },
+            '401': { $ref: '#/components/responses/SourceUnauthorized' },
+            '404': { $ref: '#/components/responses/SourceNotFound' },
+            '409': { $ref: '#/components/responses/SourceConflict' },
+            '422': { $ref: '#/components/responses/SourceValidationError' },
+            '503': { $ref: '#/components/responses/SourceUnavailable' },
+          },
+      }
   /ingestion-runs/{ingestionRunId}/raw:
     put:
       {
@@ -2548,10 +2597,14 @@ components:
         nextRunAt: { type: [string, 'null'], format: date-time }
         lastSuccessAt: { type: [string, 'null'], format: date-time }
         lastTestedAt: { type: [string, 'null'], format: date-time }
+        testedCurrentConfig: { type: boolean }
         publicErrorCode: { oneOf: [{ $ref: '#/components/schemas/SourceErrorCode' }, { type: 'null' }] }
         publicErrorMessage: { type: [string, 'null'], maxLength: 500 }
         consecutiveFailures: { type: integer, minimum: 0 }
         hasActiveRun: { type: boolean }
+        activeRunStalled: { type: boolean }
+        activeRunRetryAt: { type: [string, 'null'], format: date-time }
+        hardDeletable: { type: boolean }
         deletionStatus:
           { type: [string, 'null'], enum: [pending, blocked, deleting, awaiting_external, failed, null] }
         deletionRequestId: { type: [string, 'null'], maxLength: 200 }
@@ -2620,6 +2673,23 @@ components:
         discoveryMode: { type: string, enum: [opencli, rss] }
         accountName: { type: string, minLength: 1, maxLength: 100 }
         searchLimit: { type: integer, minimum: 1, maximum: 50 }
+    SourceConfigDelete:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, maxLength: 500 }
+    SourceConfigDeleteEnvelope:
+      type: object
+      additionalProperties: false
+      required: [status, sourceId, deletedRows]
+      properties:
+        status: { type: integer, enum: [200] }
+        sourceId: { type: string, minLength: 1 }
+        deletedRows:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
     SourceConfigMutationRecord:
       type: object
       additionalProperties: false
@@ -3499,6 +3569,16 @@ components:
         checkpointScope: { type: string, enum: [live, backfill] }
         pipelineJobId: { type: string, minLength: 1 }
         leaseEpoch: { type: integer, minimum: 1 }
+    EmbeddingWritebackResult:
+      type: object
+      additionalProperties: false
+      required: [articles, domains, written, skipped, submitted]
+      properties:
+        articles: { type: integer, minimum: 0 }
+        domains: { type: integer, minimum: 0 }
+        written: { type: integer, minimum: 0 }
+        skipped: { type: integer, minimum: 0, description: Submitted but rejected by the freshness guard because the source text changed while the job was queued }
+        submitted: { type: integer, minimum: 0 }
     PipelineRecomputeResult:
       type: object
       additionalProperties: false
@@ -3959,6 +4039,33 @@ components:
         configHash: { type: string, minLength: 1, maxLength: 160 }
         preview: { type: array, maxItems: 5, items: {} }
         capabilities: {}
+    EmbeddingWriteback:
+      type: object
+      additionalProperties: false
+      required: [jobId, workerId, leaseEpoch, model, version, results]
+      properties:
+        jobId: { type: string, minLength: 1 }
+        workerId: { type: string, minLength: 1, maxLength: 160 }
+        leaseEpoch: { type: integer, minimum: 1 }
+        model: { type: string, minLength: 1, maxLength: 120 }
+        version: { type: integer, minimum: 0 }
+        results:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            type: object
+            additionalProperties: false
+            required: [subject, id, sourceHash, embedding]
+            properties:
+              subject: { type: string, enum: [article, domain] }
+              id: { type: string, minLength: 1 }
+              sourceHash: { type: string, minLength: 1, maxLength: 128 }
+              embedding:
+                type: array
+                minItems: 1
+                maxItems: 4096
+                items: { type: number }
     PipelineRecompute:
       type: object
       additionalProperties: false

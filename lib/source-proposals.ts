@@ -167,9 +167,6 @@ export async function decideSourceProposal(
       SELECT ${PROPOSAL_COLUMNS} FROM source_proposals WHERE id = ? FOR UPDATE
     `).bind(input.proposalId).first<ProposalRow>();
     if (!proposal) return { status: 404 as const, error: '来源提案不存在。' };
-    if (proposal.requested_by === input.actor.id) {
-      return { status: 403 as const, error: '提案发起人不能批准或拒绝自己的提案。' };
-    }
     if (proposal.status !== 'proposal_pending') {
       if (proposal.decision_idempotency_key === input.idempotencyKey) {
         return { status: 200 as const, proposal: projectPublicSourceProposal(proposal), replayed: true };

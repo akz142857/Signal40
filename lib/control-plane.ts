@@ -1132,16 +1132,19 @@ export async function evaluateProjectGates(
     },
     {
       code: 'G7_PUBLISH_APPROVAL',
+      // 这条原本还要求发布批准人与研究批准人是不同的 actor_id。按单人运营的明确
+      // 决定移除：第二个签字人只能是同一个人的第二个账号，挡不住任何东西，却让
+      // 整条流程在界面上走不通。审计仍然记录每一次批准由谁、在什么时候、针对哪个
+      // 快照做出。要恢复成编辑部模式，这里连同 lib/source-authorization.ts 和
+      // lib/automation.ts 的授权人校验一起加回来。
       passed:
         publishApproval?.decision === 'approved' &&
-        publishApproval.subject_hash === project.immutableHash &&
-        publishApproval.actor_id !== researchApproval?.actor_id,
+        publishApproval.subject_hash === project.immutableHash,
       reasons:
         publishApproval?.decision === 'approved' &&
-        publishApproval.subject_hash === project.immutableHash &&
-        publishApproval.actor_id !== researchApproval?.actor_id
+        publishApproval.subject_hash === project.immutableHash
           ? []
-          : ['当前成片尚未由独立发布人批准'],
+          : ['当前成片尚未经人工发布审批'],
     },
     {
       code: 'G8_POST_PUBLISH',
@@ -1812,6 +1815,22 @@ export async function leaseNextJob(
                   AND active_hold.status = 'active'
               )
           ))
+        -- 向量作业把来源正文发给第三方嵌入服务，因此和采集一样要在租约边界复核授权：
+        -- 入队到执行之间授权可能被撤销、来源可能被停用。判据与下面的采集那段同源。
+        AND (kind != 'embedding' OR payload_json ->> 'sourceConfigId' IS NULL OR EXISTS (
+          SELECT 1
+          FROM source_configs embed_source
+          JOIN source_rights_grants embed_grant ON embed_grant.source_config_id = embed_source.id
+          WHERE embed_source.id = jobs.payload_json ->> 'sourceConfigId'
+            AND embed_source.enabled = 1
+            AND embed_source.lifecycle_status IN ('enabled', 'degraded')
+            AND embed_source.rights_status = 'approved'
+            AND embed_grant.config_hash = COALESCE(NULLIF(embed_source.rights_config_hash, ''), embed_source.config_hash)
+            AND embed_grant.purpose = 'finance-editorial-ingestion'
+            AND embed_grant.usage_scope IN ('normalized-metadata', 'normalized-and-authorized-raw')
+            AND embed_grant.revoked_at IS NULL
+            AND (embed_grant.expires_at IS NULL OR embed_grant.expires_at > ?)
+        ))
         AND (kind != 'ingestion' OR payload_json ->> 'connectorId' IS NULL OR EXISTS (
           SELECT 1 FROM source_connector_releases release_control
           WHERE release_control.connector_id = jobs.payload_json ->> 'connectorId'
@@ -1849,6 +1868,8 @@ export async function leaseNextJob(
           version,
         ]),
         input.maxPayloadSchemaVersion ?? 1,
+        // available_at / lease_expires_at / 向量授权过期 / 采集授权过期 / 并发窗口
+        timestamp,
         timestamp,
         timestamp,
         timestamp,

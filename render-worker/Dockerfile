@@ -1,4 +1,11 @@
 FROM node:22-bookworm-slim
+# 基础镜像自带的 libpcre2 有 HIGH 级可修复漏洞（CVE-2026-86145，10.42-1 之前），
+# 镜像扫描门禁会拦下来。只定向升这一个包，不做整镜像 apt upgrade——
+# 后者会让镜像内容变成「构建当天 Debian 仓库的样子」，同一份 Dockerfile
+# 两天构建出的镜像不再可比，而这条流水线是靠镜像可复现来做验收的。
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
+  && rm -rf /var/lib/apt/lists/*
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg chromium fonts-noto-cjk ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./

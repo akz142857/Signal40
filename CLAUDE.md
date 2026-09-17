@@ -8,6 +8,8 @@ Signal 40 is an evidence-first short-video production system (topic-agnostic; th
 
 `docs/IMPLEMENTATION_STATUS.md` is the acceptance ledger and uses a fixed vocabulary: `Implemented locally → Delivered → Deployed → Integrated → Accepted` (`Blocked`/`Experimental` are orthogonal tags). "Implemented locally" means code plus local evidence exists; "Accepted" additionally requires the target environment, real upstream, and a named owner. Never upgrade a status in the docs without that evidence, and never invent "Integrated locally".
 
+Other docs worth reading before touching their subsystem: `docs/OPERATIONS_RUNBOOK.md` (on-call, backup/restore), `docs/SOURCE_SLO_POLICY.md` (the versioned SLO policy the code implements), `docs/SOURCE_INGESTION_THREAT_MODEL.md`, `docs/SOURCE_CHAOS_DRILL.md`, `docs/RELEASE_CHECKLIST.md`.
+
 ## Commands
 
 Requires Node 22.13+ (native TS via `--experimental-strip-types`), FFmpeg, Docker for real renders.
@@ -17,11 +19,12 @@ Requires Node 22.13+ (native TS via `--experimental-strip-types`), FFmpeg, Docke
 ```bash
 make setup                    # npm ci + verify/apply migrations
 make dev                      # migrate, then dev server on 127.0.0.1:3001 (HOST/PORT override)
+make up                       # migrate, then all four resident processes together (control + both workers + scheduler); Ctrl-C stops the set
 make check                    # lint + typecheck + openapi-lint + test + test-evaluation + build
 make verify                   # check + test-render + drill-restore + audit (full local release gate)
 docker compose up -d          # local PostgreSQL (host port 55432), control plane, workers, scheduler
 
-npm test                                                       # node --test test/*.test.ts (56 files)
+npm test                                                       # node --test test/*.test.ts (~260 tests; 3 object-storage contract tests skip without R2 credentials)
 node --test --experimental-strip-types test/workflow.test.ts   # single test file
 npm run test:evaluation       # 100-scenario synthetic gate-contract regression
 npm run test:render           # render smoke test (needs Chromium/FFmpeg; CI runs it in Docker)
@@ -35,14 +38,16 @@ npm run db:migrations:verify  # immutable-checksum check on already-registered m
 npm run db:migrate            # apply drizzle/ migrations to $DATABASE_URL
 ```
 
-Long-running processes (each needs `SIGNAL40_CONTROL_URL` plus its own token):
+Long-running processes (each needs `SIGNAL40_CONTROL_URL` plus its own token). `make up` (`scripts/dev-up.sh`) starts the whole set at once and ties their lifetimes together — a missing worker never errors, it just leaves its job kinds unleased forever:
 
 ```bash
 npm run worker:source   # leases only 'ingestion' jobs
-npm run worker:render   # leases voice/render/publish jobs
+npm run worker:render   # leases embedding/voice/render/publish jobs
 npm run worker          # combined; development only — forbidden in production mode
 npm run scheduler       # resident orchestration loop (needs SIGNAL40_AUTOMATION_ACTOR_ID to write anything)
 ```
+
+Local config lives in the repo-root `.env` (template: `.env.example`); `vinext` loads it natively, node scripts via `--env-file-if-exists=.env`, shell scripts via `scripts/lib-pg.sh`; already-exported variables win. Compose does **not** inject the whole `.env` — each workload gets an explicit allowlist, verified by `compose:env:verify`.
 
 Operational / diagnostic scripts: `walk` (drive a project through the workflow), `ingest:real`, `check:storage`, `source-slo:report`, `source:chaos`, `source:sensitive-canary`, `social-evidence:evaluate`, `drill:restore`, `image:verify`, `compose:env:verify`.
 
@@ -55,10 +60,10 @@ CI (`.github/workflows/ci.yml`) has two jobs. `application` runs against a Postg
 Three runtimes sharing `lib/`:
 
 1. **Control plane** — vinext (Next-style App Router on Vite) served by a plain Node process (`vinext start`, `Dockerfile`). PostgreSQL and Cloudflare R2 (via its S3-compatible endpoint) are wired up in `lib/runtime.ts` — the only `lib/` module that reads `process.env`. REST API under `app/api/v1/` (contract: `contracts/openapi.yaml`); UI pages: `/` topic radar, `/sources`, `/projects/[id]` workbench, `/automation`, `/inbox`, `/operations`, `/governance`, `/settings/diagnostics`.
-2. **Source worker** (`source-worker/Dockerfile`, same `render-worker/worker.ts` entrypoint under `SIGNAL40_WORKER_PROFILE=source`) — leases only `ingestion` jobs. It has no database, object-storage, or media credentials.
-3. **Render worker** (`render-worker/`) — Docker image with Chromium/FFmpeg; runs Remotion renders (`video/` compositions via `render-worker/render.ts`), OpenAI TTS, media QC, and publish.
+2. **Source worker** (`source-worker/Dockerfile`, same `render-worker/worker.ts` entrypoint under `SIGNAL40_WORKER_PROFILE=source`) — leases only `ingestion` jobs. It has no database, object-storage, or media credentials. WeChat/Xiaohongshu sources can run either OpenCLI search (needs a host Chrome profile + Browser Bridge, so it does not work in the default container) or an approved third-party RSS/RSSHub feed; OpenCLI is candidate discovery, not a verified account subscription.
+3. **Render worker** (`render-worker/`) — Docker image with Chromium/FFmpeg; runs Remotion renders (`video/` compositions via `render-worker/render.ts`), OpenAI TTS, semantic embeddings (`embedding` jobs → `POST /api/v1/embeddings`), media QC, and publish. It is the only workload holding `OPENAI_API_KEY`; that is why embeddings are computed here rather than in the scheduler or control plane.
 
-Workers poll the control plane's job-lease API (`/api/v1/jobs/lease`) with `x-worker-token`. The queue is PostgreSQL leases (`SELECT ... FOR UPDATE SKIP LOCKED`) with heartbeat renewal, lease epochs, backoff and DLQ (at-least-once). Leases are also gated on declared worker `capabilities` (`source:rss`, `source:http-json`, …) and an integer `capabilityProtocolVersion` per capability — the connector's *protocol* version gates lease authorization; its product version does not.
+Workers poll the control plane's job-lease API (`/api/v1/jobs/lease`) with `x-worker-token`. The queue is PostgreSQL leases (`SELECT ... FOR UPDATE SKIP LOCKED`) with heartbeat renewal, lease epochs, backoff and DLQ (at-least-once). Leases are also gated on declared worker `capabilities` (`source:rss`, `source:http-json`, …) and an integer `capabilityProtocolVersion` per capability — the connector's _protocol_ version gates lease authorization; its product version does not.
 
 ### Key layers in `lib/` (framework-free; imported by routes, workers, scripts, and tests)
 
@@ -70,16 +75,21 @@ Core workflow:
 - `idempotency.ts` — same key + same payload replays the first result exactly; same key + different payload is rejected. The source modules reimplement this pattern against `audit_events.metadata_json ->> 'idempotencyKey'`.
 - `automation.ts` / `orchestrator.ts` — automation policies (stage modes, pre-authorized approvals, guardrails) and the tick run by `scripts/scheduler.ts` (and by `POST /api/v1/scheduler/run` as a bounded manual wrapper). The orchestrator only ever calls the same `transitionContentProject` the UI does: no gate is skipped or relaxed. Bounded per tick, idempotent keys, per-stage circuit breaker, `pg_try_advisory_xact_lock` when selecting the project set.
 - `attention.ts` / `workers.ts` / `diagnostics.ts` — the `/inbox` (with HMAC notification), worker heartbeats and orphaned-job detection, and the `/settings/diagnostics` self-check.
-- `topic-quality.ts` — cluster coherence, claim↔evidence distinctness, and language/lexicon match written to `topics.quality_json`. Auto project creation stays off until a topic passes; the metric is the gate, not a fix for the clustering.
+- `embedding.ts` / `embedding-openai.ts` / `embedding-jobs.ts` — the single similarity currency: cosine over per-article vectors stored in `articles.embedding_json`. Vectors are computed by the render worker's `embedding` job (OPENAI_API_KEY lives only there) and read back off the row, because `runPipeline` is synchronous and `GET /api/topics` calls it on every page load. `EMBEDDING_VERSION` gates comparability; a model or version mismatch means "not embedded", never "embedded with something else".
+- `topic-domains.ts` — what the system is allowed to auto-produce, as natural-language domain descriptions embedded into centroids (`topic_domains`), replacing the hardcoded `FINANCE_TERMS` lexicon. The lexicon tied "is this off-topic" to "is this Chinese"; cosine against a centroid is language-neutral. Managed with `scripts/topic-domain.ts`.
+- `topic-quality.ts` — cluster coherence, claim↔evidence distinctness, and domain relevance written to `topics.quality_json`. Coherence and relevance are both semantic cosine; language is recorded but is **not** a gate. **Missing vectors fail closed** — clustering degrades to the token path per *pair*, the automation gate does not degrade at all: semantic mode requires every article in the cluster to carry a current-contract vector, not just the sampled 40.
+  `quality_json` is a snapshot, so something has to invalidate it when its premises move. `runTopicQuality` re-evaluates a topic when the quality version changes, when the stored verdict was reached in token mode or with an unevaluated domain (so a degraded verdict can recover once vectors land), and when `domainConfigHash` no longer matches the live domain set (so disabling a domain or raising a threshold retires the verdicts that relied on it).
+- `topic-scoring.ts` — the 0–100 score breakdown plus its `SCORING_VERSION`. Each dimension is driven by exactly one countable fact, and its parameter is a half-saturation count or half-life with a stated unit — not a scatter of multipliers. Scores must stay comparable across runs because `orchestrator.ts` selects topics with `ORDER BY score DESC` across runs; a within-run percentile would put the least-bad candidate of a bad batch on top. Changing a parameter means bumping the version, which is stored per topic in `topics.scoring_version`. The score is only ordering plus one threshold: auto project creation is also floored on independent evidence source count, which no scoring change can move.
+- `topic-scoring.ts`'s `explainability` dimension is driven by domain relevance, not lexicon hits (`SCORING_VERSION` 4). Cosine goes through `baselineScore`, not `saturatingScore`: the latter's contract is "a count of 0 is a real 0", and cosine has no true zero — unrelated text in this corpus sits at 0.228, so the saturating curve would hand a completely off-topic候选 41 points.
 - `script-duration.ts` — narration length estimate shown in the script editor (Chinese ≈3.86 chars/s). Advisory only: never let it shorten `render.durationSeconds`.
 
 Infrastructure adapters:
 
 - `sql.ts` / `sql-pg.ts` — backend-agnostic SQL client interface and its PostgreSQL implementation (`?` placeholders rewritten to `$n`); `storage.ts` / `storage-s3.ts` do the same for object storage. `createS3Client` holds the R2 quirks (region `auto`, `WHEN_REQUIRED` checksums because R2 rejects the SDK's default CRC32 headers).
-- `workload-env.ts` — resolves the worker profile and its token, and in production mode *refuses to start* a combined worker, a shared worker token, or a process whose environment carries variables outside its profile's blast radius. Adding an env var to a worker means updating the forbidden lists here.
+- `workload-env.ts` — resolves the worker profile and its token, and in production mode _refuses to start_ a combined worker, a shared worker token, or a process whose environment carries variables outside its profile's blast radius. Adding an env var to a worker means updating the forbidden lists here.
 - `net-guard.ts` — SSRF guards (URL scheme/redirect/DNS-private-range checks) used by every outbound fetch.
 
-Source subscription and ingestion (the largest subsystem, ~40 `lib/source-*.ts` modules, one test file each):
+Source subscription and ingestion (the largest subsystem, ~30 `lib/source-*.ts` modules plus `lib/source-connectors/`, each with its own test file):
 
 - `source-lifecycle-status.ts` is the vocabulary hub — lifecycle (`draft/connecting/tested/enabled/degraded/paused/archived`), rights (`pending/approved/revoked/expired`), run status (incl. `rights_blocked`), quarantine, connector release modes, acceptance states. Import these constants; don't restate the strings.
 - `source-connectors/registry.ts` — the connector catalog (RSS/Atom, HTTP JSON, public web page, WeChat, Xiaohongshu), each with its adapter, capability, minimum interval, and support matrix. `source-adapters.ts` implements the parsing/mapping.
@@ -92,7 +102,23 @@ Source subscription and ingestion (the largest subsystem, ~40 `lib/source-*.ts` 
 - `source-proposals.ts`, `source-lifecycle.ts` — the propose → approve → connect → test → enable path, and disable/withdraw (which cancels not-yet-started runs and queues a withdrawal pipeline job).
 - `opencli-social.ts` / `social-evidence.ts` / `source-relationship-classifier.ts` — social candidate discovery via OpenCLI, and the conservative evidence classifier (`original/repost/quote/syndicated/unknown`). Unknown and low-confidence classifications **fail closed**; the calibration policy in `social-evidence.ts` (false-independent rate, independent recall, minimum production sample) is a frozen, approved gate — `/governance` operates it.
 
-Database: PostgreSQL. Drizzle schema in `db/schema.ts` (55 tables), generated SQL migrations in `drizzle/` (33 files), applied by `scripts/migrate-pg.ts` (tracked in `schema_migrations`, checksum-verified by `lib/migration-integrity.ts`). Never edit applied migrations; change the schema and run `db:generate`. The schema deliberately declares **no foreign keys** — referential integrity is enforced in application code, and every delete path removes its child rows explicitly.
+Database: PostgreSQL. Drizzle schema in `db/schema.ts` (57 tables), SQL migrations in `drizzle/` (36 files), applied by `scripts/migrate-pg.ts` (tracked in `schema_migrations`, checksum-verified by `lib/migration-integrity.ts`). Never edit applied migrations. **`db:generate` no longer works**: `drizzle/meta/_journal.json` stops at 0018 while the SQL files run to 0035, so drizzle-kit diffs against a snapshot fifteen migrations stale and prompts for rename resolution. Migrations from 0019 on are hand-written in the repo's idempotent style (`IF NOT EXISTS`, `--> statement-breakpoint`, descriptive filename), and each new file must be registered in `drizzle/checksums.json` by hand — `test/migration-integrity.test.ts` asserts the last entry. The schema deliberately declares **no foreign keys** — referential integrity is enforced in application code, and every delete path removes its child rows explicitly.
+
+### Tests
+
+`node --test` over `test/*.test.ts`, no test framework. Two harnesses matter:
+
+- `test/pg-memory.ts` — an in-process real PostgreSQL (PGlite/WASM) built by replaying `drizzle/*.sql`. Tests run against real PG so dialect errors (`json_extract`, missing derived-table aliases, `CASE WHEN` boolean typing) fail in `node --test` instead of in production.
+- `test/route-runtime.ts` + `test/route-alias-hook.mjs` — let tests `import` `app/api/**` route modules directly: the hook resolves `@/…` path aliases and swaps `@/lib/runtime` (which would otherwise open a real pool and S3 client at import time) for a stub backed by PGlite. Route SQL is genuinely executed. Write-path route tests belong in `test/routes-write-paths.test.ts` / `test/critical-routes.test.ts`; a new write route without one means its SQL has never run.
+
+### UI
+
+App Router pages under `app/`, panels in `components/` (`radar-dashboard`, `source-manager`, `automation-console`, `attention-inbox`, `operations-dashboard`, `governance-dashboard`, `diagnostics-panel`, `components/workspace/*` for `/projects/[id]`), shadcn primitives in `components/ui/`. Conventions that were deliberately converged and should not drift back:
+
+- `lib/page-shell.ts` owns the _single_ content width (`PAGE_WIDTH_CLASS`) and the one navigation list (`GLOBAL_NAVIGATION`) shared by desktop and mobile. Don't add a per-page width token.
+- `components/page-shell.tsx` renders the global app bar (identity shown once, local forged identity explicitly labeled) and the page header; pages render content only.
+- Detail and editing surfaces go in drawers/sheets rather than expanding the list page; the UI never displays a number the engine can't produce (no invented trend charts, no console text that disagrees with engine state).
+- The UI reads identity from `GET /api/v1/session` (`hooks/use-session.ts`), never hardcoded roles.
 
 **No seed or sample data ships in production paths.** The home page and `GET /api/topics` read the database and return an empty list when nothing has been ingested. Deterministic article fixtures live in `test/fixtures/sample-articles.ts` and are imported only by tests and `scripts/render-smoke.ts`. Never wire a fixture into `app/` or `lib/` — in an evidence-first system, data that cannot be told apart from real ingestion is worse than no data.
 
@@ -103,7 +129,7 @@ Database: PostgreSQL. Drizzle schema in `db/schema.ts` (55 tables), generated SQ
   **Open item**: the authenticating reverse proxy that injects those headers still lives outside this repo. Without it every non-local request resolves to no actor and gets 403. Fail direction is closed, not open.
 - **Worker blast radius**: production (`SIGNAL40_DEPLOYMENT_MODE=production`) forbids the combined profile and the shared `SIGNAL40_WORKER_TOKEN`; each profile gets its own token and a restricted environment enforced by `lib/workload-env.ts` and re-verified in CI against the built images and Compose files. The source worker must never gain database or object-storage credentials.
 - **Automation never fakes identity**: mechanical steps run as the service account in `team_members` (`SIGNAL40_AUTOMATION_ACTOR_ID`, must be an active admin — unset means the engine writes nothing); auto-approvals are written under the policy's real member. Every automated write carries `trigger: 'automation'` and `policyId` in audit metadata, and any human edit/approval/incident flips the project to `automation_mode = 'manual'` with a stored reason.
-- **Separation of duties**: the research and publish authorizers must be **different** active members, checked when saving a policy and again at every auto-approval — G7's rule is exactly `publishApproval.actor_id !== researchApproval.actor_id`. Source rights approval is likewise a different-person decision.
+- **Separation of duties was deliberately removed** (single-operator decision, 2026-09-15). Nothing requires two different people any more: G7 checks only that an approval exists for the current snapshot, source rights / proposal / checkpoint-cutover / legal-hold decisions accept the requester themself, and an automation policy may name the same member as research and publish authorizer. What stays: an approval must be written under a real active member whose role permits it (`APPROVAL_ROLES`, `SOURCE_ACTION_ROLES`, `can_approve_source_rights`, `can_manage_source_legal`), and every approval is still audited with actor, time, and subject hash. To restore newsroom mode, put the `!==` checks back in `lib/source-authorization.ts`, `lib/control-plane.ts` (G7) and `lib/automation.ts` together — they are all commented where they were removed.
 - **Gates are contracts**: transitions fail with typed `WorkflowError`s (`INVALID_TRANSITION`/`FORBIDDEN`/`GATE_FAILED`/`VERSION_CONFLICT`); routes use optimistic concurrency via ETag versions. Source mutations use the same `expectedVersion` pattern.
 - **The API contract is versioned**: `contracts/openapi.yaml` is linted and diffed against the published baseline in CI. A breaking change must be an intentional, contract-first edit, not a side effect of a route change.
 - **Fail-safe publishing**: without `SIGNAL40_ALLOW_PUBLIC_PUBLISH=true`, YouTube uploads stay private. Unknown-copyright assets cannot pass G5. Manual imports require explicit rights confirmation.

@@ -1,5 +1,6 @@
 import { RadarDashboard } from '@/components/radar-dashboard';
 import { loadLatestTopics } from '@/lib/persistence';
+import { computeOnboardingChecklist, loadOnboardingState } from '@/lib/onboarding';
 import { db } from '@/lib/runtime';
 
 import type { Metadata } from 'next';
@@ -13,6 +14,14 @@ export const metadata: Metadata = { title: 'Signal 40 · 选题雷达' };
 export const dynamic = 'force-dynamic';
 
 export default async function Home() {
-  const { topics } = await loadLatestTopics(db);
-  return <RadarDashboard initialTopics={topics} />;
+  const [{ topics }, onboardingState] = await Promise.all([
+    loadLatestTopics(db),
+    loadOnboardingState(db),
+  ]);
+  return (
+    <RadarDashboard
+      initialTopics={topics}
+      onboarding={computeOnboardingChecklist(onboardingState)}
+    />
+  );
 }

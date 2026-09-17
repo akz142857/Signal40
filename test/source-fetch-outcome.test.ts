@@ -95,3 +95,20 @@ void test('database rejects unregistered ingestion fetch outcomes', async () => 
     /ingestion_runs_fetch_outcome_check/,
   );
 });
+
+void test('worker 的完成写回会重试，只有控制面明确拒绝时才放弃', async () => {
+  const worker = await readFile(new URL('../render-worker/worker.ts', import.meta.url), 'utf8');
+  // 一次网络失败就放弃，作业会挂着租约到期（15 分钟），采集运行一直卡在 running。
+  assert.match(worker, /FINISH_RETRY_DELAYS_MS/);
+  assert.match(worker, /class JobFinishRejected/);
+  // 4xx 是租约被抢、kill switch、legal hold 之类的主动 fence，重试没有意义。
+  assert.match(worker, /response\.status >= 400 && response\.status < 500/);
+});
+
+void test('控制面不可达时 Worker 退避重试而不是退出进程', async () => {
+  const worker = await readFile(new URL('../render-worker/worker.ts', import.meta.url), 'utf8');
+  // 租约轮询以前没有 try/catch：控制面重启一次，异常穿出 main()，Worker 进程直接死掉，
+  // 而界面只会显示「作业在排队」，没人知道执行侧已经没了。
+  assert.match(worker, /LEASE_RETRY_DELAY_MS/);
+  assert.match(worker, /领取作业失败/);
+});

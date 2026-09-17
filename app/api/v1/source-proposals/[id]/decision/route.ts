@@ -24,7 +24,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   `).bind(id).first<{ requested_by: string }>();
   if (!proposal) return sourceApiError('来源提案不存在。', 404);
   if (!sourceActionAllowed(actor, 'source.proposal.decide', { requestedBy: proposal.requested_by })) {
-    return sourceApiError('提案发起人不能审批自己的提案。', 403);
+    return sourceApiError('当前角色无权审批来源提案。', 403);
   }
   const result = await decideSourceProposal(db, {
     proposalId: id,

@@ -109,3 +109,35 @@ void test('origin correction is immutable, audited and enqueues a topic recomput
   const audits = await db.client.query("SELECT COUNT(*) AS total FROM audit_events WHERE action = 'source_origin.corrected'");
   assert.equal(Number((audits.rows[0] as { total: number }).total), 2);
 });
+
+void test('默认策略下 host 命中出版主体的 rss origin 算独立证据，social 仍然失败关闭', () => {
+  // 分类器对 host 命中能给出的最高分就是 95。默认门槛原本是 100，两者差一档，
+  // 结果是任何自动分类的 origin 都不合格，证据门禁没有人工修正就永远过不了。
+  const rssOrigin = (suffix: string) => ({
+    source: `Publisher ${suffix}`, sourceType: 'company', contentHash: `hash-${suffix}`, platform: 'rss',
+    evidenceFamilyId: `family-${suffix}`, publisherEntityId: `publisher-${suffix}`,
+    publisherOwnershipGroup: `group-${suffix}`, originManaged: true,
+    originRelationship: 'original' as const, originConfidence: 95,
+  });
+  assert.equal(
+    independentEvidenceCount([rssOrigin('a'), rssOrigin('b')], SOCIAL_EVIDENCE_FAIL_CLOSED_POLICY),
+    2,
+  );
+  // 低于门槛、以及非 original 关系，依旧不算。
+  assert.equal(
+    independentEvidenceCount([{ ...rssOrigin('a'), originConfidence: 94 }], SOCIAL_EVIDENCE_FAIL_CLOSED_POLICY),
+    0,
+  );
+  assert.equal(
+    independentEvidenceCount([{ ...rssOrigin('a'), originRelationship: 'repost' as const }], SOCIAL_EVIDENCE_FAIL_CLOSED_POLICY),
+    0,
+  );
+  // social/web 不受这次放宽影响：socialAutoProductionEnabled 仍然是 false。
+  assert.equal(
+    independentEvidenceCount(
+      [{ ...rssOrigin('a'), sourceType: 'social', platform: 'wechat' }],
+      SOCIAL_EVIDENCE_FAIL_CLOSED_POLICY,
+    ),
+    0,
+  );
+});

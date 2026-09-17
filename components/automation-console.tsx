@@ -60,7 +60,9 @@ type Run = {
 
 const stageLabels: Record<AutomationStage, string> = {
   ingestion: '采集',
+  embedding: '语义向量',
   topic_quality: '选题质量评估',
+  topic_verification: '选题自动核验',
   project_creation: '自动建项目',
   advance: '状态推进',
   jobs: '作业编排（配音/渲染）',
@@ -352,7 +354,7 @@ export function AutomationConsole() {
         <summary className="cursor-pointer font-semibold">这套自动化是怎么工作的</summary>
         <div className="mt-3 grid gap-2 text-sm leading-6 text-muted-foreground">
           <p>调度器每轮按启用中的策略执行七个阶段。阶段分两类：<strong className="text-foreground">全局阶段</strong>（{GLOBAL_AUTOMATION_STAGES.map((stage) => stageLabels[stage]).join('、')}）不挂在某个项目上，只要有任意一条启用中的策略把它设为自动就会执行；<strong className="text-foreground">按项目阶段</strong>（{AUTOMATION_STAGES.filter((stage) => !isGlobalStage(stage)).map((stage) => stageLabels[stage]).join('、')}）按项目所属的那条策略逐个判定。</p>
-          <p>阶段只控制「机械步骤」。G3/G4/G6/G7 四道问责门禁默认全部人工，要自动放行必须在策略里显式开启，并指定一个真人作为授权人——自动放行写入的是那个人的批准记录。研究类与发布类授权人必须是不同的成员，否则 G7 的职责分离不成立。</p>
+          <p>阶段只控制「机械步骤」。G3/G4/G6/G7 四道问责门禁默认全部人工，要自动放行必须在策略里显式开启，并指定一个真人作为授权人——自动放行写入的是那个人的批准记录。</p>
           <p>所以最常见的配置（阶段全自动、四道审批全人工）的实际行为是：项目会被一路推进到 G3 然后停下来等人。想让它继续走，要开对应的预先授权，而不是再多开一个阶段。</p>
           <p>预先授权是有有效期的，过期自动转人工，不需要人记得去关。任何一次人工编辑、审批或事故都会把项目翻回 <code>automation_mode = manual</code>。</p>
           <p>成本相关的数字统一用 micros（货币最小单位的百万分之一），具体币种由部署方约定。</p>
@@ -455,7 +457,7 @@ export function AutomationConsole() {
               </TabsContent>
 
               <TabsContent value="approvals" className="mt-5 grid gap-4">
-                <p className="text-xs text-muted-foreground">自动放行写入的是下面这个真人的批准记录，note 里注明依据哪条策略。研究类与发布类授权人必须是不同的成员，否则 G7 的职责分离不成立；有效期一过自动转人工。</p>
+                <p className="text-xs text-muted-foreground">自动放行写入的是下面这个真人的批准记录，note 里注明依据哪条策略。授权人必须是在职、且角色能做那道审批的真人；有效期一过自动转人工。</p>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {APPROVAL_KINDS.map((kind) => <div className="flex items-center gap-2 text-sm" key={kind}>
                     <Checkbox id={`auto-approval-${kind}`} disabled={!canEdit} checked={draft.autoApprovals[kind].enabled} onCheckedChange={(checked) => patchDraft({ autoApprovals: { ...draft.autoApprovals, [kind]: { enabled: checked === true } } })} />

@@ -165,3 +165,106 @@ export async function withdrawSourceContent(
     return { status: 200 as const, sourceId: source.id, version: source.version + 1, withdrawnOrigins: withdrawn.meta.changes, cancelledRuns, pipelineJobId, replayed: false };
   });
 }
+
+/**
+ * 从未产生过采集内容的来源可以直接删掉。
+ *
+ * 「依法删除」是为已经采集进来的内容设计的：它要走请求、审批、按对象逐项销毁、
+ * 出具回执，因为那真的是在销毁证据。一条刚粘错网址、还没跑过任何一次采集的配置
+ * 不在此列——把它按证据销毁来办，只会逼人去用重流程做轻的事，最后谁都不敢删。
+ *
+ * 硬删除只在「确实没有任何内容可销毁」时允许；一旦有采集运行、原文归属、原始载荷、
+ * 法律保全或既有删除请求，就退回原来的归档 / 依法删除路径。
+ */
+export type SourceDeleteBlock = {
+  reason: string;
+  /** 触发阻断的计数，便于界面直接说清差在哪。 */
+  counts: Record<string, number>;
+};
+
+export type SourceDeleteResult =
+  | { status: 200; sourceId: string; deletedRows: Record<string, number> }
+  | { status: 404 | 409; error: string };
+
+const HARD_DELETE_BLOCKERS = [
+  { key: 'ingestionRuns', sql: 'SELECT COUNT(*) AS total FROM ingestion_runs WHERE source_config_id = ?', reason: '该来源已经有采集运行记录' },
+  { key: 'itemOrigins', sql: 'SELECT COUNT(*) AS total FROM source_item_origins WHERE source_config_id = ?', reason: '该来源已经有内容归属记录' },
+  { key: 'rawPayloads', sql: 'SELECT COUNT(*) AS total FROM raw_payload_uploads WHERE source_config_id = ?', reason: '该来源已经留存原始载荷' },
+  { key: 'legalHolds', sql: "SELECT COUNT(*) AS total FROM source_legal_holds WHERE source_config_id = ? AND released_at IS NULL", reason: '该来源存在未解除的法律保全' },
+  { key: 'deletionRequests', sql: 'SELECT COUNT(*) AS total FROM source_deletion_requests WHERE source_config_id = ?', reason: '该来源已经走过依法删除流程' },
+] as const;
+
+/** 删除前的阻断判定；返回 null 表示可以直接删。 */
+export async function sourceHardDeleteBlock(
+  db: SqlDatabase,
+  sourceId: string,
+): Promise<SourceDeleteBlock | null> {
+  const counts: Record<string, number> = {};
+  let blocked: string | null = null;
+  for (const blocker of HARD_DELETE_BLOCKERS) {
+    const row = await db.prepare(blocker.sql).bind(sourceId).first<{ total: number | string }>();
+    const total = Number(row?.total ?? 0);
+    counts[blocker.key] = total;
+    if (total > 0 && !blocked) blocked = blocker.reason;
+  }
+  return blocked
+    ? { reason: `${blocked}，只能归档或走依法删除。`, counts }
+    : null;
+}
+
+/** 硬删除时一并清掉的附属行；这些表里没有采集内容，只有这条配置的从属记录。 */
+const HARD_DELETE_CHILD_TABLES = [
+  'source_connection_tests',
+  'source_rights_requests',
+  'source_rights_grants',
+  'source_schedule_throttles',
+  'source_slo_exclusions',
+  'source_checkpoint_cutovers',
+  'attention_items',
+] as const;
+
+export async function deleteUningestedSource(
+  db: SqlDatabase,
+  input: { sourceId: string; expectedVersion: number; reason: string; actor: Actor },
+  now = new Date(),
+): Promise<SourceDeleteResult> {
+  return db.transaction(async (tx) => {
+    const source = await lockSource(tx, input.sourceId);
+    if (!source) return { status: 404 as const, error: '来源不存在。' };
+    if (source.version !== input.expectedVersion) {
+      return { status: 409 as const, error: `版本冲突：当前版本为 ${source.version}。` };
+    }
+    const enabledRow = await tx.prepare('SELECT enabled, name FROM source_configs WHERE id = ?')
+      .bind(input.sourceId).first<{ enabled: number | boolean; name: string }>();
+    if (Number(enabledRow?.enabled ?? 0) > 0) {
+      return { status: 409 as const, error: '来源仍处于启用状态，请先停用再删除。' };
+    }
+    const block = await sourceHardDeleteBlock(tx, input.sourceId);
+    if (block) return { status: 409 as const, error: block.reason };
+
+    const deletedRows: Record<string, number> = {};
+    for (const table of HARD_DELETE_CHILD_TABLES) {
+      const result = await tx.prepare(`DELETE FROM ${table} WHERE source_config_id = ?`)
+        .bind(input.sourceId).run();
+      deletedRows[table] = result.meta.changes;
+    }
+    const removed = await tx.prepare('DELETE FROM source_configs WHERE id = ? AND version = ?')
+      .bind(input.sourceId, input.expectedVersion).run();
+    if (!removed.meta.changes) return { status: 409 as const, error: '来源已被其他管理员修改。' };
+
+    // 配置行没了，审计事件仍然留着：删掉什么、谁删的、为什么删，必须可追。
+    await auditLifecycle(tx, {
+      actor: input.actor,
+      action: 'source.deleted',
+      source,
+      nextVersion: source.version,
+      metadata: {
+        reason: input.reason.slice(0, 500),
+        name: enabledRow?.name ?? '',
+        deletedRows,
+      },
+      now: now.toISOString(),
+    });
+    return { status: 200 as const, sourceId: input.sourceId, deletedRows };
+  });
+}

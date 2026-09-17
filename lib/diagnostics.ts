@@ -90,6 +90,55 @@ async function checkStorageRoundTrip(storage: ObjectStorage): Promise<Diagnostic
   }
 }
 
+/**
+ * 语义向量覆盖率：判定「为什么选题全都不可自动化」时第一个要看的数。
+ *
+ * 没有这一项的话，缺向量表现为「每条选题的抽屉里写着一行原因」，
+ * 而系统级的「向量根本没在算」看不出来——这正是全站不可自动化最常见的成因。
+ */
+async function checkEmbeddingCoverage(
+  db: SqlDatabase,
+  model: string,
+): Promise<DiagnosticCheck> {
+  if (!model) {
+    return {
+      id: 'embedding_coverage',
+      label: '语义向量覆盖率',
+      status: 'unconfigured',
+      detail: '未配置向量模型，聚类退回词元口径且全部选题不可自动化。',
+      hint: '配置 SIGNAL40_EMBEDDING_MODEL。',
+    };
+  }
+  const row = await db
+    .prepare(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN embedding_model = ? AND embedding_json <> '' THEN 1 ELSE 0 END) AS embedded
+      FROM articles
+    `)
+    .bind(model)
+    .first<{ total: number; embedded: number }>();
+  const total = Number(row?.total ?? 0);
+  const embedded = Number(row?.embedded ?? 0);
+  if (!total) {
+    return {
+      id: 'embedding_coverage',
+      label: '语义向量覆盖率',
+      status: 'ok',
+      detail: '库里还没有文章。',
+    };
+  }
+  const ratio = embedded / total;
+  return {
+    id: 'embedding_coverage',
+    label: '语义向量覆盖率',
+    status: ratio >= 0.99 ? 'ok' : 'degraded',
+    detail: `${embedded}/${total} 篇文章有当前口径（${model}）的向量，覆盖率 ${Math.round(ratio * 100)}%。`,
+    hint: ratio >= 0.99
+      ? undefined
+      : '覆盖率不足时，缺向量的簇会被判为不可自动化。检查 embedding 阶段是否开启、Render Worker 是否在领作业。',
+  };
+}
+
 function credentialCheck(id: string, label: string, value: string | undefined, hint: string): DiagnosticCheck {
   return value
     ? { id, label, status: 'ok', detail: '已配置。' }
@@ -105,6 +154,7 @@ export type DiagnosticsInput = {
     s3AccessKeyId?: string;
     s3SecretAccessKey?: string;
     openAiApiKey?: string;
+    embeddingModel?: string;
     youtubeAccessToken?: string;
     workerToken?: string;
     sourceWorkerToken?: string;
@@ -132,6 +182,7 @@ export async function runDiagnostics(input: DiagnosticsInput) {
 
   checks.push(credentialCheck('openai', 'OpenAI 凭据（配音与字幕对齐）', input.env.openAiApiKey, '不配就跑不了 voice 作业，其余流程不受影响。'));
   checks.push(credentialCheck('youtube', 'YouTube 凭据', input.env.youtubeAccessToken, '不配就只能用 package 渠道产出发布包。'));
+  checks.push(await checkEmbeddingCoverage(input.db, input.env.embeddingModel ?? ''));
   const workerScopeStatus: DiagnosticCheck = input.env.sourceWorkerToken && input.env.renderWorkerToken
     ? input.env.sourceWorkerToken === input.env.renderWorkerToken
       ? { id: 'worker_token_scope', label: 'Worker 令牌隔离', status: 'degraded', detail: '采集与渲染/发布仍共用令牌。', hint: '为 SIGNAL40_SOURCE_WORKER_TOKEN 和 SIGNAL40_RENDER_WORKER_TOKEN 配置不同的长随机值。' }

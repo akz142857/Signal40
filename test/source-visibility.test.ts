@@ -16,6 +16,10 @@ function payload(title: string, contentHash: string): StagedIngestionPayload {
   return {
     articles: [{
       id: 'article-staged',
+      embedding: [],
+      embeddingModel: '',
+      embeddingVersion: 0,
+    embeddingSourceHash: '',
       source: 'Staged source',
       sourceType: 'media',
       author: 'Author',

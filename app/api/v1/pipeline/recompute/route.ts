@@ -6,6 +6,8 @@ import { authorizeWorker } from '@/lib/worker-auth';
 import { sha256Hex } from '@/lib/hash';
 import { activeLeaseMatches } from '@/lib/job-lease';
 import { loadApprovedEvidencePolicy } from '@/lib/social-evidence';
+import { loadTopicDomains } from '@/lib/topic-domains';
+import { EMBEDDING_VERSION } from '@/lib/embedding';
 
 type RecomputeBody = { jobId?: string; workerId?: string; leaseEpoch?: number; derivationKey?: string };
 
@@ -55,7 +57,14 @@ export async function POST(request: Request) {
       const rollingWindowStart = new Date(now.valueOf() - 72 * 60 * 60 * 1000);
       const corpus = await loadRecentArticles(tx, rollingWindowStart);
       const evidencePolicy = await loadApprovedEvidencePolicy(tx);
-      const topics = runPipeline(corpus, now, evidencePolicy);
+      // 不传流水线上下文的话，聚类拿不到当前向量口径（于是全部退回词元），
+      // 领域相关性恒为 0，而 `SCORING_VERSION` 仍然照写——落库的分数会声称
+      // 按领域余弦算过、实际从未评估。
+      const topics = runPipeline(corpus, now, evidencePolicy, {
+        domains: await loadTopicDomains(tx),
+        embeddingModel: config.embeddingModel,
+        embeddingVersion: EMBEDDING_VERSION,
+      });
       await persistPipeline(tx, topics, 'import', corpus.length, now, { runId: pipelineRunId });
       return { response: { pipelineRunId, articleCount: corpus.length, topicCount: topics.length, replayed: false }, status: 200 as const };
     });

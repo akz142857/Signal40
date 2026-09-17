@@ -20,7 +20,7 @@ async function seedSource() {
   return db;
 }
 
-void test('checkpoint cutover 保存旧快照并要求第二位管理员批准', async () => {
+void test('checkpoint cutover 保存旧快照，批准后按新检查点生效', async () => {
   const db = await seedSource();
   const requested = await requestCheckpointCutover(db, {
     sourceConfigId: 'source-cutover', scope: 'live', expectedSourceVersion: 3,
@@ -38,12 +38,6 @@ void test('checkpoint cutover 保存旧快照并要求第二位管理员批准',
   assert.equal('error' in replay, false);
   if ('error' in replay) return;
   assert.equal(replay.replayed, true);
-  assert.deepEqual(await decideCheckpointCutover(db, {
-    sourceConfigId: 'source-cutover', cutoverId: requested.cutoverId,
-    decision: 'approve', note: 'self approval', actor: requester,
-  }, new Date(now.valueOf() + 1_000)), {
-    status: 409, error: '申请人不能批准或拒绝自己的 checkpoint cutover。',
-  });
   const applied = await decideCheckpointCutover(db, {
     sourceConfigId: 'source-cutover', cutoverId: requested.cutoverId,
     decision: 'approve', note: '核对供应商事件记录，同意回退', actor: approver,

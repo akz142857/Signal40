@@ -1,4 +1,6 @@
-import { db, resolveRequestActor } from '@/lib/runtime';
+import { config, db, resolveRequestActor } from '@/lib/runtime';
+import { loadTopicDomains } from '@/lib/topic-domains';
+import { EMBEDDING_VERSION } from '@/lib/embedding';
 import {
   runPipeline,
   validateArticleInput,
@@ -127,7 +129,11 @@ export async function POST(request: Request) {
   }
   const articles = body.articles as ArticleInput[];
 
-  const topics = runPipeline(articles, now);
+  const topics = runPipeline(articles, now, undefined, {
+    domains: await loadTopicDomains(db),
+    embeddingModel: config.embeddingModel,
+    embeddingVersion: EMBEDDING_VERSION,
+  });
   let reservation: IdempotencyReservation | null = null;
   try {
     const started = await beginIdempotentRequest(db, {

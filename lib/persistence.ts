@@ -1,5 +1,7 @@
+import { embeddingSourceHash, parseEmbedding } from './embedding.ts';
 import type { SqlDatabase, SqlStatement } from './sql.ts';
 import type { Article, TopicCandidate, VerificationStatus } from './domain.ts';
+import { SCORING_VERSION } from './topic-scoring.ts';
 
 type TopicRow = {
   id: string;
@@ -15,6 +17,35 @@ type TopicRow = {
   updated_at: string;
 };
 
+
+/**
+ * 行 → 向量字段，并就地判定新鲜度。
+ *
+ * 落库的向量可能是按旧标题摘要算的（内容改过、还没轮到重算）。
+ * 这里按当前文本重算一次来源哈希，对不上就当成「没算过」返回空向量——
+ * 判定侧因此永远拿不到一份代表已不存在文本的向量，
+ * 而不是依赖某条写入路径记得清空它。
+ */
+function articleEmbedding(row: {
+  title: string;
+  summary: string;
+  embedding_json: string;
+  embedding_model: string;
+  embedding_version: number;
+  embedding_source_hash: string;
+}) {
+  const current = embeddingSourceHash({ title: row.title, summary: row.summary });
+  if (!row.embedding_source_hash || row.embedding_source_hash !== current) {
+    return { embedding: [], embeddingModel: '', embeddingVersion: 0, embeddingSourceHash: current };
+  }
+  return {
+    embedding: parseEmbedding(row.embedding_json),
+    embeddingModel: row.embedding_model ?? '',
+    embeddingVersion: Number(row.embedding_version ?? 0),
+    embeddingSourceHash: current,
+  };
+}
+
 type ArticleRow = {
   topic_id: string;
   id: string;
@@ -27,6 +58,10 @@ type ArticleRow = {
   published_at: string;
   metrics_json: string;
   content_hash: string;
+  embedding_json: string;
+  embedding_model: string;
+  embedding_version: number;
+  embedding_source_hash: string;
   evidence_family_id?: string | null;
   publisher_entity_id?: string | null;
   publisher_ownership_group?: string | null;
@@ -88,9 +123,9 @@ export async function persistArticlesWithRevisions(
     if (!existing) {
       await db.batch([
         db.prepare(`
-          INSERT INTO articles (id, source, source_type, author, title, summary, url, published_at, metrics_json, content_hash, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(value.id, value.source, value.sourceType, value.author, value.title, value.summary, value.url, value.publishedAt, JSON.stringify(value.metrics), value.contentHash, observedAt),
+          INSERT INTO articles (id, source, source_type, author, title, summary, url, published_at, metrics_json, content_hash, embedding_source_hash, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(value.id, value.source, value.sourceType, value.author, value.title, value.summary, value.url, value.publishedAt, JSON.stringify(value.metrics), value.contentHash, embeddingSourceHash(value), observedAt),
         db.prepare(`
           INSERT INTO article_revisions (id, article_id, revision, content_json, content_hash, raw_object_key, observed_at)
           VALUES (?, ?, 1, ?, ?, ?, ?)
@@ -101,14 +136,31 @@ export async function persistArticlesWithRevisions(
     const statements: SqlStatement[] = [
       db.prepare(`
         UPDATE articles SET source = ?, source_type = ?, author = ?, title = ?, summary = ?,
-          url = ?, published_at = ?, metrics_json = ?, content_hash = ? WHERE id = ?
-      `).bind(value.source, value.sourceType, value.author, value.title, value.summary, value.url, value.publishedAt, JSON.stringify(value.metrics), value.contentHash, value.id),
+          url = ?, published_at = ?, metrics_json = ?, content_hash = ?,
+          -- 内容变了就作废旧向量：那个向量代表的是旧标题摘要，留着会让后面
+          -- 所有相似度判定都对着一份看不见的过期文本在算。
+          -- 判据是嵌入输入（标题 + 摘要）的哈希，不是 content_hash——后者是
+          -- shortHash(url|title)，不含摘要，「只改摘要」的重发在它上面看不出变化。
+          embedding_json = CASE WHEN embedding_source_hash = ? THEN embedding_json ELSE '' END,
+          embedding_model = CASE WHEN embedding_source_hash = ? THEN embedding_model ELSE '' END,
+          embedding_version = CASE WHEN embedding_source_hash = ? THEN embedding_version ELSE 0 END,
+          embedded_at = CASE WHEN embedding_source_hash = ? THEN embedded_at ELSE '' END,
+          embedding_source_hash = ?
+        WHERE id = ?
+      `).bind(value.source, value.sourceType, value.author, value.title, value.summary, value.url, value.publishedAt, JSON.stringify(value.metrics), value.contentHash, embeddingSourceHash(value), embeddingSourceHash(value), embeddingSourceHash(value), embeddingSourceHash(value), embeddingSourceHash(value), value.id),
     ];
     if (existing.content_hash !== value.contentHash) {
       const latest = await db.prepare('SELECT COALESCE(MAX(revision), 0) AS revision FROM article_revisions WHERE article_id = ?').bind(value.id).first<{ revision: number }>();
+      // 内容可能改回之前见过的样子（聚合源的标题会来回变），那一版的修订已经存在。
+      // 唯一索引 (article_id, content_hash) 表达的就是「一份内容只留一条修订」，
+      // 这里按同样的语义只更新观测时间：不加重复行，也不能让整批采集因此失败——
+      // 那会让同一批次反复重试直到进死信，采集从此再也提交不上。
       statements.push(db.prepare(`
         INSERT INTO article_revisions (id, article_id, revision, content_json, content_hash, raw_object_key, observed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (article_id, content_hash) DO UPDATE SET
+          observed_at = excluded.observed_at,
+          raw_object_key = COALESCE(excluded.raw_object_key, article_revisions.raw_object_key)
       `).bind(`article_revision_${crypto.randomUUID()}`, value.id, Number(latest?.revision ?? 0) + 1, JSON.stringify(value), value.contentHash, rawObjectKey, observedAt));
     }
     await db.batch(statements);
@@ -140,6 +192,7 @@ export async function loadRecentArticles(
     )
     SELECT a.id, a.source, a.source_type, a.author, a.title, a.summary, a.url,
       a.published_at, a.metrics_json, a.content_hash,
+           a.embedding_json, a.embedding_model, a.embedding_version, a.embedding_source_hash,
       COALESCE(c.evidence_family_id, o.evidence_family_id) AS evidence_family_id,
       COALESCE(c.publisher_entity_id, o.publisher_entity_id) AS publisher_entity_id,
       COALESCE(cpe.ownership_group, pe.ownership_group, c.publisher_entity_id, o.publisher_entity_id) AS publisher_ownership_group,
@@ -166,6 +219,7 @@ export async function loadRecentArticles(
     publishedAt: row.published_at,
     metrics: parseJson(row.metrics_json, {}),
     contentHash: row.content_hash,
+    ...articleEmbedding(row),
     evidenceFamilyId: row.evidence_family_id ?? undefined,
     publisherEntityId: row.publisher_entity_id ?? undefined,
     publisherOwnershipGroup: row.publisher_ownership_group ?? undefined,
@@ -208,13 +262,19 @@ export async function persistPipeline(
     statements.push(
       db
         .prepare(`
-      INSERT INTO articles (id, source, source_type, author, title, summary, url, published_at, metrics_json, content_hash, created_at)
-      VALUES ${valueSlots(articleChunk.length, 11)}
+      INSERT INTO articles (id, source, source_type, author, title, summary, url, published_at, metrics_json, content_hash, embedding_source_hash, created_at)
+      VALUES ${valueSlots(articleChunk.length, 12)}
       ON CONFLICT(id) DO UPDATE SET
         source = excluded.source, source_type = excluded.source_type, author = excluded.author,
         title = excluded.title, summary = excluded.summary, url = excluded.url,
         published_at = excluded.published_at, metrics_json = excluded.metrics_json,
-        content_hash = excluded.content_hash
+        content_hash = excluded.content_hash,
+        -- 这条路径以前完全不碰向量列：import 模式改掉标题摘要之后，
+        -- 旧向量原样留着还被判为"当前"。作废判据与另一条写入路径保持一致。
+        embedding_json = CASE WHEN articles.embedding_source_hash = excluded.embedding_source_hash THEN articles.embedding_json ELSE '' END,
+        embedding_model = CASE WHEN articles.embedding_source_hash = excluded.embedding_source_hash THEN articles.embedding_model ELSE '' END,
+        embedding_version = CASE WHEN articles.embedding_source_hash = excluded.embedding_source_hash THEN articles.embedding_version ELSE 0 END,
+        embedded_at = CASE WHEN articles.embedding_source_hash = excluded.embedding_source_hash THEN articles.embedded_at ELSE '' END
     `)
         .bind(
           ...articleChunk.flatMap((article) => [
@@ -228,6 +288,7 @@ export async function persistPipeline(
             article.publishedAt,
             JSON.stringify(article.metrics),
             article.contentHash,
+            embeddingSourceHash(article),
             now.toISOString(),
           ]),
         ),
@@ -238,11 +299,12 @@ export async function persistPipeline(
     statements.push(
       db
         .prepare(`
-      INSERT INTO topics (id, title, keywords_json, run_id, score, heat_change, score_breakdown_json, source_count, status, gate_json, updated_at)
-      VALUES ${valueSlots(topicChunk.length, 11)}
+      INSERT INTO topics (id, title, keywords_json, run_id, score, heat_change, score_breakdown_json, scoring_version, source_count, status, gate_json, updated_at)
+      VALUES ${valueSlots(topicChunk.length, 12)}
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title, keywords_json = excluded.keywords_json, run_id = excluded.run_id,
         score = excluded.score, heat_change = excluded.heat_change, score_breakdown_json = excluded.score_breakdown_json,
+        scoring_version = excluded.scoring_version,
         source_count = excluded.source_count, status = excluded.status, gate_json = excluded.gate_json,
         quality_json = '{}', updated_at = excluded.updated_at
     `)
@@ -255,6 +317,7 @@ export async function persistPipeline(
             topic.score,
             topic.heatChange,
             JSON.stringify(topic.scoreBreakdown),
+            SCORING_VERSION,
             topic.sourceCount,
             topic.status,
             JSON.stringify(topic.gate),
@@ -319,7 +382,8 @@ async function hydrateTopics(
   const articleResult = await db
     .prepare(`
     SELECT ta.topic_id, a.id, a.source, a.source_type, a.author, a.title, a.summary, a.url,
-           a.published_at, a.metrics_json, a.content_hash
+           a.published_at, a.metrics_json, a.content_hash,
+           a.embedding_json, a.embedding_model, a.embedding_version, a.embedding_source_hash
     FROM topic_articles ta
     JOIN articles a ON a.id = ta.article_id
     WHERE ta.topic_id IN (${placeholders})
@@ -353,6 +417,7 @@ async function hydrateTopics(
       publishedAt: row.published_at,
       metrics: parseJson(row.metrics_json, {}),
       contentHash: row.content_hash,
+      ...articleEmbedding(row),
     });
     articlesByTopic.set(row.topic_id, articles);
   }

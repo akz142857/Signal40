@@ -13,7 +13,58 @@ Signal 40 是证据优先的短视频生产系统。它覆盖授权采集、跨�
 cp .env.example .env          # 填对象存储配置；已有 PostgreSQL 就只改 DATABASE_URL
 docker compose up -d postgres # 可选：本地 PostgreSQL（宿主端口 55432）
 make setup                     # npm ci + PostgreSQL 幂等迁移
-make dev                       # 再次确认迁移后启动 127.0.0.1:3001
+make up                        # 迁移后拉起全套常驻进程，Ctrl-C 一并停止
+```
+
+`make up` 起的是一整套：控制面（127.0.0.1:3001）、Source Worker、Render Worker、调度器。
+四个进程缺一不可——Source Worker 只领 `ingestion` 作业，Render Worker 只领
+`voice`/`preview`/`render`/`publish`，少起一个不会报错，只会让对应作业永远没人领。
+所以 `make up` 把它们绑在一起：任一进程退出就整组停下，不留「半套系统在跑」的状态。
+日志按 `[control]`/`[source-worker]`/`[render-worker]`/`[scheduler]` 前缀合并到同一个终端。
+
+```bash
+make up                 # 开发模式，改代码热更
+make up MODE=start      # 跑已构建产物（先 make build）
+make up PORT=3099       # 换端口；Worker 跟着连这一套，而不是 .env 里写死的那套
+```
+
+单独起某一个进程（调试，或者分终端看日志）：
+
+```bash
+make dev                # 只起控制面（开发模式，自带迁移）
+npm run worker:source   # 采集 worker
+npm run worker:render   # 配音、渲染、发布 worker
+npm run scheduler       # 编排循环
+```
+
+### 主题领域
+
+选题能不能自动生产，由**主题领域**决定：一段自然语言描述，嵌成中心向量，选题与它比余弦。
+这取代了以前写死在 `lib/domain.ts` 的中文财经词表——词表命中靠子串匹配，
+英文语料必然命中 0 个中文词，于是「跑题」和「不是中文」被判成了同一件事。
+
+```bash
+npm run domain -- list
+npm run domain -- add "AI 与算力" "人工智能模型发布、算力供给、相关公司与监管动态。" 0.32 --actor <member-id>
+npm run domain -- disable "AI 与算力" --actor <member-id>
+```
+
+写操作必须带 `--actor`，且必须是 `team_members` 里在职的 admin，每次改动都写审计——
+领域决定自动化能生产什么，这个决定要查得出是谁做的。
+
+中心向量不在这个脚本里算——算向量要 `OPENAI_API_KEY`，而它只有 Render Worker 持有。
+写完描述后由下一轮调度排一个 `embedding` 作业补上；补上之前该领域不参与判定，
+选题会因为「领域相关性无法判定」而不自动化（fail closed）。
+
+一个领域都没配时同理：所有选题都不自动化，人工建项目不受影响；待办箱会报一条
+`topic_domains:unconfigured` 提醒，`/settings/diagnostics` 也会显示向量覆盖率。
+
+停用领域或改阈值会让依赖它的旧判定失效重算——门禁结论的生命周期不能长于它依据的配置。
+
+聚类阈值 `EMBEDDING_CLUSTER_THRESHOLD` 是在真实语料上标定出来的，换模型或换语料要重跑：
+
+```bash
+SAMPLE=200 node --env-file-if-exists=.env --experimental-strip-types scripts/calibrate-embedding-threshold.ts
 ```
 
 R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com`，`S3_REGION=auto`，
@@ -31,20 +82,20 @@ R2 通过 S3 兼容端点访问（`https://<account_id>.r2.cloudflarestorage.com
 `scripts/lib-pg.sh` 里加载；已经导出到环境里的变量优先。Compose 不再向服务注入整份 `.env`，
 而是按工作负载显式列出允许变量；生产必须用部署平台的 Secret 注入与身份机制，不能把开发 `.env` 挂进容器。
 
-| 变量 | 谁读 | 说明 |
-| --- | --- | --- |
-| `DATABASE_URL` | 控制面 + 脚本 | PostgreSQL 连接串 |
-| `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 控制面 | R2 的 S3 端点与 API Token；`S3_REGION` 固定 `auto` |
-| `BOOTSTRAP_ADMIN_EMAILS` / `MEDIA_SIGNING_SECRET` / `SCHEDULER_TOKEN` / `WEBHOOK_SECRET` | 控制面 | 鉴权与签名 |
-| `SIGNAL40_CONTROL_URL` | Worker | 控制面地址 |
-| `SIGNAL40_SOURCE_WORKER_TOKEN` / `SIGNAL40_RENDER_WORKER_TOKEN` | 对应 Worker + 控制面 | 生产必须为两个 profile 配置不同值，控制面按作业类型和端点拒绝越界令牌 |
-| `SIGNAL40_OPENCLI_BIN` | Source Worker | 微信/小红书选择 OpenCLI 搜索时使用；默认 `opencli`，第三方 RSS 模式不需要 |
-| `SIGNAL40_IDENTITY_HEADER_ID` / `SIGNAL40_IDENTITY_HEADER_EMAIL` | 控制面 | 认证反向代理注入的身份头名 |
-| `SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS` | 控制面 | 生产必须 `false`，否则本机请求可伪造角色 |
-| `SIGNAL40_AUTOMATION_ACTOR_ID` | 控制面 + 调度器 | 自动化服务账号；必须是 `team_members` 里 active 的 admin，不配则引擎不写入 |
-| `SIGNAL40_SCHEDULER_INTERVAL_MS` / `SIGNAL40_ATTENTION_WEBHOOK_URL` | 调度器 | tick 间隔与待办外部通知地址 |
-| `OPENAI_API_KEY` / `OPENAI_TTS_MODEL` / `OPENAI_TTS_VOICE` | **只有 Worker** | 云端配音与字幕对齐；不配只影响 voice 作业 |
-| `YOUTUBE_ACCESS_TOKEN` / `SIGNAL40_ALLOW_PUBLIC_PUBLISH` | **只有 Worker** | 不配就只能用 package 渠道产出发布包 |
+| 变量                                                                                     | 谁读                 | 说明                                                                       |
+| ---------------------------------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------- |
+| `DATABASE_URL`                                                                           | 控制面 + 脚本        | PostgreSQL 连接串                                                          |
+| `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`                | 控制面               | R2 的 S3 端点与 API Token；`S3_REGION` 固定 `auto`                         |
+| `BOOTSTRAP_ADMIN_EMAILS` / `MEDIA_SIGNING_SECRET` / `SCHEDULER_TOKEN` / `WEBHOOK_SECRET` | 控制面               | 鉴权与签名                                                                 |
+| `SIGNAL40_CONTROL_URL`                                                                   | Worker               | 控制面地址                                                                 |
+| `SIGNAL40_SOURCE_WORKER_TOKEN` / `SIGNAL40_RENDER_WORKER_TOKEN`                          | 对应 Worker + 控制面 | 生产必须为两个 profile 配置不同值，控制面按作业类型和端点拒绝越界令牌      |
+| `SIGNAL40_OPENCLI_BIN`                                                                   | Source Worker        | 微信/小红书选择 OpenCLI 搜索时使用；默认 `opencli`，第三方 RSS 模式不需要  |
+| `SIGNAL40_IDENTITY_HEADER_ID` / `SIGNAL40_IDENTITY_HEADER_EMAIL`                         | 控制面               | 认证反向代理注入的身份头名                                                 |
+| `SIGNAL40_ALLOW_LOCAL_ROLE_HEADERS`                                                      | 控制面               | 生产必须 `false`，否则本机请求可伪造角色                                   |
+| `SIGNAL40_AUTOMATION_ACTOR_ID`                                                           | 控制面 + 调度器      | 自动化服务账号；必须是 `team_members` 里 active 的 admin，不配则引擎不写入 |
+| `SIGNAL40_SCHEDULER_INTERVAL_MS` / `SIGNAL40_ATTENTION_WEBHOOK_URL`                      | 调度器               | tick 间隔与待办外部通知地址                                                |
+| `OPENAI_API_KEY` / `OPENAI_TTS_MODEL` / `OPENAI_TTS_VOICE`                               | **只有 Worker**      | 云端配音与字幕对齐；不配只影响 voice 作业                                  |
+| `YOUTUBE_ACCESS_TOKEN` / `SIGNAL40_ALLOW_PUBLIC_PUBLISH`                                 | **只有 Worker**      | 不配就只能用 package 渠道产出发布包                                        |
 
 `OPENAI_API_KEY` 由 Render Worker 使用，不是控制面——控制面不直接调用任何模型服务。
 
@@ -131,11 +182,11 @@ npm run worker
 
 作业要在**特定状态**入队，早了晚了都会被拒：
 
-| 作业 | 必须在这个状态入队 | 之后再转到 |
-| --- | --- | --- |
-| 配音 | `SCRIPT_APPROVED` | `ASSETS_READY` |
-| 渲染 | `ASSETS_READY` | `RENDER_QUEUED` |
-| 发布 | 先转到 `PUBLISH_SCHEDULED`，**再**建发布任务 | —— |
+| 作业 | 必须在这个状态入队                           | 之后再转到      |
+| ---- | -------------------------------------------- | --------------- |
+| 配音 | `SCRIPT_APPROVED`                            | `ASSETS_READY`  |
+| 渲染 | `ASSETS_READY`                               | `RENDER_QUEUED` |
+| 发布 | 先转到 `PUBLISH_SCHEDULED`，**再**建发布任务 | ——              |
 
 `walk` 默认一路推到底，所以入队前要用目标状态参数停住。另外 `RENDER_QUEUED`
 没有回到 `ASSETS_READY` 的转换路径：误推进后可以直接退到 `CHANGES_REQUESTED`
@@ -205,8 +256,8 @@ npm audit --omit=dev
 3. **建策略**：`/automation` 新建策略并启用。新策略默认机械步骤自动、四道审批人工、
    自动建项目关闭。
 4. **（可选）开预先授权**：勾选要自动放行的审批，指定授权人和有效期。
-   研究/脚本/终审用一个授权人，发布用另一个——两者必须是**不同的真实成员**，
-   否则 G7 的职责分离形同虚设，保存时和每次自动放行时都会校验。
+   授权人必须是在职、且角色能做那道审批的真实成员；研究类与发布类可以是同一个人
+   （职责分离已按单人运营的决定移除，见 CLAUDE.md 的不变量一节）。
    自动放行写入的是那个人的批准记录，note 注明依据哪条策略，审计里以 `trigger=automation` 区分。
 
 人工干预：

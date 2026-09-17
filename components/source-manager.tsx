@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   Activity,
   Archive,
@@ -55,6 +56,12 @@ import {
 } from '@/components/connector-release-control';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { responseErrorText as errorText } from '@/lib/response-error';
+import { pollSourceTest } from '@/lib/source-test-polling';
+import { sourceNextStep } from '@/lib/onboarding';
+import {
+  MINIMUM_INDEPENDENT_EVIDENCE,
+  PRIMARY_EVIDENCE_SOURCE_TYPES,
+} from '@/lib/domain';
 import { PageContainer, PageHeader } from '@/components/page-shell';
 import type {
   IngestionQuarantineStatus,
@@ -82,10 +89,17 @@ type SourceRow = {
   nextRunAt: string | null;
   lastSuccessAt: string | null;
   lastTestedAt: string | null;
+  /** 当前配置本身通过过连接测试；改配置会让旧测试作废。 */
+  testedCurrentConfig: boolean;
   publicErrorMessage: string | null;
   publicErrorCode: string | null;
   consecutiveFailures: number;
   hasActiveRun: boolean;
+  /** 采集还挂着但执行侧已掉线；租约到期后才会自动重试。 */
+  activeRunStalled: boolean;
+  activeRunRetryAt: string | null;
+  /** 服务端判定：这条来源没有任何采集内容，删除不销毁证据。 */
+  hardDeletable: boolean;
   deletionStatus:
     | 'pending'
     | 'blocked'
@@ -347,6 +361,37 @@ function ProposalList({
           )}
         </article>
       )) : <p className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">暂无来源提案。</p>}
+    </div>
+  );
+}
+
+/**
+ * 一手来源提示。
+ *
+ * 证据门禁要求候选选题里至少有一篇一手来源，而接入向导的「内容类型」默认是 media。
+ * 全是转述类来源时，连接、采集、选题计算每一步都会成功，只有最后的门禁永远不过——
+ * 这个条件此前只存在于 lib/domain.ts，界面上一个字都没有，撞上去才知道。
+ */
+function PrimarySourceNotice({ sources }: { sources: SourceRow[] }) {
+  // 列表本身已排除归档来源，这里拿到的就是在用的那些。
+  const active = sources;
+  const presentTypes = [
+    ...new Set(active.map((source) => source.publicConfig.sourceType ?? 'media')),
+  ];
+  const hasPrimary = presentTypes.some((type) =>
+    (PRIMARY_EVIDENCE_SOURCE_TYPES as readonly string[]).includes(type),
+  );
+  if (!active.length || hasPrimary) return null;
+  return (
+    <div className="mb-5 rounded-2xl border border-amber-500/40 bg-amber-500/5 p-4">
+      <p className="text-sm font-medium">现有来源都不是一手来源</p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {active.length} 个来源的内容类型是 {presentTypes.join('、')}，都属于转述。
+        自动证据门禁要求同一个选题里至少有一篇一手来源（
+        {PRIMARY_EVIDENCE_SOURCE_TYPES.join(' / ')}），并有{' '}
+        {MINIMUM_INDEPENDENT_EVIDENCE} 份独立证据。只有转述来源时，采集和选题计算都会成功，
+        但雷达上的「可生成」始终是 0。内容类型可以在权利审批那一步调整。
+      </p>
     </div>
   );
 }
@@ -620,6 +665,14 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
   );
   const [retentionDays, setRetentionDays] = useState('30');
   const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [testPending, setTestPending] = useState(false);
+  /**
+   * 向导自己的报错。
+   *
+   * `message` 只渲染在列表页和详情抽屉里，向导是模态：保存或测试失败时它把用户
+   * 送回第 1 步，却没有任何地方能看见原因，看起来就是「点了没反应、存不下去」。
+   */
+  const [wizardError, setWizardError] = useState('');
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [bulkContent, setBulkContent] = useState('');
   const [bulkCandidates, setBulkCandidates] = useState<SourceImportCandidate[]>(
@@ -723,6 +776,17 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       ),
     [members],
   );
+  /** 有「来源权利审批」能力的在职管理员；卡片据此说明这一步该找谁。 */
+  const rightsApprovers = useMemo(
+    () =>
+      members
+        .filter((member) =>
+          member.status === 'active' && member.role === 'admin' &&
+          Boolean(member.can_approve_source_rights),
+        )
+        .map((member) => ({ userId: member.user_id, email: member.email })),
+    [members],
+  );
   const canApproveRights = useMemo(
     () => members.some((member) =>
       member.user_id === actor.id && member.role === 'admin' && member.status === 'active' && Boolean(member.can_approve_source_rights),
@@ -743,40 +807,36 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
     [members],
   );
 
-  const waitForTest = async (sourceId: string, testId: string) => {
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const response = await fetch(
-        `/api/v1/source-configs/${encodeURIComponent(sourceId)}/tests/${encodeURIComponent(testId)}`,
-        { cache: 'no-store', headers: adminHeaders() },
-      );
-      if (!response.ok) throw new Error(await errorText(response));
-      const payload = (await response.json()) as {
-        test: {
-          status: string;
-          preview: PreviewItem[];
-          error_detail_redacted?: string;
-        };
-      };
-      if (payload.test.status === 'succeeded') {
-        setPreview(payload.test.preview);
-        setStep(3);
-        await refresh();
-        setMessage('连接测试通过。请核对最近内容；独立权利审批完成后才能启用来源。');
-        return;
-      }
-      if (payload.test.status === 'failed')
-        throw new Error(payload.test.error_detail_redacted || '连接测试失败。');
-      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+  /**
+   * 等待连接测试结果。`pending` 表示这轮没等到结论，不是失败，
+   * 调用方必须把它呈现成可重试状态，不能继续显示「正在验证」。
+   */
+  const waitForTest = async (
+    sourceId: string,
+    testId: string,
+  ): Promise<'succeeded' | 'pending'> => {
+    const outcome = await pollSourceTest({
+      sourceId,
+      testId,
+      headers: adminHeaders(),
+    });
+    if (outcome.status === 'failed') throw new Error(outcome.message);
+    if (outcome.status === 'succeeded') {
+      setPreview(outcome.preview);
+      setStep(3);
+      await refresh();
+      setMessage('连接测试通过。请核对最近内容；独立权利审批完成后才能启用来源。');
+      return 'succeeded';
     }
-    setMessage(
-      '测试仍在排队。请确认采集 Worker 在线，稍后可在来源卡片重新测试。',
-    );
+    return 'pending';
   };
 
   const testSource = async (sourceId: string) => {
     setBusy(true);
     setPendingSourceId(sourceId);
     setPreview([]);
+    setTestPending(false);
+    setWizardError('');
     setStep(2);
     try {
       const response = await fetch(
@@ -792,10 +852,20 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       if (!response.ok) throw new Error(await errorText(response));
       const payload = (await response.json()) as { testId: string };
       setMessage('已交给受限采集 Worker 测试，正在等待预览…');
-      await waitForTest(sourceId, payload.testId);
+      const outcome = await waitForTest(sourceId, payload.testId);
+      if (outcome === 'pending') {
+        setTestPending(true);
+        setMessage(
+          '等待超时：测试仍未返回结果。请确认采集 Worker 在线，可在此重试或稍后从来源卡片重新测试。',
+        );
+        await refresh().catch(() => undefined);
+      }
     } catch (error) {
+      const detail = error instanceof Error ? error.message : '连接测试失败。';
+      setTestPending(false);
       setStep(1);
-      setMessage(error instanceof Error ? error.message : '连接测试失败。');
+      setMessage(detail);
+      setWizardError(detail);
       await refresh().catch(() => undefined);
     } finally {
       setBusy(false);
@@ -804,6 +874,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
 
   const createSource = async () => {
     setBusy(true);
+    setWizardError('');
     try {
       const adapter = selectedConnector?.adapter;
       if (!adapter) throw new Error('连接器未加载。');
@@ -893,7 +964,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       await refresh();
       await testSource(sourceId);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '创建失败。');
+      const detail = error instanceof Error ? error.message : '创建失败。';
+      setMessage(detail);
+      setWizardError(detail);
       setBusy(false);
     }
   };
@@ -1428,7 +1501,7 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
     if (
       action === 'discard' &&
       !window.confirm(
-        '丢弃不可恢复，并会让 raw payload 立即进入删除队列。确认继续？',
+        `丢弃不可恢复：这一批次的 ${run.acceptedCount} 条内容会立即退出证据库，raw payload 进入删除队列，选题雷达随即按剩余语料重算（可能变成空）。\n\n重新采集也救不回来——同一条目的时间戳没变会被当成重复跳过，只有之后新发布的内容才会重新进入雷达。确认继续？`,
       )
     )
       return;
@@ -1562,6 +1635,43 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
     }
   };
 
+  /**
+   * 删除从未采集过内容的来源。
+   *
+   * 有内容的来源不会走到这里：入口只在服务端判定 `hardDeletable` 时出现，
+   * 服务端在删除时还会再核对一次。
+   */
+  const deleteSource = async (source: SourceRow) => {
+    if (
+      !window.confirm(
+        `删除「${source.name}」？\n\n这条来源没有任何采集内容，删除只会移除这条配置，不影响任何已采集的证据。操作会记入审计，且不可撤销。`,
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/v1/source-configs/${encodeURIComponent(source.id)}`,
+        {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json', ...adminHeaders() },
+          body: JSON.stringify({
+            expectedVersion: source.version,
+            reason: '管理员在来源控制台删除未采集内容的来源',
+          }),
+        },
+      );
+      if (!response.ok) throw new Error(await errorText(response));
+      if (detailSourceId === source.id) setDetailSourceId(null);
+      await refresh();
+      setMessage(`${source.name} 已删除。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '删除失败。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const withdrawContent = async (source: SourceRow) => {
     if (
       !window.confirm(
@@ -1669,10 +1779,10 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
     }
   };
 
-  const openSourceDetail = (sourceId: string) => {
+  const openSourceDetail = (sourceId: string, tab: SourceDetailTab = 'runs') => {
     setDetailSourceId(sourceId);
-    setDetailTab('runs');
-    ensureDetailData(sourceId, 'runs');
+    setDetailTab(tab);
+    ensureDetailData(sourceId, tab);
   };
 
   const selectDetailTab = (sourceId: string, tab: SourceDetailTab) => {
@@ -1705,7 +1815,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
       termsSnapshot: '',
       expiresAt: '',
     };
-    const canDecideRights = canApproveRights && source.pendingRightsRequestedBy !== actor.id;
+    // 只看审批能力：职责分离移除后，提交者本人也能批自己的请求。
+    // 这里若继续排除提交者，界面会藏起一个服务端其实允许的动作。
+    const canDecideRights = canApproveRights;
     return (
       <>
         <SheetHeader className="border-b border-border p-6 pr-14">
@@ -2293,6 +2405,16 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2 border-t pt-4">
+                {source.hardDeletable && (
+                  <Button
+                    onClick={() => void deleteSource(source)}
+                    disabled={busy}
+                    variant="outline"
+                  >
+                    <Trash2 />
+                    删除来源
+                  </Button>
+                )}
                 <Button
                   onClick={() => void archive(source)}
                   disabled={busy || Boolean(source.deletionStatus)}
@@ -2357,10 +2479,27 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
             </div>
           </div>
           <ConnectorReleaseSummary connectors={connectors} className="mb-5" />
+          <PrimarySourceNotice sources={sources} />
           <div className="grid gap-2">
             {sources.map((source) => {
               const capability = capabilityForAdapter(source.adapter);
               const workerOnline = onlineCapabilities.has(capability);
+              const nextStep = sourceNextStep(
+                {
+                  id: source.id,
+                  name: source.name,
+                  lifecycleStatus: source.lifecycleStatus,
+                  rightsStatus: source.rightsStatus,
+                  sourceType: source.publicConfig.sourceType ?? 'media',
+                  testedCurrentConfig: source.testedCurrentConfig,
+                  enabled: source.enabled,
+                  pendingRightsRequestedBy: source.pendingRightsRequestedBy,
+                },
+                {
+                  approvers: rightsApprovers,
+                  hasSucceededRun: Boolean(source.lastSuccessAt),
+                },
+              );
               return (
                 <article
                   key={source.id}
@@ -2396,6 +2535,9 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                         : source.publicConfig.url}
                     </p>
                     <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        内容类型 {source.publicConfig.sourceType ?? 'media'}
+                      </span>
                       <span>权利 {rightsLabels[source.rightsStatus]}</span>
                       <span>
                         下次{' '}
@@ -2411,8 +2553,16 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                             )
                           : '尚无'}
                       </span>
-                      {source.hasActiveRun && (
+                      {source.hasActiveRun && !source.activeRunStalled && (
                         <span className="text-chart-1">运行中</span>
+                      )}
+                      {source.activeRunStalled && (
+                        <span className="text-amber-700 dark:text-amber-300">
+                          采集停滞
+                          {source.activeRunRetryAt
+                            ? ` · ${new Date(source.activeRunRetryAt).toLocaleTimeString('zh-CN')} 自动重试`
+                            : ''}
+                        </span>
                       )}
                       {source.effectiveScheduleMultiplier > 1 && (
                         <span className="text-amber-700 dark:text-amber-300">
@@ -2426,6 +2576,19 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                           ? `${source.publicErrorCode} · `
                           : ''}
                         {source.publicErrorMessage}
+                      </p>
+                    )}
+                    {nextStep && (
+                      <p className="mt-1.5 text-xs">
+                        {nextStep.text}
+                        {nextStep.action && (
+                          <Link
+                            href={nextStep.action.href}
+                            className="ml-1 underline underline-offset-2"
+                          >
+                            {nextStep.action.label}
+                          </Link>
+                        )}
                       </p>
                     )}
                   </div>
@@ -2444,6 +2607,17 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                       <Play />
                       立即采集
                     </Button>
+                    {source.hardDeletable && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => void deleteSource(source)}
+                      >
+                        <Trash2 />
+                        删除
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -2476,19 +2650,36 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
         列表拿回整幅宽度。对话框始终挂载，关掉再打开仍停在原来那一步——
         测试和权利审批要等人，中途关掉窗口不该把填好的东西丢了。
       */}
-      <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
+      <Dialog
+        open={wizardOpen}
+        onOpenChange={(open) => {
+          setWizardOpen(open);
+          if (!open) setWizardError('');
+        }}
+      >
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
               Step {step} / 3
             </p>
             <DialogTitle className="text-xl">
-              {step === 1 ? '粘贴来源' : step === 2 ? '识别与测试' : '确认并启用'}
+              {step === 1
+                ? '粘贴来源'
+                : step === 2
+                  ? '识别与测试'
+                  : pendingSource?.rightsStatus === 'approved'
+                    ? '确认并启用'
+                    : '连接已验证'}
             </DialogTitle>
             <DialogDescription>
-              保存后先测试连接，再由另一名管理员核验权利，最后才能启用采集。
+              保存后先测试连接，再核验使用权，最后才能启用采集。
             </DialogDescription>
           </DialogHeader>
+          {wizardError && (
+            <output className="mt-4 block rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+              {wizardError}
+            </output>
+          )}
           {step === 1 && (
             <div className="mt-5 grid gap-4">
               <Button
@@ -3151,11 +3342,44 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
           )}
           {step === 2 && (
             <div className="mt-6 rounded-xl border border-dashed p-8 text-center">
-              <LoaderCircle className="mx-auto size-7 animate-spin" />
-              <p className="mt-3 font-medium">Worker 正在验证来源</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                检查网络边界、内容格式与最近条目。
-              </p>
+              {testPending ? (
+                <>
+                  <TriangleAlert className="mx-auto size-7 text-chart-3" />
+                  <p className="mt-3 font-medium">等待超时，测试仍未返回结果</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    来源已保存，但这轮没等到 Worker 的结论。请确认采集 Worker
+                    在线后重试；也可以关掉窗口，稍后从来源卡片重新测试。
+                  </p>
+                  <div className="mt-4 flex justify-center gap-2">
+                    <Button
+                      onClick={() =>
+                        pendingSourceId && void testSource(pendingSourceId)
+                      }
+                      disabled={busy || !pendingSourceId}
+                    >
+                      <TestTube2 />
+                      重新测试
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setTestPending(false);
+                        setStep(1);
+                      }}
+                    >
+                      返回配置
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <LoaderCircle className="mx-auto size-7 animate-spin" />
+                  <p className="mt-3 font-medium">Worker 正在验证来源</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    检查网络边界、内容格式与最近条目。
+                  </p>
+                </>
+              )}
             </div>
           )}
           {step === 3 && (
@@ -3188,12 +3412,43 @@ function AdminSourceManager({ actor }: { actor: { id: string; email: string; can
                   确认并启用
                 </Button>
               ) : (
-                <p className="rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">
-                  连接验证已完成，正在等待另一名具备“来源权利审批”能力的管理员核对证据。你可以先关掉这个窗口，审批后回到列表启用。
-                </p>
+                <>
+                  <p className="rounded-xl border border-chart-3/30 bg-chart-3/10 p-3 text-sm">
+                    连接验证已完成，来源已保存。启用前还需要一名具备「来源权利审批」能力的管理员核对证据。
+                  </p>
+                  {/*
+                    这一步到这里就做完了：没有审批权的人再停在弹窗里也推不动，
+                    所以给一个明确的收尾动作，而不是只剩「返回修改」这种看着像没做完的出口。
+                  */}
+                  <Button
+                    onClick={() => {
+                      setWizardOpen(false);
+                      setStep(1);
+                      setPreview([]);
+                    }}
+                  >
+                    <CheckCircle2 />
+                    完成，回到来源列表
+                  </Button>
+                  {/* 同上：不再按提交者排除，职责分离已移除。 */}
+                  {canApproveRights && pendingSourceId && (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setWizardOpen(false);
+                        setStep(1);
+                        setPreview([]);
+                        openSourceDetail(pendingSourceId, 'rights');
+                      }}
+                    >
+                      <ShieldAlert />
+                      我来审批这条来源的权利
+                    </Button>
+                  )}
+                </>
               )}
               <Button
-                variant="outline"
+                variant="ghost"
                 onClick={() => {
                   setStep(1);
                   setPreview([]);

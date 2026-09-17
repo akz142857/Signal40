@@ -101,6 +101,73 @@ const requiredGates: Partial<Record<ContentState, readonly GateCode[]>> = {
   MEASURED: ['G8_POST_PUBLISH'],
 };
 
+/**
+ * 正常推进路径上的下一个状态。
+ *
+ * `transitions` 列的是「允许」的目标（含要求修改、驳回、取消等岔路），
+ * 编排引擎和界面还需要知道「顺着走是哪一个」。这张表曾经在编排器和工作台里
+ * 各抄一份，两处一旦走偏，自动化推进的状态和界面按钮上写的就不是同一件事。
+ */
+export const PRIMARY_NEXT_STATE: Partial<Record<ContentState, ContentState>> = {
+  DRAFT: 'RESEARCHING',
+  RESEARCHING: 'EVIDENCE_READY',
+  EVIDENCE_READY: 'EDITOR_APPROVED',
+  EDITOR_APPROVED: 'SCRIPT_DRAFT',
+  SCRIPT_DRAFT: 'SCRIPT_APPROVED',
+  SCRIPT_APPROVED: 'ASSETS_READY',
+  ASSETS_READY: 'RENDER_QUEUED',
+  QC_PENDING: 'QC_APPROVED',
+  QC_APPROVED: 'PUBLISH_SCHEDULED',
+  PUBLISHED: 'MEASURED',
+};
+
+export const CONTENT_STATE_LABELS: Record<ContentState, string> = {
+  DRAFT: '项目草稿',
+  RESEARCHING: '研究中',
+  EVIDENCE_READY: '证据就绪',
+  EDITOR_APPROVED: '研究已批准',
+  SCRIPT_DRAFT: '脚本草稿',
+  SCRIPT_APPROVED: '脚本已批准',
+  ASSETS_READY: '资产就绪',
+  RENDER_QUEUED: '等待渲染',
+  RENDERING: '渲染中',
+  QC_PENDING: '等待质检',
+  QC_APPROVED: '终审通过',
+  PUBLISH_SCHEDULED: '已排期',
+  PUBLISHED: '已发布',
+  MEASURED: '已回流',
+  CHANGES_REQUESTED: '要求修改',
+  REJECTED: '已驳回',
+  FAILED: '失败',
+  CANCELLED: '已取消',
+};
+
+export const GATE_LABELS: Record<GateCode, string> = {
+  G0_SOURCE_RIGHTS: '来源授权',
+  G1_INPUT_QUALITY: '输入质量',
+  G2_AUTO_EVIDENCE: '自动证据',
+  G3_MANUAL_RESEARCH: '人工研究复核',
+  G4_SCRIPT_COVERAGE: '脚本覆盖',
+  G5_ASSET_RIGHTS: '资产版权',
+  G6_CONTENT_TECH_QC: '成片与技术质检',
+  G7_PUBLISH_APPROVAL: '发布审批',
+  G8_POST_PUBLISH: '发布后回流',
+};
+
+/** 转换到目标状态允许的角色；返回 null 表示不限角色。 */
+export function allowedRolesForState(to: ContentState): readonly Role[] | null {
+  return transitionRoles[to] ?? null;
+}
+
+/** 转换到目标状态必须通过的门禁。 */
+export function requiredGatesForState(to: ContentState): readonly GateCode[] {
+  return requiredGates[to] ?? [];
+}
+
+export function allowedTransitionsFrom(from: ContentState): readonly ContentState[] {
+  return transitions[from];
+}
+
 export class WorkflowError extends Error {
   readonly code: 'INVALID_TRANSITION' | 'FORBIDDEN' | 'GATE_FAILED' | 'VERSION_CONFLICT';
   readonly status: number;

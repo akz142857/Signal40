@@ -65,3 +65,24 @@ void test('connector release UI exposes stable-bucket canary and automatic stop 
     );
   }
 });
+
+void test('接入向导把保存/测试失败的原因显示在模态内，而不是只写到身后的列表页', () => {
+  for (const marker of [
+    'const [wizardError, setWizardError] = useState',
+    'setWizardError(detail)',
+    '{wizardError && (',
+  ]) {
+    assert.ok(manager.includes(marker), marker);
+  }
+});
+
+void test('连接测试等待超时给出可重试状态，而不是一直转圈', () => {
+  for (const marker of [
+    'pollSourceTest',
+    'setTestPending(true)',
+    '等待超时，测试仍未返回结果',
+    '重新测试',
+  ]) {
+    assert.ok(manager.includes(marker), marker);
+  }
+});

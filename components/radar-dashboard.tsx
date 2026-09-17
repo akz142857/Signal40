@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   ArrowUpRight,
   BarChart3,
@@ -13,10 +14,11 @@ import {
   Film,
   LoaderCircle,
   Radar,
+  Settings2,
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -37,6 +39,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { devIdentityHeaders, useSession } from '@/hooks/use-session';
 import { Label } from '@/components/ui/label';
 import { PageContainer, PageHeader } from '@/components/page-shell';
+import {
+  currentOnboardingStep,
+  onboardingComplete,
+  type OnboardingStep,
+} from '@/lib/onboarding';
 import type {
   ArticleInput,
   TopicCandidate,
@@ -106,8 +113,11 @@ async function readError(response: Response) {
 
 export function RadarDashboard({
   initialTopics,
+  onboarding = [],
 }: {
   initialTopics: TopicCandidate[];
+  /** 服务端按真实状态算出的上手清单；全部完成时不渲染。 */
+  onboarding?: OnboardingStep[];
 }) {
   // 挂上会话：devIdentityHeaders 读的是它带回来的部署级开关。
   useSession();
@@ -479,6 +489,20 @@ export function RadarDashboard({
     (topic) => topic.gate.passed && topic.verificationStatus === 'verified',
   ).length;
   const lead = topics[0];
+  const onboardingDone = !onboarding.length || onboardingComplete(onboarding);
+  /**
+   * 空列表要说清是「引擎没算出东西」还是「被筛选条件挡住了」。
+   * 原来两种情况共用一句「当前筛选条件下没有候选题」，于是雷达在语料被丢弃、
+   * 或所有来源都过不了证据门禁时，都只说筛选——把唯一的线索藏了起来。
+   */
+  const gateStep = onboarding.find((step) => step.key === 'pass_evidence_gate');
+  const emptyReason = !topics.length
+    ? (currentOnboardingStep(onboarding)?.detail ?? '还没有算出候选选题。')
+    : filter === 'ready' && gateStep && gateStep.status !== 'done'
+      ? gateStep.detail
+      : `当前筛选条件下没有候选题（共 ${topics.length} 个候选）。`;
+  const pendingStepCount = onboarding.filter((step) => step.status !== 'done').length;
+  const nextStep = currentOnboardingStep(onboarding);
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -491,6 +515,15 @@ export function RadarDashboard({
             <span className="size-2 rounded-full bg-chart-1 shadow-[0_0_0_4px_var(--color-signal-glow)]" />
             {sourceLabel}
           </span>
+          {!onboardingDone && (
+            <Link
+              href={nextStep?.action?.href ?? '/sources'}
+              className={buttonVariants({ variant: 'outline', size: 'default' })}
+            >
+              <Settings2 />
+              {nextStep?.action?.label ?? '查看来源配置'}
+            </Link>
+          )}
           <Button variant="outline" onClick={() => setImportOpen(true)}><FileUp />导入文章</Button>
         </>}
       />
@@ -500,13 +533,15 @@ export function RadarDashboard({
           <div className="mb-5 flex flex-col justify-between gap-4 border-b border-border pb-5 sm:flex-row sm:items-end">
             <div>
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-chart-1">
-                Daily radar / {sourceLabel}
+                Daily radar / {onboardingDone ? sourceLabel : `还差 ${pendingStepCount} 步`}
               </p>
-              {message && (
-                <output className="mt-2 block text-sm font-medium">
-                  {message}
-                </output>
-              )}
+              <output className="mt-2 block text-sm font-medium">
+                {onboardingDone
+                  ? message
+                  : nextStep
+                    ? `现在这一步：${nextStep.title}`
+                    : message}
+              </output>
             </div>
             <div className="flex flex-wrap gap-2" aria-label="候选筛选">
               <FilterButton
@@ -553,7 +588,7 @@ export function RadarDashboard({
                   <div className="min-w-0">
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <span className="rounded-md bg-secondary px-2 py-1 font-mono text-xs font-semibold">
-                        热度 +{topic.heatChange}
+                        1 小时内 +{topic.heatChange} 篇
                       </span>
                       <span className="flex items-center gap-1 text-xs text-muted-foreground">
                         <Clock3 className="size-3.5" />
@@ -603,7 +638,7 @@ export function RadarDashboard({
             })}
             {!filteredTopics.length && (
               <div className="rounded-2xl border border-dashed border-border p-10 text-center text-muted-foreground">
-                当前筛选条件下没有候选题。
+                {emptyReason}
               </div>
             )}
           </div>
@@ -736,10 +771,17 @@ export function RadarDashboard({
                         ['簇内一致性', selected.quality.coherence],
                         ['一致性下限', selected.quality.coherenceFloor],
                         ['证据区分度', selected.quality.evidenceDistinctness],
-                        ['主题词表覆盖', selected.quality.lexiconCoverage],
+                        ['向量覆盖率', selected.quality.embeddingCoverage],
                       ].map(([label, value]) => <div className="rounded-xl bg-secondary/70 p-3" key={String(label)}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-mono text-xl font-semibold">{Math.round(Number(value) * 100)}%</p></div>)}
                     </div>
-                    <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 语言：{selected.quality.language} · {selected.quality.automatable ? '允许自动建项目' : '禁止自动建项目'}</p>
+                    <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 一致性口径：{selected.quality.coherenceMode === 'semantic' ? '语义余弦' : '词元（降级）'} · 语言：{selected.quality.language} · {selected.quality.automatable ? '允许自动建项目' : '禁止自动建项目'}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{
+                      selected.quality.domainStatus === 'evaluated'
+                        ? `领域「${selected.quality.domainName}」相关性 ${selected.quality.domainRelevance}（阈值 ${selected.quality.domainThreshold}）`
+                        : selected.quality.domainStatus === 'no_domains'
+                          ? '未配置主题领域，无法判断是否落在生产范围内'
+                          : '领域中心向量缺失或口径不一致，领域相关性无法判定'
+                    }</p>
                     {selected.quality.reasons.length > 0 && <ul className="mt-2 space-y-1 text-sm leading-6 text-chart-2">{selected.quality.reasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul>}
                   </> : <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">尚未评估；下一轮调度器会计算质量指标。</p>}
                 </section>

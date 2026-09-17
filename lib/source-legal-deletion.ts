@@ -40,11 +40,10 @@ export async function createSourceLegalHold(
     const existing = await tx.prepare("SELECT id, hold_epoch FROM source_legal_holds WHERE source_config_id = ? AND status = 'active' LIMIT 1")
       .bind(input.sourceId).first<{ id: string; hold_epoch: number }>();
     if (existing) return { status: 200 as const, legalHoldId: existing.id, holdEpoch: existing.hold_epoch, replayed: true };
-    const independentOperator = legalOperators.results.some(
-      (operator) => operator.user_id !== input.actor.id,
-    );
-    if (!independentOperator) {
-      return { status: 409 as const, error: '创建 legal hold 前必须任命另一名有效法律操作人，以保证异人解除。' };
+    // 原本要求团队里另有一名法律操作人，好让 hold 由异人解除。单人运营下这条永远
+    // 不成立，legal hold 根本建不起来；解除仍然受 can_manage_source_legal 控制。
+    if (!legalOperators.results.length) {
+      return { status: 409 as const, error: '创建 legal hold 前必须至少任命一名有效法律操作人。' };
     }
     const legalHoldId = `legal_hold_${crypto.randomUUID()}`;
     const holdEpoch = Number(source.legal_hold_epoch) + 1;

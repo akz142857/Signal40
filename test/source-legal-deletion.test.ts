@@ -71,13 +71,23 @@ void test('legal operations require an explicit capability and a second hold ope
     error: '需要有效的来源法律操作权限才能创建 legal hold。',
   });
 
+  // 职责分离移除后，团队里只剩发起人自己一名法律操作人也能建 hold；
+  // 但一名都没有时仍然拒绝——那说明根本没人有权解除它。
   await db.client.query("UPDATE team_members SET status = 'suspended' WHERE user_id = 'admin-legal-review'");
-  assert.deepEqual(await createSourceLegalHold(db, {
+  const soloOperator = await createSourceLegalHold(db, {
     sourceId: 'source-legal-capability', reason: 'Preservation request requires review',
     authorityRef: 'case-second-operator', actor,
+  }, now);
+  assert.equal(soloOperator.status, 201);
+
+  await db.client.query("UPDATE team_members SET can_manage_source_legal = 0 WHERE user_id = $1", [actor.id]);
+  await db.client.query("UPDATE source_legal_holds SET status = 'released' WHERE source_config_id = 'source-legal-capability'");
+  assert.deepEqual(await createSourceLegalHold(db, {
+    sourceId: 'source-legal-capability', reason: 'Preservation request requires review',
+    authorityRef: 'case-no-operator', actor: { ...actor, canManageSourceLegal: true },
   }, now), {
     status: 409,
-    error: '创建 legal hold 前必须任命另一名有效法律操作人，以保证异人解除。',
+    error: '创建 legal hold 前必须至少任命一名有效法律操作人。',
   });
 });
 
@@ -106,17 +116,12 @@ void test('legal hold leaves source untouched, then release initializes and comp
   assert.deepEqual(await processSourceLegalDeletions(db, storage, now), { processed: false });
 
   if (!('legalHoldId' in hold)) return;
-  assert.deepEqual(await releaseSourceLegalHold(db, {
+  // 职责分离移除后，建立 hold 的人可以自己解除；能力校验仍然生效。
+  const released = await releaseSourceLegalHold(db, {
     sourceId: 'source-held', legalHoldId: hold.legalHoldId,
     reason: 'Preservation obligation has ended', actor,
-  }, new Date(now.valueOf() + 1_000)), {
-    status: 403,
-    error: '建立 legal hold 的管理员不能单人解除同一个 hold。',
-  });
-  await releaseSourceLegalHold(db, {
-    sourceId: 'source-held', legalHoldId: hold.legalHoldId,
-    reason: 'Preservation obligation has ended', actor: independentActor,
   }, new Date(now.valueOf() + 1_000));
+  assert.equal(released.status, 200);
   const processed = await processSourceLegalDeletions(db, storage, new Date(now.valueOf() + 2_000));
   assert.equal(processed.completed, true);
   source = await db.client.query("SELECT enabled, lifecycle_status, name FROM source_configs WHERE id = 'source-held'");

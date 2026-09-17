@@ -125,6 +125,10 @@ async function seedSource(db: Awaited<ReturnType<typeof createMemoryPg>>, source
 const stagedPayload: StagedIngestionPayload = {
   articles: [{
     id: 'chaos-article',
+    embedding: [],
+    embeddingModel: '',
+    embeddingVersion: 0,
+    embeddingSourceHash: '',
     source: 'Chaos source',
     sourceType: 'media',
     author: 'Chaos author',
