@@ -6,9 +6,10 @@ HOST ?= 127.0.0.1
 PORT ?= 3001
 DOCKER ?= docker
 PROJECT ?=
+MODE ?= dev
 RENDER_OUTPUT ?= output/signal40.mp4
 
-.PHONY: help install setup dev start worker source-worker render-worker scheduler \
+.PHONY: help install setup dev start up worker source-worker render-worker scheduler \
 	format format-check lint typecheck openapi-lint openapi-breaking test test-evaluation test-render check verify audit build \
 	db-generate db-migrations-verify db-migrate contracts-rehash \
 	project-migrate render media-qc voice-local ingest-real walk check-storage \
@@ -27,6 +28,9 @@ dev: db-migrate ## 迁移 PostgreSQL 后启动开发服务器（HOST、PORT 可�
 
 start: ## 启动已构建的 Node 控制面（HOST、PORT 可覆盖）
 	$(NPM) run start -- --hostname $(HOST) --port $(PORT)
+
+up: ## 一条命令拉起全套本机进程：控制面、两个 Worker、调度器（MODE=dev|start）
+	MODE=$(MODE) HOST=$(HOST) PORT=$(PORT) ./scripts/dev-up.sh
 
 worker: ## 兼容模式：启动可领取全部作业的 Worker
 	$(NPM) run worker
