@@ -1,0 +1,208 @@
+{
+  "version": 1,
+  "_comment": "AI 与科技领域的一组来源清单，供 scripts/onboard-sources.ts 使用。这不是产品数据，只是一份可复现的接入配置：换机器或重建数据库后按它跑一遍就能回到同样的采集面。publisher.website 必须是文章 URL 的域名（不是 feed 的域名），ownershipGroup 决定独立证据计数——同一集团的多家媒体只算一份。",
+  "_notes": [
+    "不在清单里的几家，以及原因：",
+    "Ars Technica、InfoQ —— robots.txt 取不到（403/405，机器人防护），条款快照无法自动取证。要接入必须由人另存条款正文、自己算哈希，用 terms.mode = \"manual\" 登记。",
+    "The Register —— robots.txt 对通用 UA 是 Disallow: /，脚本会自动跳过。",
+    "Wired（Condé Nast）、Engadget（Yahoo）—— 与已在清单里的 Ars Technica、TechCrunch 同属一个所有权集团，接进来不提高 resonance，只增加采集量。",
+    "Google News —— 聚合器，文章 URL 在 news.google.com 下，关系分类器永远判不出 original，对独立证据的贡献恒为 0。它能提供选题广度，但那是另一个目的，不属于这份清单。"
+  ],
+  "sources": [
+    {
+      "key": "openai",
+      "name": "OpenAI 官方发布",
+      "feed": "https://openai.com/news/rss.xml",
+      "sourceType": "company",
+      "scheduleCron": "0 */2 * * *",
+      "publisher": {
+        "id": "publisher_openai",
+        "legalName": "OpenAI",
+        "ownershipGroup": "openai",
+        "website": "https://openai.com"
+      }
+    },
+    {
+      "key": "deepmind",
+      "name": "Google DeepMind 官方博客",
+      "feed": "https://deepmind.google/blog/rss.xml",
+      "sourceType": "company",
+      "scheduleCron": "5 */2 * * *",
+      "publisher": {
+        "id": "publisher_deepmind",
+        "legalName": "Google DeepMind",
+        "ownershipGroup": "alphabet",
+        "website": "https://deepmind.google"
+      }
+    },
+    {
+      "key": "nvidia",
+      "name": "NVIDIA 官方博客",
+      "feed": "https://blogs.nvidia.com/feed/",
+      "sourceType": "company",
+      "scheduleCron": "10 */2 * * *",
+      "publisher": {
+        "id": "publisher_nvidia",
+        "legalName": "NVIDIA Corporation",
+        "ownershipGroup": "nvidia",
+        "website": "https://blogs.nvidia.com"
+      }
+    },
+    {
+      "key": "huggingface",
+      "name": "Hugging Face 博客",
+      "feed": "https://huggingface.co/blog/feed.xml",
+      "sourceType": "company",
+      "scheduleCron": "20 */2 * * *",
+      "publisher": {
+        "id": "publisher_huggingface",
+        "legalName": "Hugging Face, Inc.",
+        "ownershipGroup": "huggingface",
+        "website": "https://huggingface.co"
+      }
+    },
+    {
+      "key": "msft_research",
+      "name": "微软研究院博客",
+      "feed": "https://www.microsoft.com/en-us/research/feed/",
+      "sourceType": "company",
+      "scheduleCron": "30 */2 * * *",
+      "publisher": {
+        "id": "publisher_microsoft",
+        "legalName": "Microsoft Corporation",
+        "ownershipGroup": "microsoft",
+        "website": "https://www.microsoft.com"
+      }
+    },
+    {
+      "key": "aws_ml",
+      "name": "AWS 机器学习博客",
+      "feed": "https://aws.amazon.com/blogs/machine-learning/feed/",
+      "sourceType": "company",
+      "scheduleCron": "40 */2 * * *",
+      "publisher": {
+        "id": "publisher_amazon",
+        "legalName": "Amazon.com, Inc.",
+        "ownershipGroup": "amazon",
+        "website": "https://aws.amazon.com"
+      }
+    },
+    {
+      "key": "apple_ml",
+      "name": "Apple 机器学习研究",
+      "feed": "https://machinelearning.apple.com/rss.xml",
+      "sourceType": "company",
+      "scheduleCron": "50 */2 * * *",
+      "publisher": {
+        "id": "publisher_apple",
+        "legalName": "Apple Inc.",
+        "ownershipGroup": "apple",
+        "website": "https://machinelearning.apple.com"
+      }
+    },
+    {
+      "key": "techcrunch",
+      "name": "TechCrunch AI",
+      "feed": "https://techcrunch.com/category/artificial-intelligence/feed/",
+      "sourceType": "media",
+      "scheduleCron": "5 * * * *",
+      "publisher": {
+        "id": "publisher_techcrunch",
+        "legalName": "TechCrunch (Yahoo Inc.)",
+        "ownershipGroup": "yahoo",
+        "website": "https://techcrunch.com"
+      }
+    },
+    {
+      "key": "theverge",
+      "name": "The Verge",
+      "feed": "https://www.theverge.com/rss/index.xml",
+      "sourceType": "media",
+      "scheduleCron": "15 * * * *",
+      "publisher": {
+        "id": "publisher_theverge",
+        "legalName": "Vox Media, LLC",
+        "ownershipGroup": "vox-media",
+        "website": "https://www.theverge.com"
+      }
+    },
+    {
+      "key": "verge_ai",
+      "name": "The Verge · AI",
+      "feed": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+      "sourceType": "media",
+      "scheduleCron": "45 * * * *",
+      "publisher": {
+        "id": "publisher_theverge",
+        "legalName": "Vox Media, LLC",
+        "ownershipGroup": "vox-media",
+        "website": "https://www.theverge.com"
+      }
+    },
+    {
+      "key": "mit_tr",
+      "name": "MIT Technology Review",
+      "feed": "https://www.technologyreview.com/feed/",
+      "sourceType": "media",
+      "scheduleCron": "35 * * * *",
+      "publisher": {
+        "id": "publisher_mittr",
+        "legalName": "MIT Technology Review",
+        "ownershipGroup": "mit",
+        "website": "https://www.technologyreview.com"
+      }
+    },
+    {
+      "key": "bbc_tech",
+      "name": "BBC 科技",
+      "feed": "https://feeds.bbci.co.uk/news/technology/rss.xml",
+      "sourceType": "media",
+      "scheduleCron": "8 * * * *",
+      "publisher": {
+        "id": "publisher_bbc",
+        "legalName": "British Broadcasting Corporation",
+        "ownershipGroup": "bbc",
+        "website": "https://www.bbc.co.uk"
+      }
+    },
+    {
+      "key": "guardian_tech",
+      "name": "The Guardian 科技",
+      "feed": "https://www.theguardian.com/uk/technology/rss",
+      "sourceType": "media",
+      "scheduleCron": "18 * * * *",
+      "publisher": {
+        "id": "publisher_guardian",
+        "legalName": "Guardian News & Media Limited",
+        "ownershipGroup": "guardian",
+        "website": "https://www.theguardian.com"
+      }
+    },
+    {
+      "key": "zdnet",
+      "name": "ZDNET",
+      "feed": "https://www.zdnet.com/news/rss.xml",
+      "sourceType": "media",
+      "scheduleCron": "28 * * * *",
+      "publisher": {
+        "id": "publisher_zdnet",
+        "legalName": "Ziff Davis, Inc.",
+        "ownershipGroup": "ziff-davis",
+        "website": "https://www.zdnet.com"
+      }
+    },
+    {
+      "key": "cnbc_tech",
+      "name": "CNBC 科技",
+      "feed": "https://www.cnbc.com/id/19854910/device/rss/rss.html",
+      "sourceType": "media",
+      "scheduleCron": "58 * * * *",
+      "publisher": {
+        "id": "publisher_cnbc",
+        "legalName": "NBCUniversal Media, LLC",
+        "ownershipGroup": "comcast",
+        "website": "https://www.cnbc.com"
+      }
+    }
+  ]
+}

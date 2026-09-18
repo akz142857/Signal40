@@ -12,7 +12,7 @@ RENDER_OUTPUT ?= output/signal40.mp4
 .PHONY: help install setup dev start up worker source-worker render-worker scheduler \
 	format format-check lint typecheck openapi-lint openapi-breaking test test-evaluation test-render check verify audit build \
 	db-generate db-migrations-verify db-migrate contracts-rehash \
-	project-migrate render media-qc voice-local ingest-real walk check-storage \
+	project-migrate render media-qc voice-local ingest-real sources-onboard walk check-storage \
 	drill-restore docker-build docker-up docker-down guard-%
 
 help: ## 显示可用目标和参数
@@ -107,6 +107,9 @@ voice-local: guard-PROJECT guard-AUDIO guard-OUTPUT_PROJECT ## 生成本地配�
 
 ingest-real: ## 从已配置的真实来源采集
 	$(NPM) run ingest:real
+
+sources-onboard: guard-MANIFEST guard-ACTOR ## 按清单接入来源（MANIFEST=<清单.json> ACTOR=<member-id> [ARGS=--dry-run]）
+	$(NPM) run sources:onboard -- "$(MANIFEST)" --actor "$(ACTOR)" $(ARGS)
 
 walk: guard-PROJECT ## 推进项目工作流（PROJECT=<项目 ID> [STATE=<目标状态>]）
 	$(NPM) run walk -- "$(PROJECT)" $(if $(STATE),"$(STATE)",)

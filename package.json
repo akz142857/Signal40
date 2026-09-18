@@ -43,6 +43,7 @@
     "image:verify": "node --experimental-strip-types scripts/verify-workload-image.ts",
     "compose:env:verify": "node --experimental-strip-types scripts/verify-compose-runtime-env.ts",
     "domain": "node --env-file-if-exists=.env --experimental-strip-types scripts/topic-domain.ts",
+    "sources:onboard": "node --env-file-if-exists=.env --experimental-strip-types scripts/onboard-sources.ts",
     "embedding:calibrate": "node --env-file-if-exists=.env --experimental-strip-types scripts/calibrate-embedding-threshold.ts"
   },
   "dependencies": {
