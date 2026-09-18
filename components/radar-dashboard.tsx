@@ -595,7 +595,7 @@ export function RadarDashboard({
                         {topic.sourceCount} 个独立来源
                       </span>
                       {topic.quality && <span className={`rounded-md px-2 py-1 text-xs font-medium ${topic.quality.automatable ? 'bg-chart-1/10 text-chart-1' : 'bg-chart-2/10 text-chart-2'}`}>
-                        {topic.quality.automatable ? '可自动化' : '需人工处理'}
+                        {topic.quality.automatable ? '质量达标' : '质量不达标'}
                       </span>}
                     </div>
                     <h2 className="text-xl font-semibold leading-snug tracking-[-0.025em]">
@@ -774,7 +774,7 @@ export function RadarDashboard({
                         ['向量覆盖率', selected.quality.embeddingCoverage],
                       ].map(([label, value]) => <div className="rounded-xl bg-secondary/70 p-3" key={String(label)}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-mono text-xl font-semibold">{Math.round(Number(value) * 100)}%</p></div>)}
                     </div>
-                    <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 一致性口径：{selected.quality.coherenceMode === 'semantic' ? '语义余弦' : '词元（降级）'} · 语言：{selected.quality.language} · {selected.quality.automatable ? '允许自动建项目' : '禁止自动建项目'}</p>
+                    <p className="mt-3 text-sm">综合质量分：{selected.quality.score}/100 · 一致性口径：{selected.quality.coherenceMode === 'semantic' ? '语义余弦' : '词元（降级）'} · 语言：{selected.quality.language} · {selected.quality.automatable ? '质量达标，不构成自动化阻塞' : '质量不达标，禁止自动建项目'}</p>
                     <p className="mt-1 text-sm text-muted-foreground">{
                       selected.quality.domainStatus === 'evaluated'
                         ? `领域「${selected.quality.domainName}」相关性 ${selected.quality.domainRelevance}（阈值 ${selected.quality.domainThreshold}）`
