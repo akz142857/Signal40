@@ -165,6 +165,71 @@ void test('缺向量的文章只影响自己，不把整批语料拖回词元口
   assert.equal(Math.max(...clusters.map((cluster) => cluster.articles.length)), 2);
 });
 
+/** 与 `[1,0]` 夹角给定余弦的单位向量，用来精确构造阈值两侧的样例。 */
+function atCosine(cosine: number): number[] {
+  return [cosine, Math.sqrt(1 - cosine * cosine)];
+}
+
+void test('贪心归属把同一件事切开时，簇间合并把它补回来', () => {
+  // 复现真实语料上的那一例：OpenAI 官方公告、TechCrunch、Ars Technica 讲同一件事，
+  // 两两余弦 0.645/0.678/0.745 全部高于阈值，却因为贪心归属的先后顺序落进两个簇——
+  // 一个有一手来源没有交叉证据，另一个有交叉证据没有一手来源，门禁两个都不放行。
+  const media = atCosine(0.98);
+  const official = atCosine(0.66);
+  // 先让两篇媒体报道成簇，官方公告最后到：它对簇质心达标，但如果只比「先到的那篇」
+  // 就可能被挡在外面。合并那一趟保证结果与到达顺序无关。
+  const clusters = clusterArticles(
+    semanticArticles([[1, 0], media, official]),
+    CONTEXT,
+  );
+  assert.equal(clusters.length, 1);
+  assert.equal(clusters[0].articles.length, 3);
+});
+
+void test('合并只看质心会塌陷，所以跨簇每一对都要达标', () => {
+  // A 与 B 达标、B 与 C 达标，但 A 与 C 不达标。只比质心的话 B 会把 A、C 串成一簇，
+  // 虚增独立来源数——那正是证据门禁最不能出的错。全连接判据必须挡住它。
+  const clusters = clusterArticles(
+    semanticArticles([[1, 0], atCosine(0.66), atCosine(0.1)]),
+    CONTEXT,
+  );
+  const sizes = clusters
+    .map((cluster) => cluster.articles.length)
+    .sort((left, right) => left - right);
+  assert.deepEqual(sizes, [1, 2]);
+});
+
+void test('簇不会随着变大而漂移：新文章要对每个成员都达标，不只是对质心', () => {
+  // 质心会被成员一点点拽走，几十篇之后已经离最初那件事很远却仍显得像。
+  // 构造一条对质心达标、但对某个成员不达标的文章，它必须自己成簇。
+  const members = [[1, 0], atCosine(0.64)];
+  const drifter = atCosine(0.5);
+  const clusters = clusterArticles(
+    semanticArticles([...members, drifter]),
+    CONTEXT,
+  );
+  const sizes = clusters
+    .map((cluster) => cluster.articles.length)
+    .sort((left, right) => left - right);
+  assert.deepEqual(sizes, [1, 2]);
+});
+
+void test('合并后簇内仍按发布时间从新到旧，标题不会退回旧稿', () => {
+  // `runPipeline` 拿 articles[0] 当选题标题和 updatedAt；合并是往后追加的，
+  // 不重排就会把并进来的旧稿当成这个选题的最新状态。
+  const older = article('old', [1, 0], {
+    title: '旧稿',
+    publishedAt: '2026-09-16T00:00:00.000Z',
+  });
+  const newer = article('new', atCosine(0.99), {
+    title: '新稿',
+    publishedAt: '2026-09-17T12:00:00.000Z',
+  });
+  const clusters = clusterArticles(normalizeArticles([older, newer]), CONTEXT);
+  assert.equal(clusters.length, 1);
+  assert.equal(clusters[0].articles[0].title, '新稿');
+});
+
 void test('换模型之后旧向量不再用于聚类，而不是拿旧空间套新阈值', () => {
   const articles = semanticArticles([unitVector(0), unitVector(0)]);
   const clusters = clusterArticles(articles, {

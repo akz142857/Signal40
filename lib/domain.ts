@@ -434,10 +434,22 @@ type Cluster = {
   articles: Article[];
   /** 簇内所有文章的词并集，只用于挑关键词。 */
   tokens: Set<string>;
-  /** 簇代表（第一篇文章）的判定用词；聚类只比它，不比并集也不比其他成员。 */
+  /** 簇代表（第一篇文章）的判定用词；词元口径只比它，不比并集也不比其他成员。 */
   seedTokens: Set<string>;
-  /** 簇代表的语义向量；词元口径下为空数组。 */
-  seedEmbedding: number[];
+  /**
+   * 语义口径下的簇质心：走语义路径进来的成员向量的均值；词元口径下为空数组。
+   *
+   * 用质心而不是簇代表向量当判据，是为了让「属不属于这个簇」由簇的内容决定，
+   * 而不是由哪一篇碰巧先到决定——见 `clusterArticles` 的说明。
+   */
+  centroid: number[];
+  /**
+   * 走语义路径进来的成员向量，按加入顺序。全连接校验和合并后重算质心都要用它。
+   *
+   * 只收语义路径的向量：词元路径进来的成员可能本来就没有向量，也可能向量离质心
+   * 很远（词元判据不看向量），把它们算进质心会把质心拖离这个簇真正讲的那件事。
+   */
+  embeddings: number[][];
 };
 
 /**
@@ -456,12 +468,98 @@ function clusterSimilarity(left: Set<string>, right: Set<string>) {
 }
 
 /**
- * 每个簇由它的第一篇文章代表，后来的文章只和这篇代表比。
+ * 一篇文章与簇内**每一个**语义成员的余弦都不低于阈值（全连接判据）。
  *
- * 不比并集：并集随簇变大不断膨胀，而相似度分母取两者较小的一个，于是大簇对任何
- * 新文章都显得很像——一天 46 篇新闻会全部塌进同一个选题。
- * 也不做单链传递：A 像 B、B 像 C 就把 A 和 C 放一起，同样会顺着链条把不相干的
- * 文章串成一簇，只是塌得慢一点。
+ * 这是防塌陷的那道闸。只比质心的话，簇每收一篇质心就挪一点，几十篇之后质心
+ * 已经离最初那件事很远，却仍然对新文章显得很像——正是单链传递塌陷的慢速版本。
+ * 要求对每个成员都达标，簇的直径就被阈值锁死，收多少篇都不会漂。
+ */
+function withinCompleteLink(
+  embedding: readonly number[],
+  members: ReadonlyArray<readonly number[]>,
+  embeddingThreshold: number,
+) {
+  return members.every(
+    (member) => cosineSimilarity(embedding, member) >= embeddingThreshold,
+  );
+}
+
+/**
+ * 把语义口径的簇两两合并到不能再合并为止：质心达标、且合并后仍满足全连接判据。
+ *
+ * 为什么需要这一趟：归属判定是贪心的，一篇文章只会进当时最像的那个簇。同一件事的
+ * 几篇报道如果先各自被不同的簇吸走，就再也没有机会相遇——切分结果取决于到达顺序。
+ * 实测过一例：OpenAI 官方公告与 TechCrunch、Ars Technica 的报道两两余弦
+ * 0.645/0.678/0.745 全部过阈值，却落在两个选题里，一个有一手来源没有交叉证据，
+ * 另一个有交叉证据没有一手来源，于是门禁两个都不放行。
+ *
+ * 合并沿用同一个阈值，并且对**跨簇的每一对**成员都校验，不是只看质心：
+ * 只看质心等于把单链传递搬到簇这一层。归属判定已经保证簇内两两达标，所以校验完
+ * 跨簇对之后，合并出来的簇仍然满足全连接判据——这个性质对合并次数做归纳成立。
+ */
+function mergeSemanticClusters(
+  clusters: Cluster[],
+  embeddingThreshold: number,
+) {
+  for (let merged = true; merged;) {
+    merged = false;
+    for (let left = 0; left < clusters.length; left += 1) {
+      const target = clusters[left];
+      if (!target.centroid.length) continue;
+      // 合并后不推进 right：后一个簇会填进这个下标，仍然要与已经变大的 target 比一次。
+      // 不重启整趟扫描——每次合并都从头扫是 O(簇数³)，在一天几百个簇上会拖垮页面。
+      for (let right = left + 1; right < clusters.length;) {
+        const candidate = clusters[right];
+        const mergeable =
+          candidate.centroid.length > 0 &&
+          cosineSimilarity(target.centroid, candidate.centroid) >=
+            embeddingThreshold &&
+          target.embeddings.every((member) =>
+            withinCompleteLink(
+              member,
+              candidate.embeddings,
+              embeddingThreshold,
+            ),
+          );
+        if (!mergeable) {
+          right += 1;
+          continue;
+        }
+        target.articles.push(...candidate.articles);
+        for (const token of candidate.tokens) target.tokens.add(token);
+        target.embeddings.push(...candidate.embeddings);
+        target.centroid = meanVector(target.embeddings);
+        clusters.splice(right, 1);
+        merged = true;
+      }
+    }
+  }
+  // 合并是往后追加的，会打破「簇内按发布时间从新到旧」这个不变量，
+  // 而 `runPipeline` 拿 `articles[0]` 当选题标题和 `updatedAt`——不排就会把
+  // 合并进来的旧稿当成这个选题的最新状态。
+  for (const cluster of clusters) {
+    cluster.articles.sort((left, right) =>
+      right.publishedAt.localeCompare(left.publishedAt),
+    );
+  }
+  return clusters;
+}
+
+/**
+ * 语义口径下，一篇文章属于哪个簇由簇的内容决定，不由哪一篇先到决定。
+ *
+ * 判据分两步：先按**质心**余弦挑出最像的簇，再要求这篇文章对该簇**每一个**语义
+ * 成员都达标（`withinCompleteLink`）。挑不出或者校验不过就自己成簇——宁可把一件事
+ * 拆成两个选题（门禁各自凑不够独立证据而挡下，是 fail closed 的方向），也不把两件事
+ * 并成一个（虚增独立来源数，让门禁拿着伪造的交叉验证放行）。这个取舍与
+ * `EMBEDDING_CLUSTER_THRESHOLD` 取值偏高一侧的理由是同一个。
+ *
+ * 归属判定完再跑一趟簇间合并（`mergeSemanticClusters`），把贪心顺序造成的切分补回来。
+ *
+ * 词元口径仍然只比簇代表的判定用词：
+ * 不比并集——并集随簇变大不断膨胀，而相似度分母取两者较小的一个，于是大簇对任何
+ * 新文章都显得很像，一天 46 篇新闻会全部塌进同一个选题；也不做单链传递。
+ * 词元没有质心可言，全连接判据也无从谈起，所以这条路径维持原判据不动。
  */
 export function clusterArticles(
   articles: Article[],
@@ -487,33 +585,51 @@ export function clusterArticles(
     const matchTokens = discriminative(articleTokens, common);
     let bestCluster: Cluster | undefined;
     let bestSimilarity = 0;
+    let bestSemantic = false;
     for (const cluster of clusters) {
-      const semantic = usable[index] && cluster.seedEmbedding.length > 0;
+      const semantic = usable[index] && cluster.centroid.length > 0;
       const score = semantic
-        ? cosineSimilarity(article.embedding, cluster.seedEmbedding)
+        ? cosineSimilarity(article.embedding, cluster.centroid)
         : hasStrongOverlap(matchTokens, cluster.seedTokens)
           ? 1
           : clusterSimilarity(matchTokens, cluster.seedTokens);
       // 两种口径的分数不可直接比大小，所以各自先过自己的阈值再参与择优。
       if (score < (semantic ? embeddingThreshold : threshold)) continue;
+      // 质心只用来挑候选，进不进得去还要过全连接判据。
+      if (
+        semantic &&
+        !withinCompleteLink(
+          article.embedding,
+          cluster.embeddings,
+          embeddingThreshold,
+        )
+      ) {
+        continue;
+      }
       if (score > bestSimilarity) {
         bestCluster = cluster;
         bestSimilarity = score;
+        bestSemantic = semantic;
       }
     }
     if (bestCluster) {
       bestCluster.articles.push(article);
       for (const token of articleTokens) bestCluster.tokens.add(token);
+      if (bestSemantic) {
+        bestCluster.embeddings.push(article.embedding);
+        bestCluster.centroid = meanVector(bestCluster.embeddings);
+      }
     } else {
       clusters.push({
         articles: [article],
         tokens: new Set(articleTokens),
         seedTokens: matchTokens,
-        seedEmbedding: usable[index] ? article.embedding : [],
+        centroid: usable[index] ? article.embedding : [],
+        embeddings: usable[index] ? [article.embedding] : [],
       });
     }
   }
-  return clusters;
+  return mergeSemanticClusters(clusters, embeddingThreshold);
 }
 
 function scoreCluster(
